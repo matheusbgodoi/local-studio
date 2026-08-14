@@ -39,24 +39,18 @@ extraResources:
     to: app-update.yml
   - from: ../services/agent-runtime/dist/standalone.mjs
     to: app/agent-runtime/standalone.mjs
-  - from: ../services/agent-runtime/dist/node_modules/playwright-core
-    to: app/agent-runtime/node_modules/playwright-core
-  - from: ../services/agent-runtime/dist/node_modules/chromium-bidi
-    to: app/agent-runtime/node_modules/chromium-bidi
-  - from: ../services/agent-runtime/dist/node_modules/chromium-bidi/node_modules/zod
-    to: app/agent-runtime/node_modules/chromium-bidi/node_modules/zod
-  - from: ../services/agent-runtime/dist/node_modules/mitt
-    to: app/agent-runtime/node_modules/mitt
-  - from: ../services/agent-runtime/dist/node_modules/devtools-protocol
-    to: app/agent-runtime/node_modules/devtools-protocol
-  - from: ../services/agent-runtime/dist/node_modules/@silvia-odwyer/photon-node
-    to: app/agent-runtime/node_modules/@silvia-odwyer/photon-node
-  - from: ../services/agent-runtime/dist/node_modules/undici
-    to: app/agent-runtime/node_modules/undici
-  # Server-side terminals: node-pty is dynamically required by pty-service, so
-  # it ships as real files next to standalone.mjs (native addon, cannot bundle).
-  - from: ../services/agent-runtime/dist/node_modules/@lydell
-    to: app/agent-runtime/node_modules/@lydell
+  # Everything bundle-agent-runtime decided to keep outside standalone.mjs, in
+  # one copy: the portable browser runtime, node-pty (native addon, dynamically
+  # required by pty-service) and the Pi packages.
+  #
+  # The Pi packages MUST stay real directories here. pi's extension loader
+  # builds its jiti alias table from the loader module's own import.meta.url
+  # (typebox, @earendil-works/pi-agent-core, pi-tui, pi-ai, pi-coding-agent).
+  # Bundled into standalone.mjs that URL is Resources/app/agent-runtime/, which
+  # resolves none of them, getAliases() throws and EVERY extension fails to
+  # load — ours and any the user installs.
+  - from: ../services/agent-runtime/dist/node_modules
+    to: app/agent-runtime/node_modules
   - from: .next/standalone
     to: app/frontend/.next/standalone
     filter:

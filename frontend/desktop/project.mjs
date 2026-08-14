@@ -378,9 +378,9 @@ import {
 import path2 from "node:path";
 import { spawnSync as spawnSync2 } from "node:child_process";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
-var packageDir, distDir, bundlePath, runtimePackages, build, lydellDir, bundle, sourceRoot;
+var packageDir, distDir, bundlePath, nodeModulesDir, browserPackages, piPackages, externalPackages, resolvePackageDir, dependencyClosure, runtimePackages, build, lydellDir, bundle, sourceRoot;
 var init_bundle = __esm(() => {
-  packageDir = path2.resolve(path2.dirname(fileURLToPath2(import.meta.url)), "../../services/agent-runtime"), distDir = path2.join(packageDir, "dist"), bundlePath = path2.join(distDir, "standalone.mjs"), runtimePackages = [
+  packageDir = path2.resolve(path2.dirname(fileURLToPath2(import.meta.url)), "../../services/agent-runtime"), distDir = path2.join(packageDir, "dist"), bundlePath = path2.join(distDir, "standalone.mjs"), nodeModulesDir = path2.join(packageDir, "node_modules"), browserPackages = [
     "playwright-core",
     "chromium-bidi",
     "mitt",
@@ -388,33 +388,70 @@ var init_bundle = __esm(() => {
     "@silvia-odwyer/photon-node",
     "undici",
     "@lydell/node-pty"
+  ], piPackages = [
+    "@earendil-works/pi-coding-agent",
+    "@earendil-works/pi-agent-core",
+    "@earendil-works/pi-ai",
+    "@earendil-works/pi-tui",
+    "typebox"
+  ], externalPackages = [
+    "fsevents",
+    "playwright-core",
+    "@silvia-odwyer/photon-node",
+    "undici",
+    ...piPackages
   ];
+  resolvePackageDir = (fromDir, packageName) => {
+    let dir = fromDir;
+    for (;;) {
+      let candidate = path2.join(dir, "node_modules", ...packageName.split("/"));
+      if (existsSync4(path2.join(candidate, "package.json")))
+        return candidate;
+      let parent = path2.dirname(dir);
+      if (parent === dir)
+        return null;
+      dir = parent;
+    }
+  };
+  dependencyClosure = (packageNames) => {
+    let queue = packageNames.map((packageName) => ({ packageName, fromDir: packageDir })), visited = new Set, hoisted = [];
+    while (queue.length > 0) {
+      let { packageName, fromDir } = queue.shift(), resolved = resolvePackageDir(fromDir, packageName);
+      if (!resolved)
+        throw Error(`Missing agent runtime dependency: ${packageName}`);
+      if (visited.has(resolved))
+        continue;
+      visited.add(resolved);
+      let relative = path2.relative(nodeModulesDir, resolved).split(path2.sep);
+      if (relative[0] !== ".." && !relative.includes("node_modules"))
+        hoisted.push(relative.join("/"));
+      let manifest = JSON.parse(readFileSync5(path2.join(resolved, "package.json"), "utf8"));
+      for (let dependency of Object.keys(manifest.dependencies ?? {}))
+        queue.push({ packageName: dependency, fromDir: resolved });
+    }
+    return hoisted;
+  };
   rmSync2(distDir, { recursive: !0, force: !0 });
   mkdirSync(distDir, { recursive: !0 });
   build = spawnSync2("bun", [
     "build",
     "src/server.ts",
     "--target=node",
-    "--external",
-    "fsevents",
-    "--external",
-    "playwright-core",
-    "--external",
-    "@silvia-odwyer/photon-node",
-    "--external",
-    "undici",
+    ...externalPackages.flatMap((packageName) => ["--external", packageName]),
     "--outfile=dist/standalone.mjs"
   ], { cwd: packageDir, stdio: "inherit" });
   if (build.status !== 0)
     throw Error(`Agent runtime bundle failed with status ${build.status ?? "unknown"}`);
-  lydellDir = path2.join(packageDir, "node_modules", "@lydell");
+  runtimePackages = [...browserPackages];
+  lydellDir = path2.join(nodeModulesDir, "@lydell");
   if (existsSync4(lydellDir)) {
     for (let entry of readdirSync3(lydellDir))
       if (entry.startsWith("node-pty-"))
         runtimePackages.push(`@lydell/${entry}`);
   }
+  runtimePackages = [...new Set([...runtimePackages, ...dependencyClosure(piPackages)])];
   for (let packageName of runtimePackages) {
-    let segments = packageName.split("/"), source = path2.join(packageDir, "node_modules", ...segments), destination = path2.join(distDir, "node_modules", ...segments);
+    let segments = packageName.split("/"), source = path2.join(nodeModulesDir, ...segments), destination = path2.join(distDir, "node_modules", ...segments);
     if (!existsSync4(path2.join(source, "package.json")))
       throw Error(`Missing browser runtime package: ${packageName}`);
     mkdirSync(path2.dirname(destination), { recursive: !0 }), cpSync(source, destination, { recursive: !0 });
@@ -422,7 +459,13 @@ var init_bundle = __esm(() => {
   bundle = readFileSync5(bundlePath, "utf8"), sourceRoot = realpathSync2(path2.join(packageDir, "..", ".."));
   if (bundle.includes(sourceRoot))
     throw Error(`Agent runtime bundle contains the build-machine root: ${sourceRoot}`);
-  console.log(`Packaged portable browser runtime: ${runtimePackages.join(", ")}`);
+  for (let packageName of piPackages) {
+    if (!existsSync4(path2.join(distDir, "node_modules", ...packageName.split("/"), "package.json")))
+      throw Error(`Agent runtime is missing the external Pi package: ${packageName}`);
+  }
+  if (!bundle.includes(`"@earendil-works/pi-coding-agent"`))
+    throw Error("Agent runtime bundled @earendil-works/pi-coding-agent; the Pi extension loader needs it external");
+  console.log(`Packaged portable runtime: ${runtimePackages.length} packages (${browserPackages.join(", ")}, pi closure)`);
 });
 
 var exports_check_conventional_commits = {};
@@ -1737,13 +1780,21 @@ async function afterPack(context) {
     path.join(agentRuntimeRoot, "node_modules", "mitt", "package.json"),
     path.join(agentRuntimeRoot, "node_modules", "devtools-protocol", "package.json"),
     path.join(agentRuntimeRoot, "node_modules", "@silvia-odwyer", "photon-node", "package.json"),
-    path.join(agentRuntimeRoot, "node_modules", "undici", "package.json")
+    path.join(agentRuntimeRoot, "node_modules", "undici", "package.json"),
+    path.join(agentRuntimeRoot, "node_modules", "typebox", "package.json"),
+    path.join(agentRuntimeRoot, "node_modules", "@earendil-works", "pi-agent-core", "package.json"),
+    path.join(agentRuntimeRoot, "node_modules", "@earendil-works", "pi-tui", "package.json"),
+    path.join(agentRuntimeRoot, "node_modules", "@earendil-works", "pi-ai", "dist", "compat.js"),
+    path.join(agentRuntimeRoot, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "index.js"),
+    path.join(agentRuntimeRoot, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "core", "extensions", "loader.js")
   ].find((file) => !existsSync(file));
   if (missingAgentRuntimeFile)
     throw Error(`Packaged app is missing an agent runtime dependency: ${missingAgentRuntimeFile}`);
   let agentRuntimeSource = readFileSync(agentRuntime, "utf8");
   if (/["'](?:[A-Za-z]:\\|\/(?:Users|home|root)\/)[^"'\n]*node_modules[\\/]/.test(agentRuntimeSource))
     throw Error("Packaged agent runtime contains a build-machine dependency path");
+  if (!agentRuntimeSource.includes(`"@earendil-works/pi-coding-agent"`))
+    throw Error("Packaged agent runtime bundled Pi instead of importing it; its extension loader would resolve no aliases");
   let missingPiLauncherMarker = [
     "resolveElectronNodeExecutable",
     "resolvePackagedPiCli",
