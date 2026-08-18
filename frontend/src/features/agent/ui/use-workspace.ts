@@ -293,8 +293,13 @@ export function useWorkspace({ ephemeral = false }: UseWorkspaceOptions = {}): U
           newPaneId: newPaneId(),
           tab: makeFreshTab(),
         }),
-      selectPaneModel: (paneId: PaneId, modelId: string) =>
-        dispatch({ type: "patchActiveTab", paneId, patch: { modelId } }),
+      selectPaneModel: (paneId: PaneId, modelId: string) => {
+        // LAST USED IS THE DEFAULT. Picking a model in any pane also records it as the
+        // workspace default, so a new pane, a new session and the next app start all open
+        // on the model actually used last instead of on a hardcoded one.
+        writeDefaultAgentModel(ephemeral ? createMemoryStorage() : window.localStorage, modelId);
+        dispatch({ type: "patchActiveTab", paneId, patch: { modelId } });
+      },
       setDefaultModel: (modelId: string) => {
         writeDefaultAgentModel(ephemeral ? createMemoryStorage() : window.localStorage, modelId);
         dispatch({ type: "setSelectedModel", modelId });
