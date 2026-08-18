@@ -4,7 +4,8 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { Effect } from "effect";
 import { listProjectsFromStore, resolveAllowedWorkspace } from "./projects-store";
-import { hasEnabledConnectorsSync } from "./connectors-service";
+import { hasEagerConnectorsSync } from "./connectors-service";
+import { defaultSkillSources } from "./skill-discovery";
 import type { AgentThinkingLevel, AgentToolAccess } from "../../../shared/agent/agent-turn";
 
 export type RuntimeSkillRef = {
@@ -28,6 +29,72 @@ export type RuntimeStartOptions = {
   skills?: RuntimeSkillRef[];
   promptTemplates?: RuntimePromptTemplateRef[];
 };
+
+// ---------------------------------------------------------------------------
+// Personal skills: discoverable by /skill:, invisible to the model.
+//
+// Pi resolves `/skill:<name>` against resourceLoader.getSkills().skills
+// (dist/core/agent-session.js _expandSkillCommand), so it can only expand a
+// skill it has DISCOVERED. But the same list feeds formatSkillsForPrompt
+// (dist/core/skills.js), which dumps <available_skills> — name, description and
+// location — into EVERY system prompt.
+//
+// formatSkillsForPrompt filters `disableModelInvocation` out; _expandSkillCommand
+// does not. Marking the personal roots model-invocation-disabled therefore buys
+// resolvable /skill:name at ZERO prompt cost. We do it at runtime through the
+// resource loader's `skillsOverride` hook instead of writing frontmatter into
+// the user's skill repos.
+// ---------------------------------------------------------------------------
+
+export type PiSkillLike = { filePath: string; disableModelInvocation?: boolean };
+type PiSkillDiagnostic = { path?: string };
+
+/** Roots Studio's own catalogue walks (skill-discovery.ts). Only existing dirs
+ *  are handed to Pi so its loader never emits "skill path does not exist". */
+export function personalSkillRoots(): string[] {
+  return uniqueExistingPaths(defaultSkillSources().map((entry) => entry.dir));
+}
+
+export function isPersonalSkillPath(filePath: string, roots: string[]): boolean {
+  const resolved = path.resolve(filePath);
+  return roots.some((root) => {
+    const base = path.resolve(root);
+    return (
+      resolved === base || resolved.startsWith(base.endsWith(path.sep) ? base : base + path.sep)
+    );
+  });
+}
+
+/** Pure `skillsOverride`: hide every personal skill from the system prompt while
+ *  leaving it in the set /skill:<name> resolves against. Bundled Studio skills
+ *  (the browser skill) live outside these roots and stay model-invocable. */
+export function markPersonalSkillsModelInvocationDisabled<
+  T extends { skills: PiSkillLike[]; diagnostics: PiSkillDiagnostic[] },
+>(base: T, roots: string[]): T {
+  if (roots.length === 0) return base;
+  return {
+    ...base,
+    skills: base.skills.map((skill) =>
+      skill.disableModelInvocation || !isPersonalSkillPath(skill.filePath, roots)
+        ? skill
+        : { ...skill, disableModelInvocation: true },
+    ),
+    // Before this policy Pi never loaded the personal roots, so it never
+    // reported on them. Handing it hundreds of third-party SKILL.md files must
+    // not start filling the diagnostics panel with their name collisions and
+    // description warnings — those belong to the skill repos, not to Studio.
+    diagnostics: base.diagnostics.filter(
+      (diagnostic) =>
+        typeof diagnostic.path !== "string" || !isPersonalSkillPath(diagnostic.path, roots),
+    ),
+  };
+}
+
+export function personalSkillsOverride<
+  T extends { skills: PiSkillLike[]; diagnostics: PiSkillDiagnostic[] },
+>(roots: string[] = personalSkillRoots()): (base: T) => T {
+  return (base) => markPersonalSkillsModelInvocationDisabled(base, roots);
+}
 
 export type AgentSessionOptionsInput = {
   options: RuntimeStartOptions;
@@ -277,7 +344,7 @@ function runtimeExtensionPaths(options: RuntimeStartOptions): string[] {
     timeoutExtensionPath,
     agentPolicyExtensionPath,
     browserExtensionPath,
-    hasEnabledConnectorsSync() ? resolveConnectorsExtensionPath() : null,
+    hasEagerConnectorsSync() ? resolveConnectorsExtensionPath() : null,
     resolveSubagentsExtensionPath(),
     // Lets the agent create/list/delete scheduled automations.
     resolveAutomationsExtensionPath(),
@@ -293,6 +360,12 @@ function runtimeSkillPaths(options: RuntimeStartOptions): string[] {
   return uniqueExistingPaths([
     ...selectedSkillPaths(options.skills ?? []),
     loadBrowser ? browserSkillPathFor(backend) : null,
+    // Personal roots are ALWAYS handed to Pi so `/skill:<name>` resolves. They
+    // cost nothing in the prompt because personalSkillsOverride marks them
+    // model-invocation-disabled, and they are not part of
+    // runtimeOptionsFingerprint (which hashes options.skills), so adding them
+    // never restarts a runtime.
+    ...personalSkillRoots(),
   ]);
 }
 

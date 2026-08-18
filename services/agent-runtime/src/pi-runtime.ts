@@ -18,6 +18,7 @@ import type { AgentQueueAction } from "../../../shared/agent/agent-turn";
 import {
   applyRuntimeEnvInjections,
   buildAgentSessionOptionsSync,
+  personalSkillsOverride,
   runtimeOptionsFingerprint,
   resolveAgentCwdEffect,
   type RuntimeStartOptions,
@@ -30,7 +31,24 @@ import { findRuntimeSessionForLookup, piStatusFromEvents } from "./pi-runtime-st
 import { configuredPiSessionDir, findSessionFile } from "./sessions-store";
 import { getGlobalSingleton } from "./instances";
 import { connectorsRevisionSync } from "./connectors-service";
+import { closePooledConnection } from "./connector-pool";
+import {
+  activatableConnectorIds,
+  activateConnectorTools,
+  createConnectorToolsExtension,
+  deactivateConnectorTools,
+  holdConnector,
+  planConnectorSelection,
+  registerConnectorTools,
+  releaseConnector,
+} from "./connector-session-tools";
+import {
+  normalizePersonalConnectorIds,
+  resolvePersonalConnector,
+} from "../../../shared/agent/personal-connectors";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type {
+  ConnectorSelectionResult,
   LoggedPiEvent,
   PiAgentSession,
   PiAgentStatus,
@@ -291,6 +309,16 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     string,
     { method: "select" | "confirm" | "input" | "editor"; resolve: (value: unknown) => void }
   >();
+  // --- personal MCP connectors, per session -------------------------------
+  // `desiredConnectors` is what the user asked THIS session for; it outlives a
+  // runtime rebuild so a model/cwd change re-activates instead of silently
+  // dropping the tools. `registeredConnectorTools` is what the CURRENT runtime
+  // actually has registered, and dies with it. Neither feeds
+  // runtimeFingerprint — activation must never restart a runtime.
+  private readonly connectorHolderKey = randomUUID();
+  private connectorApi: ExtensionAPI | null = null;
+  private desiredConnectors: string[] = [];
+  private registeredConnectorTools = new Map<string, string[]>();
 
   ensureStarted(
     modelId: string,
@@ -303,7 +331,89 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
       Boolean(this.runtime),
       options,
     );
-    return Effect.runPromise(this.ensureStartedEffect(modelId, cwd, piSessionId, effectiveOptions));
+    return Effect.runPromise(
+      this.ensureStartedEffect(modelId, cwd, piSessionId, effectiveOptions),
+    ).then(() =>
+      // Re-apply the session's connector selection after every start: a runtime
+      // rebuild (model, cwd, thinking level) drops the registrations, and the
+      // user's `/mcp` choice must survive it. A connector that cannot be
+      // reached must never fail the turn.
+      this.syncConnectorTools().then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+  }
+
+  /**
+   * Personal MCP connectors active for THIS session.
+   *
+   * Deliberately not part of runtimeFingerprint: activating a connector must
+   * never tear down the runtime or re-spawn every MCP client, and it must not
+   * write connectors.json. It only moves names in and out of
+   * `agent.state.tools`, which is the single place tool schemas are serialised
+   * from.
+   */
+  setConnectorSelection(connectorIds: string[]): Promise<ConnectorSelectionResult> {
+    this.desiredConnectors = normalizePersonalConnectorIds(connectorIds);
+    return this.syncConnectorTools();
+  }
+
+  getConnectorSelection(): string[] {
+    return [...this.desiredConnectors];
+  }
+
+  private async syncConnectorTools(): Promise<ConnectorSelectionResult> {
+    const errors: Record<string, string> = {};
+    const plan = planConnectorSelection(
+      this.registeredConnectorTools.keys(),
+      this.desiredConnectors,
+    );
+    const session = this.runtime?.session;
+    const api = this.connectorApi;
+
+    for (const connectorId of plan.deactivate) {
+      const names = this.registeredConnectorTools.get(connectorId) ?? [];
+      this.registeredConnectorTools.delete(connectorId);
+      if (session) deactivateConnectorTools(session, names);
+      // Only the last holder closes the pooled connection; another session may
+      // still be mid-turn on the same server.
+      if (releaseConnector(connectorId, this.connectorHolderKey)) {
+        closePooledConnection(connectorId);
+      }
+    }
+
+    if (plan.activate.length > 0 && session && api) {
+      const available = new Set(await activatableConnectorIds().catch(() => [] as string[]));
+      for (const connectorId of plan.activate) {
+        if (!available.has(connectorId)) {
+          errors[connectorId] = "Connector is not registered or not enabled";
+          this.desiredConnectors = this.desiredConnectors.filter((id) => id !== connectorId);
+          continue;
+        }
+        const label = resolvePersonalConnector(connectorId)?.label ?? connectorId;
+        try {
+          // First spawn of this connector's process happens here — lazily, on
+          // the session that asked for it.
+          const names = await registerConnectorTools(api, connectorId, label);
+          this.registeredConnectorTools.set(connectorId, names);
+          holdConnector(connectorId, this.connectorHolderKey);
+          activateConnectorTools(session, names);
+        } catch (error) {
+          errors[connectorId] = error instanceof Error ? error.message : String(error);
+          this.desiredConnectors = this.desiredConnectors.filter((id) => id !== connectorId);
+          if (releaseConnector(connectorId, this.connectorHolderKey)) {
+            closePooledConnection(connectorId);
+          }
+        }
+      }
+    }
+
+    return {
+      active: [...this.registeredConnectorTools.keys()],
+      pending: [...this.desiredConnectors],
+      errors,
+    };
   }
 
   private ensureStartedEffect(
@@ -360,6 +470,9 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
         const agentDir = getAgentDir();
         const extensionUiContext = this.extensionUiContext();
         const recordExtensionEvent = (event: PiEvent) => this.recordEvent(event);
+        const captureConnectorApi = (api: ExtensionAPI) => {
+          this.connectorApi = api;
+        };
         const runtime = yield* Effect.tryPromise({
           try: () =>
             createAgentSessionRuntime(
@@ -376,6 +489,13 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
                             additionalSkillPaths: sessionOptions.skills,
                             additionalExtensionPaths: sessionOptions.extensionPaths,
                             additionalPromptTemplatePaths: sessionOptions.promptTemplatePaths,
+                            // Personal skills are discoverable by /skill:<name>
+                            // but must never reach the system prompt: this marks
+                            // them model-invocation-disabled at runtime, so
+                            // formatSkillsForPrompt drops them while
+                            // _expandSkillCommand still resolves them. No
+                            // SKILL.md frontmatter is touched.
+                            skillsOverride: personalSkillsOverride(),
                             // In-process: the goal section is injected per turn
                             // via before_agent_start, keyed by the canonical
                             // piSessionId this SessionManager owns. Runs here so
@@ -387,6 +507,17 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
                                 factory: createGoalPromptExtension(() =>
                                   sessionManager.getSessionId(),
                                 ),
+                              },
+                              // Registers NO tools at load: a fresh session must
+                              // carry zero personal MCP schemas and must not
+                              // spawn a single MCP process. It only captures the
+                              // live ExtensionAPI so `/mcp <name>` can register
+                              // that one connector's tools later, in-place.
+                              {
+                                name: "local-studio-connectors",
+                                factory: createConnectorToolsExtension((api) => {
+                                  captureConnectorApi(api);
+                                }),
                               },
                             ],
                             // Vision guidance is APPENDED, not substituted. This branch used to
@@ -699,6 +830,10 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
   private stopEffect(): Effect.Effect<void> {
     this.unsubscribe?.();
     this.unsubscribe = null;
+    // Tool registrations live in the runtime being disposed; the DESIRED set
+    // survives so the next ensureStarted re-activates the same connectors.
+    this.connectorApi = null;
+    this.registeredConnectorTools.clear();
     const runtime = this.runtime;
     this.runtime = null;
     for (const pending of this.extensionUiPending.values()) {
