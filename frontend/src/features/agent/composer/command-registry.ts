@@ -17,6 +17,24 @@ export function parseSlashInvocation(input: string): SlashInvocation | null {
   return { name: match[1].toLowerCase(), args: (match[2] ?? "").trim() };
 }
 
+/**
+ * Namespaced command families ("/skill:<name>") search INSIDE the namespace: the
+ * typed prefix picks the family and the rest is the fuzzy query. Without this
+ * "/skill:fig" scores every skill command as a miss — byQuery only does
+ * prefix/substring on the whole name, and no name contains "skill:fig".
+ * Falls back to a flat search when the prefix names no family.
+ */
+export function scopeToNamespace(
+  commands: ComposerCommand[],
+  query: string,
+): { commands: ComposerCommand[]; query: string } {
+  const match = /^([\w][\w.-]*):([\s\S]*)$/.exec(query.trim());
+  if (!match) return { commands, query };
+  const prefix = `${match[1].toLowerCase()}:`;
+  const scoped = commands.filter((command) => command.name.toLowerCase().startsWith(prefix));
+  return scoped.length > 0 ? { commands: scoped, query: match[2] } : { commands, query };
+}
+
 export type ComposerCommandRegistry = {
   list: (context: ComposerCommandContext) => ComposerCommand[];
   find: (name: string, context: ComposerCommandContext) => ComposerCommand | null;
@@ -55,14 +73,15 @@ export function createComposerCommandRegistry(
     // Empty query keeps provider order (builtins → templates → skills) so core
     // commands lead the menu; byQuery would sort the whole set alphabetically.
     if (!query.trim()) return commands.slice(0, limit);
-    const rows = commands.map((command) => ({
+    const scoped = scopeToNamespace(commands, query);
+    const rows = scoped.commands.map((command) => ({
       name: command.name,
       displayName: command.title,
       source: command.source,
       shortDescription: command.description,
       command,
     }));
-    return byQuery(rows, query, limit).map((row) => row.command);
+    return byQuery(rows, scoped.query, limit).map((row) => row.command);
   };
 
   const execute = (invocation: SlashInvocation, context: ComposerCommandContext) => {
