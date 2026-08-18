@@ -66,6 +66,14 @@ export interface ControllerUsageStats {
 }
 
 export interface UsageStats {
+  /**
+   * When this deployment's telemetry began recording. Local inference accounting
+   * starts the day it is switched on: there is no historical traffic to recover,
+   * and inventing a backfill would be worse than an honest start date.
+   */
+  collection_started_at?: string | null;
+  /** False when the backend is deliberately not accounting at all. */
+  telemetry_enabled?: boolean;
   totals: {
     total_tokens: number;
     prompt_tokens: number;

@@ -121,6 +121,9 @@ export function normalizeUsageStats(input: UsageStats | null | undefined): Usage
   const recent = record(s.recent_activity);
 
   return {
+    collection_started_at:
+      typeof s.collection_started_at === "string" ? s.collection_started_at : null,
+    telemetry_enabled: s.telemetry_enabled !== false,
     totals: {
       total_tokens: num(totals.total_tokens),
       prompt_tokens: num(totals.prompt_tokens),

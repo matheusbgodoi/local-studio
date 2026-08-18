@@ -5,6 +5,7 @@ import { AppPage, Card, PageContainer, PageState, RefreshButton, SegmentedContro
 import { TokenActivityHeatmap, type ActivityPeriod } from "@/features/usage/token-activity-heatmap";
 import { useUsage } from "@/features/usage/use-usage";
 import { UsageSkeleton } from "@/features/usage/usage-skeleton";
+import { classifyUsageFailure, formatCollectionStart } from "@/features/usage/usage-unavailable";
 import { formatNumber } from "@/lib/formatters";
 import type { UsageStats } from "@/lib/types";
 import { Upload } from "@/ui/icon-registry";
@@ -72,6 +73,26 @@ export default function UsagePage() {
 
   if (loading && !stats) return <UsageSkeleton />;
 
+  // A remote controller that is off is not a page error. Name the actual condition
+  // instead of surfacing the transport string, and never fall through to a zeroed
+  // dashboard, which would read as "you used nothing" rather than "we cannot tell".
+  const failure = stats ? null : classifyUsageFailure(error);
+  if (failure) {
+    return (
+      <AppPage>
+        <PageContainer width="sm" className="pt-5 sm:pt-7">
+          <div className="flex min-h-50 flex-col items-center justify-center gap-3 py-20 text-center">
+            <p className="text-[length:var(--fs-md)] font-medium text-(--ui-fg)">{failure.title}</p>
+            <p className="max-w-sm text-[length:var(--fs-sm)] text-(--ui-muted)">
+              {failure.detail}
+            </p>
+            <RefreshButton onRefresh={loadStats} loading={loading} className="mt-1 h-7 w-7" />
+          </div>
+        </PageContainer>
+      </AppPage>
+    );
+  }
+
   const pageState = PageState({
     loading,
     data: stats,
@@ -81,6 +102,8 @@ export default function UsagePage() {
   });
   if (pageState) return <AppPage>{pageState}</AppPage>;
   if (!stats) return null;
+
+  const collectedSince = formatCollectionStart(stats.collection_started_at);
 
   return (
     <AppPage>
@@ -129,6 +152,13 @@ export default function UsagePage() {
             <RefreshButton onRefresh={loadStats} loading={loading} className="h-7 w-7" />
           </div>
         </header>
+
+        {collectedSince ? (
+          <p className="pt-3 text-[length:var(--fs-xs)] text-(--ui-muted)">
+            Local inference accounting since {collectedSince}. Earlier requests were never recorded,
+            so they are absent rather than estimated.
+          </p>
+        ) : null}
 
         <section className="pt-14 text-center sm:pt-20">
           <p className="text-[length:var(--fs-sm)] font-medium text-(--ui-muted)">Proxied tokens</p>
