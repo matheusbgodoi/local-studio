@@ -461,6 +461,10 @@ function isDeepSeekReasoningModel(model: AgentModel): boolean {
   return model.reasoning && id.includes("deepseek");
 }
 
+function isControllerBackedModel(model: AgentModel): boolean {
+  return typeof model.controllerUrl === "string" && model.controllerUrl.length > 0;
+}
+
 function isInklingReasoningModel(model: AgentModel): boolean {
   const id = `${model.id} ${model.rawId ?? ""} ${model.name}`.toLowerCase();
   return model.reasoning && id.includes("inkling");
@@ -502,7 +506,12 @@ function piThinkingContract(model: AgentModel): PiThinkingContract {
       },
     };
   }
-  if (isDeepSeekReasoningModel(model)) {
+  // The hosted DeepSeek API uses a `thinking` object and requires an empty
+  // `reasoning_content` field on replayed assistant messages. Our vLLM
+  // controller exposes DeepSeek V4 through the standard OpenAI-compatible
+  // surface instead, where that hosted-only dialect corrupts tool-history
+  // turns. Keep the ordinary `reasoning_effort` mapping for controller models.
+  if (isDeepSeekReasoningModel(model) && !isControllerBackedModel(model)) {
     return {
       thinkingLevelMap: {
         off: null,
