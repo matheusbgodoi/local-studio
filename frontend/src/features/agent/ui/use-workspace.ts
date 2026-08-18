@@ -41,6 +41,8 @@ import {
   readDefaultAgentModel,
   writeDefaultAgentModel,
 } from "@/features/agent/workspace/model-preference";
+import { readModelThinkingLevel } from "@/features/agent/workspace/thinking-level-preference";
+import type { AgentThinkingLevel } from "@/features/agent/contracts";
 
 export type WorkspaceHandles = {
   registerComputerAside: (element: HTMLElement | null) => void;
@@ -88,6 +90,14 @@ function createMemoryStorage(): Pick<Storage, "getItem" | "setItem" | "removeIte
       entries.delete(key);
     },
   };
+}
+
+/** The level `modelId` was last used at — Off until that model has one. Reads
+ *  come from real storage, like readDefaultAgentModel: an ephemeral workspace
+ *  must not *write* preferences, but it should still open on the ones already
+ *  remembered. */
+function adoptModelThinkingLevel(modelId: string): AgentThinkingLevel {
+  return readModelThinkingLevel(window.localStorage, modelId);
 }
 
 function createWorkspaceWindow(source: Window): WorkspaceWindow {
@@ -242,6 +252,9 @@ export function useWorkspace({ ephemeral = false }: UseWorkspaceOptions = {}): U
     };
   }, [dispatch]);
 
+  // Restoring the last-used model must also restore THAT model's level: on app
+  // start the catalogue arrives, selectedModel settles on the remembered id, and
+  // the seed a fresh session opens at follows it here.
   const handles = useMemo<WorkspaceHandles>(
     () => ({
       registerComputerAside: (element: HTMLElement | null) => {
@@ -293,8 +306,20 @@ export function useWorkspace({ ephemeral = false }: UseWorkspaceOptions = {}): U
           newPaneId: newPaneId(),
           tab: makeFreshTab(),
         }),
-      selectPaneModel: (paneId: PaneId, modelId: string) =>
-        dispatch({ type: "patchActiveTab", paneId, patch: { modelId } }),
+      selectPaneModel: (paneId: PaneId, modelId: string) => {
+        // LAST USED IS THE DEFAULT. Picking a model in any pane also records it as the
+        // workspace default, so a new pane, a new session and the next app start all open
+        // on the model actually used last instead of on a hardcoded one.
+        writeDefaultAgentModel(ephemeral ? createMemoryStorage() : window.localStorage, modelId);
+        // A THINKING LEVEL BELONGS TO ITS MODEL. Switching models restores the level this
+        // pane last used ON THE MODEL BEING SWITCHED TO — Off when that model has never
+        // had one — so no model ever inherits the level of the model it replaced.
+        dispatch({
+          type: "patchActiveTab",
+          paneId,
+          patch: { modelId, thinkingLevel: adoptModelThinkingLevel(modelId) },
+        });
+      },
       setDefaultModel: (modelId: string) => {
         writeDefaultAgentModel(ephemeral ? createMemoryStorage() : window.localStorage, modelId);
         dispatch({ type: "setSelectedModel", modelId });

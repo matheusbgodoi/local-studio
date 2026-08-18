@@ -23,6 +23,12 @@ import {
   skillCommandProvider,
 } from "@/features/agent/composer/catalogue-commands";
 import {
+  skillInvocationCommandProvider,
+  skillInvocationText,
+} from "@/features/agent/composer/skill-invocation-commands";
+import { mcpCommandProvider } from "@/features/agent/composer/mcp-commands";
+import { setSessionConnectors } from "@/features/agent/tools/connector-session-api";
+import {
   createComposerCommandRegistry,
   parseSlashInvocation,
   type SlashInvocation,
@@ -81,18 +87,19 @@ import { useGoalMode } from "@/features/agent/ui/use-goal-mode";
 import { useChatPaneComposerActions } from "@/features/agent/ui/use-chat-pane-composer-actions";
 import { useComposerCommandHandlers } from "@/features/agent/ui/use-composer-command-handlers";
 import { useChatPaneSendFlow } from "@/features/agent/ui/chat-pane-send-flow";
-import { ChatPaneHandle, SessionTab } from "@/features/agent/messages";
+import { ChatPaneHandle, newId, nowLabel, SessionTab } from "@/features/agent/messages";
 import { useSessionEngine } from "@/features/agent/runtime/engine";
 import type { UpdateSession } from "@/features/agent/runtime/types";
 import { useTools } from "@/features/agent/tools/context";
 import type { GitSummary, Project } from "@/features/agent/projects/types";
 import type { BrowserBackend } from "@/features/agent/tools/types";
 import type { AgentThinkingLevel } from "@/features/agent/contracts";
+import { pickThinkingLevel } from "@/features/agent/messages/thinking-level-pref";
 import {
-  loadThinkingLevelDefault,
-  pickThinkingLevel,
-  setThinkingLevelDefault,
-} from "@/features/agent/messages/thinking-level-pref";
+  browserThinkingStorage,
+  readModelThinkingLevel,
+  writeModelThinkingLevel,
+} from "@/features/agent/workspace/thinking-level-preference";
 import {
   exportFilenameFromTitle,
   sessionToMarkdown,
@@ -405,22 +412,26 @@ export function ChatPane({
     { activeTab, tools },
   );
   // Per-session choice wins; a fresh session (no saved level) falls back to the
-  // level the user last picked, then the model's "high" default. This stops new
-  // sessions from always snapping back to High (issue #277).
+  // level THIS MODEL was last used at, which is Off until it has one. Reading the
+  // per-model store rather than one global default is what stops a level picked on
+  // a reasoning model from seeding a fresh session on a model that cannot think
+  // (and keeps the Computer side-chat, whose tabs live outside the workspace
+  // reducer, on the same footing as the main panes). Issue #277 stands: a new
+  // session still does not snap back to a hardcoded level.
   const thinkingLevel = pickThinkingLevel(
     modelThinkingLevels,
     activeTab?.thinkingLevel,
-    loadThinkingLevelDefault(),
+    modelId ? readModelThinkingLevel(browserThinkingStorage(), modelId) : undefined,
   );
   const selectThinkingLevel = useCallback(
     (level: AgentThinkingLevel) => {
       if (!activeTab || running) return;
-      // Persist on the session (survives turns + reloads) and remember it as the
-      // default for the next fresh session.
+      // Persist on the session (survives turns + reloads) and file it under the
+      // model it was picked FOR, so the next session on that model opens here.
       updateTab(activeTab.id, (session) => ({ ...session, thinkingLevel: level }));
-      setThinkingLevelDefault(level);
+      if (modelId) writeModelThinkingLevel(browserThinkingStorage(), modelId, level);
     },
-    [activeTab, running, updateTab],
+    [activeTab, modelId, running, updateTab],
   );
   const composerModelSelector = renderComposerModelSelector(modelSelector, {
     reasoningLevel: thinkingLevel,
@@ -477,6 +488,66 @@ export function ChatPane({
       activeTab ? applyContextRow(activeTab.id, "skill", row, tools) : Promise.resolve(),
     [activeTab, tools],
   );
+  // `/skill:<name>` sends Pi's own invocation as the turn message so
+  // _expandSkillCommand inlines that SKILL.md for THIS task only. It bypasses
+  // buildPromptArgs on purpose: the invocation must be the first token of the
+  // message (Pi reads the skill name up to the first space), and this turn
+  // carries no armed-skill context by design.
+  const runSkillInvocation = useCallback(
+    (skill: ComposerSkillRef, args: string) => {
+      if (!activeTab || !modelId) return Promise.resolve();
+      const text = skillInvocationText(skill, args);
+      return engine.submitPrompt({
+        text,
+        prompt: text,
+        displayText: text,
+        userText: text,
+        targetSessionId: activeTab.id,
+        browserToolEnabled,
+        // `skills` is left to the session's current selection on purpose: it
+        // feeds runtimeOptionsFingerprint, and overriding it here would restart
+        // the runtime for this turn and again for the next one.
+      });
+    },
+    [activeTab, browserToolEnabled, engine, modelId],
+  );
+  const activeConnectors = useMemo(
+    () => tools.selectionFor(activeTab?.id).connectors ?? [],
+    [activeTab?.id, tools],
+  );
+  // `/mcp` is a status command, and the per-session `error` field has no
+  // renderer in the transcript — so its answer goes in as an assistant event
+  // block, the neutral separator line the timeline already draws.
+  const noteInTranscript = useCallback(
+    (text: string) => {
+      if (!activeTab) return;
+      updateTab(activeTab.id, (tab) => ({
+        ...tab,
+        messages: [
+          ...tab.messages,
+          {
+            id: newId("assistant"),
+            role: "assistant" as const,
+            text: "",
+            blocks: [{ kind: "event" as const, id: newId("event"), text }],
+            timestamp: nowLabel(),
+          },
+        ],
+      }));
+    },
+    [activeTab, updateTab],
+  );
+  const applyConnectorSelection = useCallback(
+    async (connectorIds: string[]) => {
+      if (!activeTab) return "Open a chat before changing connectors.";
+      const result = await setSessionConnectors(activeTab.id, connectorIds);
+      if (result.error) return result.error;
+      const current = tools.selectionFor(activeTab.id);
+      tools.setSelection(activeTab.id, { ...current, connectors: result.active });
+      return null;
+    },
+    [activeTab, tools],
+  );
   const activePiSessionId = piSessionIdOf(activeTab);
   const { goalRevision, goalAction } = useGoalCommand(activePiSessionId);
   const [goalModeOn, setGoalModeOn] = useState(false);
@@ -505,24 +576,42 @@ export function ChatPane({
           goal: goalAction,
           enterGoalMode: () => setGoalModeOn(true),
         }),
+        mcpCommandProvider({
+          connectors: tools.connectorCatalogue,
+          active: activeConnectors,
+          apply: applyConnectorSelection,
+          notify: noteInTranscript,
+        }),
         promptTemplateCommandProvider({
           templates: tools.promptTemplateCatalogue,
           applyTemplate,
         }),
+        // The explicit, zero-injection path leads; the legacy `$skill`
+        // selected-context provider below still resolves `/<skill-name>` for
+        // sessions that already used it.
+        skillInvocationCommandProvider({
+          skills: tools.skillCatalogue,
+          runSkill: runSkillInvocation,
+        }),
         skillCommandProvider({ skills: tools.skillCatalogue, applySkill }),
       ]),
     [
+      activeConnectors,
+      applyConnectorSelection,
       applySkill,
       applyTemplate,
       canExport,
       compactSession,
       goalAction,
       exportSession,
+      noteInTranscript,
       onForkSession,
       onToggleBrowserTool,
       openComputerStatus,
       openTerminalAction,
       router,
+      runSkillInvocation,
+      tools.connectorCatalogue,
       tools.promptTemplateCatalogue,
       tools.skillCatalogue,
     ],

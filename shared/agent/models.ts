@@ -17,6 +17,9 @@ export interface OpenAIModelListItem {
   max_tokens?: number;
   maxTokens?: number;
   metadata?: Record<string, unknown>;
+  /** llama-swap's spelling of `metadata`. Its /v1/models rows carry their
+   *  extras under `meta`, so reading only `metadata` threw them away. */
+  meta?: Record<string, unknown>;
   active?: boolean;
   [key: string]: unknown;
 }
@@ -54,6 +57,35 @@ export function inferReasoningSupport(modelId: string): boolean {
     normalized.includes("glm-5") ||
     normalized.includes("mimo")
   );
+}
+
+export type DeclaredModelReasoning = {
+  reasoning: boolean;
+  /** Wire contract the checkpoint's chat template speaks, when it is not the
+   *  plain OpenAI `reasoning_effort` default. Consumed by the agent runtime. */
+  thinkingContract?: "chat-template-effort";
+};
+
+/**
+ * Reasoning contracts Local Studio declares itself, keyed by the exact
+ * controller alias.
+ *
+ * The live llama-swap `/v1/models` rows carry only
+ * `{ meta: { llamaswap: { type: "model" } } }` — no reasoning flag at all — and
+ * the alias hides the checkpoint, so neither the payload nor
+ * `inferReasoningSupport("qwen-daily")` can see the Qwen3 underneath. Declaring
+ * the alias here keeps the alias intact and keeps the heuristic honest: only
+ * ids listed here are affected, every other model still answers for itself.
+ */
+const DECLARED_MODEL_REASONING: Readonly<Record<string, DeclaredModelReasoning>> = {
+  // Qwen3.8-27B behind llama-swap. Its chat template takes
+  // chat_template_kwargs { enable_thinking, reasoning_effort: low|medium|xhigh }.
+  "qwen-daily": { reasoning: true, thinkingContract: "chat-template-effort" },
+};
+
+/** Declared capabilities for `modelId`, or undefined when nothing is declared. */
+export function declaredModelReasoning(modelId: string): DeclaredModelReasoning | undefined {
+  return DECLARED_MODEL_REASONING[modelId.trim().toLowerCase()];
 }
 
 export function inferVisionSupport(modelId: string): boolean {
@@ -115,11 +147,19 @@ function resolveReasoning(
   id: string,
 ): boolean {
   const explicitReasoning = metadata.reasoning ?? model.reasoning;
-  return typeof explicitReasoning === "boolean" ? explicitReasoning : inferReasoningSupport(id);
+  if (typeof explicitReasoning === "boolean") return explicitReasoning;
+  // Explicit beats inferred: a declared alias is not up for guessing.
+  return declaredModelReasoning(id)?.reasoning ?? inferReasoningSupport(id);
+}
+
+/** Extras a controller ships alongside the row. llama-swap uses `meta`, other
+ *  OpenAI-compatible hosts use `metadata`; `metadata` wins where both exist. */
+function modelExtras(model: OpenAIModelListItem): Record<string, unknown> {
+  return { ...recordFromUnknown(model.meta), ...recordFromUnknown(model.metadata) };
 }
 
 export function normalizeOpenAIModel(model: OpenAIModelListItem): AgentModel {
-  const metadata = recordFromUnknown(model.metadata);
+  const metadata = modelExtras(model);
   const id = String(model.id || "").trim();
   const name = String(model.name || metadata.name || id).trim() || id;
   const contextWindow = resolveContextWindow(model, metadata);

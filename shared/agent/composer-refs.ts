@@ -12,6 +12,8 @@ export type ComposerSkillRef = {
   source?: string;
   path?: string;
   instructions?: string;
+  /** Name Pi resolves the skill by, for `/skill:<piName>` (skill-discovery.ts). */
+  piName?: string;
 };
 
 export type ComposerPromptTemplateRef = {
@@ -39,6 +41,7 @@ export function sanitizeComposerSkills(value: unknown): ComposerSkillRef[] {
       source: stringField(record, "source"),
       path: stringField(record, "path"),
       instructions: stringField(record, "instructions"),
+      piName: stringField(record, "piName"),
     };
     return skill.name || skill.id || skill.path ? [skill] : [];
   });

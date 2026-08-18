@@ -5,7 +5,7 @@ import {
   ConnectorToolDeniedError,
   listConnectorTools,
 } from "@local-studio/agent-runtime/connector-pool";
-import { enabledConnectors } from "@local-studio/agent-runtime/connectors-service";
+import { eagerConnectors } from "@local-studio/agent-runtime/connectors-service";
 import { refreshEnabledPluginConnectors } from "@local-studio/agent-runtime/plugin-runtime";
 import { requireApiAccess } from "@/lib/auth/guard";
 
@@ -22,7 +22,10 @@ export async function GET(request: NextRequest) {
   const denied = requireApiAccess(request);
   if (denied) return denied;
   await Effect.runPromise(refreshEnabledPluginConnectors());
-  const connectors = await enabledConnectors();
+  // Personal connectors are deliberately absent: they are session-gated and
+  // registered on demand by /mcp, so inventorying them here would spawn every
+  // stdio server at session start.
+  const connectors = await eagerConnectors();
   const inventory = await Promise.all(
     connectors.map(async (connector) => {
       try {

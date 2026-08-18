@@ -9,6 +9,7 @@ import type { OpenAICompletionsCompat } from "@earendil-works/pi-ai";
 import {
   normalizeOpenAIModels,
   inferReasoningSupport,
+  declaredModelReasoning,
   type AgentModel,
 } from "../../../shared/agent/models";
 import { AGENT_THINKING_LEVELS, type AgentThinkingLevel } from "../../../shared/agent/agent-turn";
@@ -138,10 +139,28 @@ function isInklingModelId(modelId: string): boolean {
   return modelId.toLowerCase().includes("inkling");
 }
 
+/** True for aliases declared as speaking the configurable chat-template
+ *  contract (chat_template_kwargs { enable_thinking, reasoning_effort }). */
+function isChatTemplateThinkingModelId(modelId: string): boolean {
+  return declaredModelReasoning(modelId)?.thinkingContract === "chat-template-effort";
+}
+
+/** Off / Low / Medium / XHigh — the only efforts the chat template accepts.
+ *  Minimal, High and Max are deliberately absent, and XHigh is never Max. */
+const CHAT_TEMPLATE_THINKING_LEVELS: readonly AgentThinkingLevel[] = [
+  "off",
+  "low",
+  "medium",
+  "xhigh",
+];
+
 export function controllerModelThinkingLevels(
   reasoning: boolean,
   modelId = "",
 ): AgentThinkingLevel[] {
+  if (reasoning && isChatTemplateThinkingModelId(modelId)) {
+    return [...CHAT_TEMPLATE_THINKING_LEVELS];
+  }
   if (reasoning && isInklingModelId(modelId)) {
     return ["off", "minimal", "low", "medium", "high", "max"];
   }
@@ -451,6 +470,80 @@ function isInklingReasoningModel(model: AgentModel): boolean {
   return model.reasoning && id.includes("inkling");
 }
 
+function isChatTemplateReasoningModel(model: AgentModel): boolean {
+  return model.reasoning && isChatTemplateThinkingModelId(model.rawId ?? model.id);
+}
+
+type PiThinkingContract = {
+  thinkingLevelMap?: Partial<Record<AgentThinkingLevel, string | null>>;
+  compat?: Partial<OpenAICompletionsCompat>;
+};
+
+/** The reasoning half of a model's pi contract. pi-ai consumes this as DATA —
+ *  it builds the request body itself — so this is the only place the wire shape
+ *  is decided, and it reaches main chat, the Computer side-chat, compaction,
+ *  automations and subagents through pi-agent/models.json. */
+function piThinkingContract(model: AgentModel): PiThinkingContract {
+  if (isChatTemplateReasoningModel(model)) {
+    return {
+      // `null` marks a level UNSUPPORTED — that is what keeps Minimal, High and
+      // Max out of the picker. `off` stays unmapped on purpose: this template
+      // turns thinking off through enable_thinking, not through an effort value.
+      thinkingLevelMap: {
+        minimal: null,
+        low: "low",
+        medium: "medium",
+        high: null,
+        xhigh: "xhigh",
+        max: null,
+      },
+      compat: {
+        thinkingFormat: "chat-template",
+        chatTemplateKwargs: {
+          enable_thinking: { $var: "thinking.enabled" },
+          reasoning_effort: { $var: "thinking.effort", omitWhenOff: true },
+        },
+      },
+    };
+  }
+  // The hosted DeepSeek API uses a `thinking` object and requires an empty
+  // `reasoning_content` field on replayed assistant messages. Our vLLM
+  // controller exposes DeepSeek V4 through the standard OpenAI-compatible
+  // surface instead, where that hosted-only dialect corrupts tool-history
+  // turns. Keep the ordinary `reasoning_effort` mapping for controller models.
+  if (isDeepSeekReasoningModel(model) && !isControllerBackedModel(model)) {
+    return {
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: "low",
+        medium: "medium",
+        high: "high",
+        xhigh: "max",
+        max: "max",
+      },
+      compat: {
+        thinkingFormat: "deepseek",
+        requiresReasoningContentOnAssistantMessages: true,
+      },
+    };
+  }
+  if (isInklingReasoningModel(model)) {
+    return {
+      thinkingLevelMap: {
+        off: "none",
+        minimal: "minimal",
+        low: "low",
+        medium: "medium",
+        high: "high",
+        xhigh: null,
+        max: "max",
+      },
+    };
+  }
+  return {};
+}
+
 const VLLM_OPENAI_COMPAT: OpenAICompletionsCompat = {
   supportsStore: false,
   supportsDeveloperRole: false,
@@ -462,14 +555,7 @@ const VLLM_OPENAI_COMPAT: OpenAICompletionsCompat = {
 
 export function modelsToPiModels(models: AgentModel[]) {
   return models.map((model) => {
-    // The hosted DeepSeek API uses a `thinking` object and requires an empty
-    // `reasoning_content` field on replayed assistant messages. Our vLLM
-    // controller exposes DeepSeek V4 through the standard OpenAI-compatible
-    // surface instead, where that hosted-only dialect corrupts tool-history
-    // turns. Keep the ordinary `reasoning_effort` mapping for controller models.
-    const deepSeekReasoning =
-      isDeepSeekReasoningModel(model) && !isControllerBackedModel(model);
-    const inklingReasoning = isInklingReasoningModel(model);
+    const thinking = piThinkingContract(model);
     return {
       id: model.rawId ?? model.id,
       name: model.name,
@@ -479,40 +565,8 @@ export function modelsToPiModels(models: AgentModel[]) {
       contextWindow: model.contextWindow,
       maxTokens: model.maxTokens,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      ...(deepSeekReasoning
-        ? {
-            thinkingLevelMap: {
-              off: null,
-              minimal: null,
-              low: "low",
-              medium: "medium",
-              high: "high",
-              xhigh: "max",
-              max: "max",
-            },
-          }
-        : inklingReasoning
-          ? {
-              thinkingLevelMap: {
-                off: "none",
-                minimal: "minimal",
-                low: "low",
-                medium: "medium",
-                high: "high",
-                xhigh: null,
-                max: "max",
-              },
-            }
-          : {}),
-      compat: {
-        ...VLLM_OPENAI_COMPAT,
-        ...(deepSeekReasoning
-          ? {
-              thinkingFormat: "deepseek",
-              requiresReasoningContentOnAssistantMessages: true,
-            }
-          : {}),
-      },
+      ...(thinking.thinkingLevelMap ? { thinkingLevelMap: thinking.thinkingLevelMap } : {}),
+      compat: { ...VLLM_OPENAI_COMPAT, ...thinking.compat },
     };
   });
 }

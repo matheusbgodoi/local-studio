@@ -24,6 +24,7 @@ import { writePaneState } from "@/features/agent/workspace/persistence";
 import { writeSessionDrafts } from "@/features/agent/workspace/session-drafts";
 import { writeTranscriptSnapshot } from "@/features/agent/workspace/transcript-cache";
 import { readDefaultAgentModel } from "@/features/agent/workspace/model-preference";
+import { writeModelThinkingLevel } from "@/features/agent/workspace/thinking-level-preference";
 import { SESSIONS_CHANGED_EVENT } from "@/lib/workspace-events";
 
 const EMPTY_SELECTION: ToolSelection = {
@@ -310,12 +311,36 @@ function queueReplayEffects(
   }
 }
 
+/** File the level a user just picked under the model it was picked FOR.
+ *
+ *  Only a real change of level counts as a preference. A session that merely
+ *  switches model carries no opinion about the new model, so skipping the
+ *  unchanged case is what stops one model's level from being written under
+ *  another model's id. */
+function persistThinkingLevelByModel(
+  prevState: WorkspaceState,
+  nextState: WorkspaceState,
+  deps: WorkspaceEffectDeps,
+): void {
+  for (const [sessionId, session] of nextState.sessions) {
+    const level = session.thinkingLevel;
+    if (!level) continue;
+    const before = prevState.sessions.get(sessionId);
+    if (!before || before.thinkingLevel === level) continue;
+    const modelId = session.modelId || nextState.selectedModel;
+    if (modelId) writeModelThinkingLevel(deps.storage, modelId, level);
+  }
+}
+
 function persistActionEffects(
   action: WorkspaceAction,
   prevState: WorkspaceState,
   nextState: WorkspaceState,
   deps: WorkspaceEffectDeps,
 ): void {
+  if (METADATA_PATCH_ACTIONS.has(action.type)) {
+    persistThinkingLevelByModel(prevState, nextState, deps);
+  }
   if (prevState.sessionDrafts !== nextState.sessionDrafts) {
     writeSessionDrafts(deps.storage, nextState.sessionDrafts);
   }

@@ -27,6 +27,15 @@ export type PiPromptOptions = {
   restartOnContinuationError?: boolean;
 };
 
+/** Outcome of applying a personal-MCP selection to one agent session. */
+export type ConnectorSelectionResult = {
+  /** Connectors whose tools are registered and active on the live runtime. */
+  active: string[];
+  /** What the session asked for; re-applied after a runtime rebuild. */
+  pending: string[];
+  errors: Record<string, string>;
+};
+
 export type PiDurablePromptMarker = {
   dispatchId: string;
   messageId: string;
@@ -90,6 +99,10 @@ export interface PiAgentSession {
    *  restore them rather than losing them to the stop. */
   abort(): Promise<{ steering: string[]; followUp: string[] }>;
   compact(customInstructions?: string): Promise<unknown>;
+  /** Activate/deactivate personal MCP connectors for this session only. Never
+   *  restarts the runtime and never writes connectors.json. */
+  setConnectorSelection(connectorIds: string[]): Promise<ConnectorSelectionResult>;
+  getConnectorSelection(): string[];
   stop(): Promise<void>;
   readonly status: PiAgentStatus;
   getEventsAfter(seq: number): LoggedPiEvent[];
