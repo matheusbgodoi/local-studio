@@ -274,3 +274,14 @@ code standards an agent (or contributor) must follow.
 ## License
 
 See [LICENSE](LICENSE).
+
+## Owner fork notes
+
+This repository is a customised fork. Two things behave differently from
+upstream and are documented separately:
+
+- **[`docs/upstream-updates.md`](docs/upstream-updates.md)** — the app never
+  replaces itself with an upstream artefact. Upgrading is a deliberate merge into
+  this fork followed by a local rebuild.
+- **[`docs/status-and-usage.md`](docs/status-and-usage.md)** — Status and Usage
+  read the same remote controller that serves Chat, with no demo data anywhere.

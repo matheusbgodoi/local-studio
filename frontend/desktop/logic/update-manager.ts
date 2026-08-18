@@ -67,7 +67,18 @@ export function getUpdateState(): DesktopUpdateSnapshot {
 }
 
 function installDownloadedUpdate(): void {
-  autoUpdater.quitAndInstall();
+  // Refuses on principle: replacing this binary with an upstream artefact would
+  // discard the fork's changes. See initializeAutoUpdates.
+  log.warn(
+    "[update] Refusing to install an upstream artefact over the owner-fork build. " +
+      "Upgrade by merging upstream into matheusbgodoi/local-studio and rebuilding " +
+      "(docs/upstream-updates.md).",
+  );
+  setUpdateState({
+    status: "error",
+    message:
+      "This is a customized build. Upgrade by merging upstream into the fork and rebuilding.",
+  });
 }
 
 export async function checkForUpdates(force = false): Promise<DesktopUpdateSnapshot> {
@@ -158,9 +169,18 @@ export function initializeAutoUpdates(): void {
   const feed = ensureFeedConfigured();
   log.info(`[update] Feed: ${feed.url}`);
 
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
-  autoUpdater.autoRunAppAfterInstall = true;
+  // OWNER FORK BUILD - this app is built from matheusbgodoi/local-studio and
+  // carries changes that do not exist upstream (the RTX3090 controller identity,
+  // Status/Usage telemetry, personal MCP wiring). An upstream release artefact
+  // would replace all of it with stock, silently, on the next quit.
+  //
+  // So: keep CHECKING and keep telling the user a newer upstream version exists -
+  // that information is useful - but never download or install it behind their
+  // back. Upgrading is a deliberate merge into the fork, documented in
+  // docs/upstream-updates.md, followed by a local rebuild.
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = false;
+  autoUpdater.autoRunAppAfterInstall = false;
 
   autoUpdater.on("checking-for-update", () => {
     setUpdateState({ status: "checking" });
