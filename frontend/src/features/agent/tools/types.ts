@@ -61,6 +61,22 @@ export type ContextAttachRequest = {
 export type ToolSelection = {
   skills: ComposerSkillRef[];
   promptTemplates: ComposerPromptTemplateRef[];
+  /**
+   * Personal MCP connectors armed for this session (`/mcp <name>`), by
+   * connector id. Session-scoped and additive: a fresh session has none, so its
+   * request carries zero personal MCP tool schemas. Deliberately NOT persisted
+   * with the tab — activation belongs to a live agent session, not to a pane
+   * that was reopened.
+   */
+  connectors?: string[];
+};
+
+/** A personal connector the user can arm, as the composer sees it. */
+export type ConnectorCatalogueRow = {
+  connectorId: string;
+  alias: string;
+  label: string;
+  description: string;
 };
 
 export type ToolSelectionMap = ReadonlyMap<SessionId, ToolSelection>;
@@ -68,4 +84,5 @@ export type ToolSelectionMap = ReadonlyMap<SessionId, ToolSelection>;
 export const EMPTY_SELECTION: ToolSelection = {
   skills: [],
   promptTemplates: [],
+  connectors: [],
 };

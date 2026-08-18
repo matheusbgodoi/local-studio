@@ -25,6 +25,7 @@ import {
   type BrowserState,
   type ComputerState,
   type ComputerTab,
+  type ConnectorCatalogueRow,
   type ContextAttachRequest,
   type FileOpenRequest,
   type ToolSelection,
@@ -85,6 +86,9 @@ type ToolSelectionsValue = {
   contextAttachRequest: ContextAttachRequest | null;
   skillCatalogue: ComposerSkillRef[];
   promptTemplateCatalogue: ComposerPromptTemplateRef[];
+  /** Personal MCP connectors registered in connectors.json. Registered, not
+   *  active — `/mcp <name>` arms one for a single session. */
+  connectorCatalogue: ConnectorCatalogueRow[];
   selectionFor: (sessionId: SessionId | null | undefined) => ToolSelection;
 };
 
@@ -107,6 +111,7 @@ type ToolsEffectsBridgeProps = {
   onCatalogueLoaded: (payload: {
     skills: ComposerSkillRef[];
     promptTemplates: ComposerPromptTemplateRef[];
+    connectors: ConnectorCatalogueRow[];
   }) => void;
 };
 
@@ -175,6 +180,7 @@ export function ToolsProvider({ children }: { children: ReactNode }) {
   const [promptTemplateCatalogue, setPromptTemplateCatalogue] = useState<
     ComposerPromptTemplateRef[]
   >([]);
+  const [connectorCatalogue, setConnectorCatalogue] = useState<ConnectorCatalogueRow[]>([]);
   const selectionsRef = useRef<Map<SessionId, ToolSelection>>(new Map());
   const [selectionVersion, setSelectionVersion] = useState(0);
   const updateComputer = useCallback<Dispatch<SetStateAction<ComputerState>>>((update) => {
@@ -192,12 +198,15 @@ export function ToolsProvider({ children }: { children: ReactNode }) {
     ({
       skills,
       promptTemplates,
+      connectors,
     }: {
       skills: ComposerSkillRef[];
       promptTemplates: ComposerPromptTemplateRef[];
+      connectors: ConnectorCatalogueRow[];
     }) => {
       setSkillCatalogue(skills);
       setPromptTemplateCatalogue(promptTemplates);
+      setConnectorCatalogue(connectors);
     },
     [],
   );
@@ -390,7 +399,8 @@ export function ToolsProvider({ children }: { children: ReactNode }) {
       if (
         current &&
         current.skills === selection.skills &&
-        current.promptTemplates === selection.promptTemplates
+        current.promptTemplates === selection.promptTemplates &&
+        current.connectors === selection.connectors
       ) {
         return;
       }
@@ -408,7 +418,8 @@ export function ToolsProvider({ children }: { children: ReactNode }) {
       if (
         existing &&
         existing.skills === selection.skills &&
-        existing.promptTemplates === selection.promptTemplates
+        existing.promptTemplates === selection.promptTemplates &&
+        existing.connectors === selection.connectors
       ) {
         continue;
       }
@@ -468,9 +479,17 @@ export function ToolsProvider({ children }: { children: ReactNode }) {
       contextAttachRequest,
       skillCatalogue,
       promptTemplateCatalogue,
+      connectorCatalogue,
       selectionFor,
     }),
-    [fileOpenRequest, contextAttachRequest, skillCatalogue, promptTemplateCatalogue, selectionFor],
+    [
+      fileOpenRequest,
+      contextAttachRequest,
+      skillCatalogue,
+      promptTemplateCatalogue,
+      connectorCatalogue,
+      selectionFor,
+    ],
   );
 
   // Latest-value ref for imperative readers (use-workspace's event handlers).
@@ -554,6 +573,7 @@ export function useTools(): ToolsContextValue {
 }
 
 export type {
+  ConnectorCatalogueRow,
   ToolSelection,
   ToolSelectionMap,
   BrowserState,
