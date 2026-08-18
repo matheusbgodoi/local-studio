@@ -1,40 +1,14 @@
-import { isAgentThinkingLevel, type AgentThinkingLevel } from "@/features/agent/contracts";
+import type { AgentThinkingLevel } from "@/features/agent/contracts";
 
-// Global, client-only preference for the reasoning ("thinking") level a *new*
-// session should start at. Persisted in localStorage so the last level the user
-// picked seeds the next fresh session, instead of every new chat snapping back
-// to the hard-coded "high" fallback. Per-session choices still live on the
-// session tab (see pickThinkingLevel); this only supplies the default when a
-// session has no saved level of its own.
-const THINKING_LEVEL_DEFAULT_KEY = "local-studio.agent.thinkingLevelDefault";
-
-/** Synchronous localStorage read — safe to call during render. Returns
- *  undefined when unset, off the server, or if storage is unavailable or holds
- *  a value that is no longer a valid level. */
-export function loadThinkingLevelDefault(): AgentThinkingLevel | undefined {
-  if (typeof window === "undefined") return undefined;
-  try {
-    const raw = window.localStorage.getItem(THINKING_LEVEL_DEFAULT_KEY);
-    return isAgentThinkingLevel(raw) ? raw : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** Remember the level the user just picked so the next fresh session adopts it.
- *  Best-effort — storage failures are swallowed like every other client pref. */
-export function setThinkingLevelDefault(level: AgentThinkingLevel): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(THINKING_LEVEL_DEFAULT_KEY, level);
-  } catch {
-    /* ignore storage failures — persistence here is a convenience, not load-bearing */
-  }
-}
+// The level a session runs at. There is deliberately no global "last level
+// picked" any more: a level belongs to the model that can honour it, so the
+// remembered fallback comes from the per-model store in
+// workspace/thinking-level-preference.ts. A single global default is what used
+// to carry a reasoning model's level onto a model that cannot think.
 
 /** Resolve the level a session should use: its own saved choice wins, otherwise
- *  fall back to the user's remembered default, then "high", then whatever the
- *  model supports. Pure so it can be unit-tested without a DOM. */
+ *  the level remembered for the model in hand, then "high", then the first level
+ *  the model supports. Pure so it can be unit-tested without a DOM. */
 export function pickThinkingLevel(
   levels: readonly AgentThinkingLevel[],
   saved: AgentThinkingLevel | undefined,
@@ -43,5 +17,9 @@ export function pickThinkingLevel(
   if (saved && levels.includes(saved)) return saved;
   if (preferred && levels.includes(preferred)) return preferred;
   if (levels.includes("high")) return "high";
-  return levels.at(-1) ?? "off";
+  // levels[0], not levels.at(-1): where a model has no "high" the last entry is
+  // its MAXIMUM effort, and opening every fresh session at maximum thinking is
+  // the most expensive possible default. The first entry is Off wherever Off is
+  // offered.
+  return levels[0] ?? "off";
 }
