@@ -38,6 +38,7 @@ import {
   handleGoalPut,
 } from "./automation-handlers";
 import { handleSubagentRun, handleSubagentsList } from "./subagent-handlers";
+import { handleConnectorSessionGet, handleConnectorSessionPut } from "./connector-session-handlers";
 import { handlePrGet, handlePrMerge } from "./pr-handlers";
 import {
   handlePtyClose,
@@ -83,12 +84,12 @@ export function createAgentRuntimeApp() {
   app.patch("/api/agent/automations/:id", (c) =>
     handleAutomationPatch(c.req.raw, c.req.param("id")),
   );
-  app.delete("/api/agent/automations/:id", (c) =>
-    handleAutomationDelete(c.req.param("id")),
-  );
+  app.delete("/api/agent/automations/:id", (c) => handleAutomationDelete(c.req.param("id")));
   app.post("/api/agent/automations/:id/run", (c) => handleAutomationRun(c.req.param("id")));
   app.get("/api/agent/pr", (c) => handlePrGet(c.req.raw));
   app.post("/api/agent/pr/merge", (c) => handlePrMerge(c.req.raw));
+  app.get("/api/agent/connectors/session", (c) => handleConnectorSessionGet(c.req.raw));
+  app.post("/api/agent/connectors/session", (c) => handleConnectorSessionPut(c.req.raw));
   app.get("/api/agent/subagents", (c) => handleSubagentsList(c.req.raw));
   app.post("/api/agent/subagents", (c) => handleSubagentRun(c.req.raw));
   app.get("/api/agent/goal", (c) => handleGoalGet(c.req.raw));
