@@ -68,9 +68,18 @@ Verify after every rebuild:
 - last-used model is restored on launch, and Thinking is remembered per model
 - Skills stay lazy; MCP connectors stay session-scoped and start empty
 - Status shows the real resident model and live RTX 3090 metrics
-- Usage loads and increments
+- Usage opens on Tokens/Today/All models, leads with **Processed tokens**, and
+  increments after one request
+- Usage Energy shows kWh with a coverage figure, and cost stays "Set rate" until
+  a tariff is entered
+- Usage Efficiency shows processed tokens per kWh, or says which half is missing
 - Automations still respond
 
 User data lives in `~/Library/Application Support/Local Studio` and is not touched
 by a rebuild: `api-settings.json`, `connectors.json`, sessions, `pi-agent/`,
 automations, last-used model and thinking preferences.
+
+Usage's currency, electricity rate and calendar timezone live in the renderer's
+`localStorage` under `local-studio.usage.energy`, mirrored to
+`userData/ui-preferences.json` like every other durable preference, and survive a
+rebuild the same way.
