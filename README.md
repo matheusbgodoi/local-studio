@@ -9,8 +9,15 @@ and server surfaces.
 
 ## Download
 
-**[Download Local Studio for macOS (Apple Silicon)](https://github.com/sybil-solutions/local-studio/releases/latest/download/Local-Studio-arm64.dmg)**
-— signed and notarized; updates itself from GitHub releases. All versions on the
+> **This repository is a customised fork.** The link below is the **upstream**
+> build from `sybil-solutions/local-studio`. Installing it over a build made from
+> this fork replaces the customisations with stock Local Studio — see
+> [`docs/upstream-updates.md`](docs/upstream-updates.md). This fork publishes no
+> binary of its own; you build it locally with `npm run desktop:dist`.
+
+**[Download upstream Local Studio for macOS (Apple Silicon)](https://github.com/sybil-solutions/local-studio/releases/latest/download/Local-Studio-arm64.dmg)**
+— upstream's build: signed, notarized, and self-updating from upstream releases.
+All upstream versions on the
 [releases page](https://github.com/sybil-solutions/local-studio/releases), or via
 [localstudio.ai](https://localstudio.ai).
 
@@ -252,6 +259,11 @@ and tags are never created by hand.
 
 Local Studio is built with and inspired by exceptional open-source work:
 
+- [DuckDuckGo](https://duckduckgo.com) — this fork's `browser_search` reads
+  DuckDuckGo's public no-JavaScript HTML frontends. They are web pages, not a
+  supported API; DuckDuckGo is not affiliated with this project and does not
+  endorse it.
+
 - [Pi](https://github.com/earendil-works/pi) — the agent runtime and native
   session model behind Workbench.
 - [T3 Code](https://github.com/pingdotgg/t3code) — inspiration for a focused,
@@ -273,7 +285,11 @@ code standards an agent (or contributor) must follow.
 
 ## License
 
-See [LICENSE](LICENSE).
+Apache License 2.0 — see [LICENSE](LICENSE), `Copyright 2025 0xSero`.
+
+This fork modifies that work; the modifications are listed in [NOTICE](NOTICE)
+as Apache-2.0 section 4(b) requires. The upstream licence and copyright are
+unchanged and travel with every copy.
 
 ## Owner fork notes
 
@@ -285,3 +301,8 @@ upstream and are documented separately:
   this fork followed by a local rebuild.
 - **[`docs/status-and-usage.md`](docs/status-and-usage.md)** — Status and Usage
   read the same remote controller that serves Chat, with no demo data anywhere.
+- **[`docs/web-search.md`](docs/web-search.md)** — `browser_search`, reader-first
+  research, and the human-verification path for sites that ask for a person.
+
+The rig this fork is built to drive, and the project it belongs to, is
+[`matheusbgodoi/local-ai-3090-stack`](https://github.com/matheusbgodoi/local-ai-3090-stack).
