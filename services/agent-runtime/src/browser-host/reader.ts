@@ -19,6 +19,13 @@ const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
 const ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
 
+export type FetchedDocument = {
+  url: string;
+  status: number;
+  contentType: string;
+  body: string;
+};
+
 export type ReaderResult = {
   url: string;
   title: string;
@@ -268,6 +275,24 @@ function renderReadable(response: BoundedResponse, fallbackUrl: string): ReaderR
     title: finalUrl,
     text: `Non-text response (${contentType || "unknown"}); not rendered.`,
     contentType,
+  };
+}
+
+// The same vetted transport, handing back the raw body instead of reading-mode
+// text: the search parser needs the markup, and a second fetch implementation
+// would be a second place for the SSRF, redirect, size and timeout guards to
+// drift out of agreement with this one. Non-2xx is returned rather than thrown,
+// because a provider answering 202 or 403 with a challenge page is information
+// the caller must inspect.
+export async function fetchPublicDocument(rawUrl: string): Promise<FetchedDocument> {
+  const safe = sanitizePublicBrowserUrl(rawUrl);
+  if (!safe) throw new Error("url rejected (must be public http/https)");
+  const response = await fetchBoundedUrl(safe);
+  return {
+    url: response.url || safe,
+    status: response.status,
+    contentType: response.contentType,
+    body: response.body,
   };
 }
 
