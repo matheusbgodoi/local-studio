@@ -7,6 +7,10 @@ catalogue, Status and Usage together.
 There is no demo data on either page, and no metric is estimated. A number the
 rig did not measure is shown as unavailable, never as 0.
 
+The screenshots below are the installed build against the live rig, captured from
+the app's own embedded server. Nothing was staged, warmed or re-run to improve a
+number — the energy history is short because that is when the sampler started.
+
 ## How the request reaches the rig
 
 ```
@@ -22,6 +26,8 @@ model loaded" and "Request failed". The host now serves them; see
 `local-ai-3090-stack/docs/32-dashboard-telemetry.md` for the backend side.
 
 ## Status
+
+![Status reading the live rig](assets/screenshots/status.png)
 
 Everything shown is read live:
 
@@ -52,20 +58,22 @@ page opens on the whole machine's workload for the current local day.
 
 ### Tokens
 
+![Usage — processed tokens](assets/screenshots/usage-tokens.png)
+
 The page used to lead with 45.31M "Proxied tokens" and label the prompt total
 "Fresh input". Neither number was fabricated and together they misled: on a long
 agentic session the conversation is resent every turn, so almost all of that
 total was context reused from the KV cache and **never recomputed**. Measured on
 this rig, 44.40M of 45.81M prompt tokens were cache reuse.
 
-| shown | means |
-|---|---|
-| **Processed tokens** | fresh prompt evaluation + generated. The primary number. |
-| Fresh input | prompt tokens the engine actually evaluated |
-| Generated | tokens produced |
-| Cached input | prompt tokens reused from the KV cache |
-| Logical tokens | logical prompt + generated — total context traffic, secondary |
-| Cache hit | cached input over logical prompt |
+| shown                | means                                                         |
+| -------------------- | ------------------------------------------------------------- |
+| **Processed tokens** | fresh prompt evaluation + generated. The primary number.      |
+| Fresh input          | prompt tokens the engine actually evaluated                   |
+| Generated            | tokens produced                                               |
+| Cached input         | prompt tokens reused from the KV cache                        |
+| Logical tokens       | logical prompt + generated — total context traffic, secondary |
+| Cache hit            | cached input over logical prompt                              |
 
 Performance is the engine's own measurement (llama.cpp `timings`), not request
 duration: HTTP wall time contains queueing, the network and the gateway, and
@@ -77,6 +85,8 @@ window, so "do I actually use the 146K context" is answerable: on this rig the
 peak is 142.6K of 149.5K — **95.4%**.
 
 ### Energy
+
+![Usage — GPU energy](assets/screenshots/usage-energy.png)
 
 **GPU board energy only.** Not the CPU, RAM, fans, power-supply losses or the
 wall — the page says so under the number. It comes from a sampler on the host
@@ -103,10 +113,12 @@ There is deliberately no default tariff. Until one is entered, every cost reads
   pair you configure together; no exchange-rate service is contacted.
 - Formatting is `Intl.NumberFormat`, and the currency list is
   `Intl.supportedValuesOf("currency")` with BRL, USD, EUR and GBP first.
-- Historical estimates use your *currently configured* rate. Tariff history is
+- Historical estimates use your _currently configured_ rate. Tariff history is
   not modelled.
 
 ### Efficiency
+
+![Usage — efficiency](assets/screenshots/usage-efficiency.png)
 
 **Processed tokens / kWh**, with kWh per 1M processed and cost per 1M beside it.
 It is computed only when both halves exist; otherwise the page says which one is
@@ -167,12 +179,12 @@ identity — and a permanent zero in a stat strip reads as "you used nothing".
 The controller is legitimately offline much of the time, so Usage names the
 condition instead of printing the transport error:
 
-| condition | what the page says |
-|---|---|
+| condition              | what the page says                          |
+| ---------------------- | ------------------------------------------- |
 | controller unreachable | **Controller offline** — not zeroed numbers |
-| 401 / 403 | **The controller rejected this key** |
-| 404 | **This controller does not report usage** |
-| anything else | the underlying message, verbatim |
+| 401 / 403              | **The controller rejected this key**        |
+| 404                    | **This controller does not report usage**   |
+| anything else          | the underlying message, verbatim            |
 
 A missing optional metric never blanks the page; only that metric is affected.
 

@@ -21,6 +21,88 @@ All upstream versions on the
 [releases page](https://github.com/sybil-solutions/local-studio/releases), or via
 [localstudio.ai](https://localstudio.ai).
 
+## What this fork adds
+
+This fork drives a private RTX 3090 rig over Tailscale — see
+[`matheusbgodoi/local-ai-3090-stack`](https://github.com/matheusbgodoi/local-ai-3090-stack).
+Everything below is live data from that machine, not a mockup.
+
+### Status reads the real rig
+
+![Status — qwen-daily resident on an RTX 3090](docs/assets/screenshots/status.png)
+
+The resident model, its context window and port come from the running process;
+VRAM, utilisation, temperature and power come from the driver. Nothing here is a
+UI constant, and a sensor the board does not report is shown as unavailable
+rather than as a real zero.
+
+### Usage — Tokens
+
+![Usage — processed tokens](docs/assets/screenshots/usage-tokens.png)
+
+Usage was rebuilt as three tabs over a shared period and model filter, and the
+headline number changed. It used to lead with the total prompt tokens proxied —
+a true reading that misled, because on a long agentic session the conversation is
+resent every turn and most of that total is prompt the GPU **re-read from cache
+and never recomputed**. Above: 44.40M of 46.14M was cache reuse; **1.73M was
+actually processed**.
+
+| Shown                | Means                                                       |
+| -------------------- | ----------------------------------------------------------- |
+| **Processed tokens** | fresh prompt evaluation + generated. The headline.          |
+| Fresh input          | prompt tokens the engine actually evaluated                 |
+| Cached input         | prompt tokens reused from the KV cache                      |
+| Logical tokens       | total context traffic, cache included — real, but secondary |
+
+Throughput comes from llama.cpp's own `timings`, never from HTTP duration, and
+context pressure is measured against the resident server's own window — above,
+a peak of **142.6K of 149.5K**.
+
+### Usage — Energy
+
+![Usage — GPU energy](docs/assets/screenshots/usage-energy.png)
+
+**GPU board energy**, sampled from NVML every 5 seconds on the host and
+integrated over measured time. Not the CPU, RAM, fans, power-supply losses or the
+wall — the page says so under the number.
+
+Absence of measurement is not zero watts: a gap is skipped rather than bridged,
+and every bucket reports the coverage behind it. Days before the sampler existed
+have no square at all. Currency, tariff and calendar timezone are yours; **no
+cost is ever stored**, so correcting the rate re-prices all of history at once.
+
+### Usage — Efficiency
+
+![Usage — efficiency](docs/assets/screenshots/usage-efficiency.png)
+
+Processed tokens per kWh, kWh per million, and cost per million at your rate.
+It is computed only when both halves exist, and says so when energy coverage for
+the period is thin rather than presenting a partly measured denominator as exact.
+
+### Web search, without a key
+
+`browser_search` returns ranked results from DuckDuckGo's no-JavaScript HTML
+frontend, with its Lite frontend as a single fallback — **no API key, no account,
+no container, no daemon**. It returns discovery only; the model picks one to three
+results and reads those. Reading is reader-first, falling back to the rendered
+browser only when a page genuinely needs JavaScript.
+
+When a site asks for a human, this fork **detects it and stops** — no retry loop,
+no user-agent shuffling, no proxy — and hands the page to you in a visible window
+on the same browser profile. Human verification is supported;
+**automated CAPTCHA bypass is not implemented**.
+
+### Lazy tools
+
+Skills load on demand and MCP connectors are armed per chat session rather than
+per installation, so a fresh session carries neither in its tool schemas. With
+the Browser toggle off, no `browser_*` schema reaches the model at all.
+
+Details: [`docs/status-and-usage.md`](docs/status-and-usage.md) and
+[`docs/web-search.md`](docs/web-search.md).
+
+---
+
 It is built from two modules that share one controller API:
 
 - [`controller/`](controller/README.md) — Bun/Hono backend. Owns model lifecycle
