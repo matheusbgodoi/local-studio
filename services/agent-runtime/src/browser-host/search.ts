@@ -94,6 +94,26 @@ export function clearSearchCache(): void {
   providerCooldown.clear();
 }
 
+// After the owner has verified the search provider by hand, the local cooldown
+// is the only thing still refusing — and refusing on behalf of a site that has
+// just said yes is exactly the "keeps telling you to verify" failure this
+// feature is meant to avoid.
+export function clearProviderCooldown(url: string): boolean {
+  let host: string;
+  try {
+    host = new URL(url).host.toLowerCase();
+  } catch {
+    return false;
+  }
+  let cleared = false;
+  for (const provider of Object.keys(ENDPOINTS) as SearchProvider[]) {
+    if (new URL(ENDPOINTS[provider]("x")).host.toLowerCase() !== host) continue;
+    providerCooldown.delete(provider);
+    cleared = true;
+  }
+  return cleared;
+}
+
 // ---------------------------------------------------------------- HTML PIECES
 // Result titles are ordinary prose, so they carry the punctuation entities prose
 // carries. Decoding only the XML five would leave "&middot;" sitting in a title

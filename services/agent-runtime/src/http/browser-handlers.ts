@@ -11,7 +11,7 @@ import {
   type ChallengeDetection,
 } from "../browser-host/challenge";
 import { fetchReadable } from "../browser-host/reader";
-import { webSearch } from "../browser-host/search";
+import { clearProviderCooldown, webSearch } from "../browser-host/search";
 
 const ALLOWED_VERBS = new Set([
   "navigate",
@@ -184,7 +184,10 @@ async function verifyVerb(payload: Record<string, unknown>): Promise<VerbResult>
   const url = raw ? sanitizeBrowserPaneUrl(raw) : "";
   if (raw && !url) return { ok: false, error: "valid public or localhost http(s) url required" };
   const state = await browserHost.openForVerification(url || undefined);
-  if (url) clearChallenge(url);
+  if (url) {
+    clearChallenge(url);
+    clearProviderCooldown(url);
+  }
   return {
     ok: true,
     data: {

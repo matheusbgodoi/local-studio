@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   clampMaxResults,
+  clearProviderCooldown,
   clearSearchCache,
   normalizeHits,
   parseDdgHtml,
@@ -264,5 +265,26 @@ describe("cache", () => {
     const before = seen.length;
     await webSearch("nothing here");
     expect(seen.length).toBeGreaterThan(before);
+  });
+});
+
+describe("verification clears the provider cooldown", () => {
+  test("a manually verified provider is tried again immediately", async () => {
+    const seen = stubProvider({
+      "html.duckduckgo.com": { status: 429, body: "" },
+      "lite.duckduckgo.com": { status: 429, body: "" },
+    });
+    await webSearch("first");
+    const blocked = seen.length;
+    await webSearch("second");
+    expect(seen.length).toBe(blocked);
+
+    clearProviderCooldown("https://html.duckduckgo.com/html/?q=anything");
+    await webSearch("third");
+    expect(seen.length).toBeGreaterThan(blocked);
+  });
+
+  test("an unrelated host clears nothing", () => {
+    expect(clearProviderCooldown("https://example.com/")).toBe(false);
   });
 });
