@@ -1,4 +1,12 @@
-import type { UsageStats } from "@/lib/types";
+import type {
+  UsageEfficiency,
+  UsageEnergy,
+  UsageFilters,
+  UsagePeriod,
+  UsageStats,
+  UsageTokens,
+} from "@/lib/types";
+import { USAGE_PERIODS } from "@local-studio/contracts/usage";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -107,6 +115,183 @@ function normalizeControllerUsage(value: unknown): UsageStats["controller"] {
   };
 }
 
+function coverageStatus(value: unknown): "complete" | "partial" | "no-data" {
+  return value === "complete" || value === "partial" ? value : "no-data";
+}
+
+function period(value: unknown): UsagePeriod {
+  return USAGE_PERIODS.includes(value as UsagePeriod) ? (value as UsagePeriod) : "all";
+}
+
+function strings(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+function nullableText(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function normalizeFilters(value: unknown): UsageFilters | undefined {
+  const filters = record(value);
+  if (Object.keys(filters).length === 0) return undefined;
+  const range = record(filters.range);
+  const heatmap = record(filters.heatmap_range);
+  const periods = strings(filters.supported_periods).filter((item): item is UsagePeriod =>
+    USAGE_PERIODS.includes(item as UsagePeriod),
+  );
+  return {
+    period: period(filters.period),
+    model: text(filters.model, "all"),
+    supported_periods: periods.length > 0 ? periods : [...USAGE_PERIODS],
+    supported_models: strings(filters.supported_models),
+    range: { first_day: nullableText(range.first_day), last_day: nullableText(range.last_day) },
+    heatmap_range: {
+      first_day: nullableText(heatmap.first_day),
+      last_day: nullableText(heatmap.last_day),
+    },
+    raw_retention_days: num(filters.raw_retention_days),
+    energy_sample_interval_s: nullableNum(filters.energy_sample_interval_s),
+  };
+}
+
+function normalizeTokens(value: unknown): UsageTokens | undefined {
+  const tokens = record(value);
+  if (Object.keys(tokens).length === 0) return undefined;
+  const totals = record(tokens.totals);
+  const performance = record(tokens.performance);
+  const context = record(tokens.context);
+  return {
+    totals: {
+      processed_tokens: num(totals.processed_tokens),
+      fresh_prompt_tokens: num(totals.fresh_prompt_tokens),
+      generated_tokens: num(totals.generated_tokens),
+      cached_input_tokens: num(totals.cached_input_tokens),
+      logical_prompt_tokens: num(totals.logical_prompt_tokens),
+      logical_tokens: num(totals.logical_tokens),
+      cache_hit_rate: num(totals.cache_hit_rate),
+      requests: num(totals.requests),
+      successful_requests: num(totals.successful_requests),
+      failed_requests: num(totals.failed_requests),
+      success_rate: num(totals.success_rate),
+      processed_per_request: nullableNum(totals.processed_per_request),
+    },
+    performance: {
+      decode_tps: nullableNum(performance.decode_tps),
+      prefill_tps: nullableNum(performance.prefill_tps),
+      decode_tps_p50: nullableNum(performance.decode_tps_p50),
+      decode_tps_p95: nullableNum(performance.decode_tps_p95),
+      prefill_tps_p50: nullableNum(performance.prefill_tps_p50),
+      prefill_tps_p95: nullableNum(performance.prefill_tps_p95),
+      avg_ttft_ms: nullableNum(performance.avg_ttft_ms),
+      p95_ttft_ms: nullableNum(performance.p95_ttft_ms),
+      avg_latency_ms: nullableNum(performance.avg_latency_ms),
+      p95_latency_ms: nullableNum(performance.p95_latency_ms),
+    },
+    context: {
+      avg_tokens: nullableNum(context.avg_tokens),
+      p95_tokens: nullableNum(context.p95_tokens),
+      peak_tokens: nullableNum(context.peak_tokens),
+      limit_tokens: nullableNum(context.limit_tokens),
+      peak_pct: nullableNum(context.peak_pct),
+    },
+    daily: array(tokens.daily).map((day) => ({
+      date: text(day.date, ""),
+      requests: num(day.requests),
+      processed_tokens: num(day.processed_tokens),
+      fresh_prompt_tokens: num(day.fresh_prompt_tokens),
+      generated_tokens: num(day.generated_tokens),
+      cached_input_tokens: num(day.cached_input_tokens),
+      logical_tokens: num(day.logical_tokens),
+    })),
+    by_model: array(tokens.by_model).map((model) => ({
+      model: text(model.model, "unknown"),
+      requests: num(model.requests),
+      successful: num(model.successful),
+      success_rate: num(model.success_rate),
+      processed_tokens: num(model.processed_tokens),
+      logical_tokens: num(model.logical_tokens),
+      fresh_prompt_tokens: num(model.fresh_prompt_tokens),
+      cached_input_tokens: num(model.cached_input_tokens),
+      generated_tokens: num(model.generated_tokens),
+      logical_prompt_tokens: num(model.logical_prompt_tokens),
+      decode_tps: nullableNum(model.decode_tps),
+      prefill_tps: nullableNum(model.prefill_tps),
+    })),
+  };
+}
+
+function normalizeEnergy(value: unknown): UsageEnergy | undefined {
+  const energy = record(value);
+  if (Object.keys(energy).length === 0) return undefined;
+  const totals = record(energy.totals);
+  return {
+    available: energy.available === true,
+    totals: {
+      energy_kwh: nullableNum(totals.energy_kwh),
+      measured_seconds: num(totals.measured_seconds),
+      expected_seconds: num(totals.expected_seconds),
+      coverage_pct: nullableNum(totals.coverage_pct),
+      avg_power_w: nullableNum(totals.avg_power_w),
+      peak_power_w: nullableNum(totals.peak_power_w),
+      samples: num(totals.samples),
+      avg_temp_c: nullableNum(totals.avg_temp_c),
+      peak_temp_c: nullableNum(totals.peak_temp_c),
+      avg_utilization_pct: nullableNum(totals.avg_utilization_pct),
+      status: coverageStatus(totals.status),
+    },
+    daily: array(energy.daily).map((day) => ({
+      date: text(day.date, ""),
+      energy_kwh: nullableNum(day.energy_kwh),
+      measured_seconds: num(day.measured_seconds),
+      expected_seconds: num(day.expected_seconds),
+      coverage_pct: nullableNum(day.coverage_pct),
+      avg_power_w: nullableNum(day.avg_power_w),
+      peak_power_w: nullableNum(day.peak_power_w),
+      status: coverageStatus(day.status),
+    })),
+    by_model: array(energy.by_model).map((model) => ({
+      model: nullableText(model.model),
+      energy_kwh: num(model.energy_kwh),
+      measured_seconds: num(model.measured_seconds),
+      avg_power_w: nullableNum(model.avg_power_w),
+      peak_power_w: nullableNum(model.peak_power_w),
+    })),
+  };
+}
+
+function normalizeEfficiency(value: unknown): UsageEfficiency | undefined {
+  const efficiency = record(value);
+  if (Object.keys(efficiency).length === 0) return undefined;
+  const totals = record(efficiency.totals);
+  return {
+    totals: {
+      processed_tokens: num(totals.processed_tokens),
+      energy_kwh: nullableNum(totals.energy_kwh),
+      tokens_per_kwh: nullableNum(totals.tokens_per_kwh),
+      kwh_per_million_processed: nullableNum(totals.kwh_per_million_processed),
+      coverage_pct: nullableNum(totals.coverage_pct),
+      partial: totals.partial === true,
+    },
+    daily: array(efficiency.daily).map((day) => ({
+      date: text(day.date, ""),
+      processed_tokens: num(day.processed_tokens),
+      energy_kwh: nullableNum(day.energy_kwh),
+      tokens_per_kwh: nullableNum(day.tokens_per_kwh),
+      kwh_per_million_processed: nullableNum(day.kwh_per_million_processed),
+      coverage_pct: nullableNum(day.coverage_pct),
+    })),
+    by_model: array(efficiency.by_model).map((model) => ({
+      model: text(model.model, "unknown"),
+      processed_tokens: num(model.processed_tokens),
+      energy_kwh: nullableNum(model.energy_kwh),
+      tokens_per_kwh: nullableNum(model.tokens_per_kwh),
+      kwh_per_million_processed: nullableNum(model.kwh_per_million_processed),
+    })),
+  };
+}
+
 export function normalizeUsageStats(input: UsageStats | null | undefined): UsageStats {
   const s = record(input);
   const totals = record(s.totals);
@@ -123,6 +308,12 @@ export function normalizeUsageStats(input: UsageStats | null | undefined): Usage
   return {
     collection_started_at:
       typeof s.collection_started_at === "string" ? s.collection_started_at : null,
+    energy_collection_started_at: nullableText(s.energy_collection_started_at),
+    timezone: typeof s.timezone === "string" ? s.timezone : undefined,
+    filters: normalizeFilters(s.filters),
+    tokens: normalizeTokens(s.tokens),
+    energy: normalizeEnergy(s.energy),
+    efficiency: normalizeEfficiency(s.efficiency),
     telemetry_enabled: s.telemetry_enabled !== false,
     totals: {
       total_tokens: num(totals.total_tokens),

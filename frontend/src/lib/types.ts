@@ -48,7 +48,22 @@ export type {
   SystemRuntimeInfo,
 } from "@local-studio/contracts/system";
 
-export type { ControllerUsageStats, UsageStats } from "@local-studio/contracts/usage";
+export type {
+  ControllerUsageStats,
+  UsageCoverageStatus,
+  UsageEfficiency,
+  UsageEfficiencyDay,
+  UsageEfficiencyModel,
+  UsageEnergy,
+  UsageEnergyDay,
+  UsageEnergyModel,
+  UsageFilters,
+  UsagePeriod,
+  UsageStats,
+  UsageTokenDay,
+  UsageTokenModel,
+  UsageTokens,
+} from "@local-studio/contracts/usage";
 
 export type {
   Rig,

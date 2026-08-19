@@ -52,11 +52,3 @@ export function classifyUsageFailure(message: string | null | undefined): UsageF
   }
   return { kind: "error", title: "Usage could not be loaded", detail: text };
 }
-
-/** Renders the ISO timestamp the backend reports, or null when it reports none. */
-export function formatCollectionStart(iso: string | null | undefined): string | null {
-  if (!iso) return null;
-  const at = new Date(iso);
-  if (Number.isNaN(at.getTime())) return null;
-  return at.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
-}

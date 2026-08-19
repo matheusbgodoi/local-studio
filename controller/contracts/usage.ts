@@ -189,4 +189,178 @@ export interface UsageStats {
     tokens: number;
   }>;
   controller?: ControllerUsageStats;
+  /**
+   * When GPU energy accounting began. Energy has no history before a sampler
+   * existed, so days before this are blank rather than zero.
+   */
+  energy_collection_started_at?: string | null;
+  /** IANA zone the backend bucketed calendar days in. */
+  timezone?: string;
+  filters?: UsageFilters;
+  /**
+   * Scoped by filters.period and filters.model. The flat blocks above stay
+   * lifetime and unfiltered so existing consumers are untouched.
+   */
+  tokens?: UsageTokens;
+  energy?: UsageEnergy;
+  efficiency?: UsageEfficiency;
+}
+
+export const USAGE_PERIODS = ["today", "7d", "30d", "365d", "all"] as const;
+
+export type UsagePeriod = (typeof USAGE_PERIODS)[number];
+
+export interface UsageFilters {
+  period: UsagePeriod;
+  model: string;
+  supported_periods: UsagePeriod[];
+  /** Union of aliases seen in telemetry and aliases the router serves today. */
+  supported_models: string[];
+  /** Local days the selection covers. first_day null means all history. */
+  range: { first_day: string | null; last_day: string | null };
+  /** Local days the daily series spans, independent of the selected period. */
+  heatmap_range: { first_day: string | null; last_day: string | null };
+  raw_retention_days: number;
+  energy_sample_interval_s: number | null;
+}
+
+export interface UsageTokens {
+  totals: {
+    /** Fresh prompt evaluation plus generation. Cached reuse excluded. */
+    processed_tokens: number;
+    fresh_prompt_tokens: number;
+    generated_tokens: number;
+    cached_input_tokens: number;
+    logical_prompt_tokens: number;
+    logical_tokens: number;
+    cache_hit_rate: number;
+    requests: number;
+    successful_requests: number;
+    failed_requests: number;
+    success_rate: number;
+    processed_per_request: number | null;
+  };
+  /** Null where the backend reported no timing, never zero. */
+  performance: {
+    decode_tps: number | null;
+    prefill_tps: number | null;
+    decode_tps_p50: number | null;
+    decode_tps_p95: number | null;
+    prefill_tps_p50: number | null;
+    prefill_tps_p95: number | null;
+    avg_ttft_ms: number | null;
+    p95_ttft_ms: number | null;
+    avg_latency_ms: number | null;
+    p95_latency_ms: number | null;
+  };
+  context: {
+    avg_tokens: number | null;
+    p95_tokens: number | null;
+    peak_tokens: number | null;
+    /** The resident server's own context window at the time of the request. */
+    limit_tokens: number | null;
+    peak_pct: number | null;
+  };
+  daily: UsageTokenDay[];
+  by_model: UsageTokenModel[];
+}
+
+export interface UsageTokenDay {
+  date: string;
+  requests: number;
+  processed_tokens: number;
+  fresh_prompt_tokens: number;
+  generated_tokens: number;
+  cached_input_tokens: number;
+  logical_tokens: number;
+}
+
+export interface UsageTokenModel {
+  model: string;
+  requests: number;
+  successful: number;
+  success_rate: number;
+  processed_tokens: number;
+  logical_tokens: number;
+  fresh_prompt_tokens: number;
+  cached_input_tokens: number;
+  generated_tokens: number;
+  logical_prompt_tokens: number;
+  decode_tps: number | null;
+  prefill_tps: number | null;
+}
+
+/** GPU board energy only. Never CPU, RAM, PSU loss or the wall. */
+export interface UsageEnergy {
+  available: boolean;
+  totals: {
+    energy_kwh: number | null;
+    measured_seconds: number;
+    expected_seconds: number;
+    /** Measured over expected. Null when no collector has ever run. */
+    coverage_pct: number | null;
+    avg_power_w: number | null;
+    peak_power_w: number | null;
+    samples: number;
+    avg_temp_c: number | null;
+    peak_temp_c: number | null;
+    avg_utilization_pct: number | null;
+    status: UsageCoverageStatus;
+  };
+  daily: UsageEnergyDay[];
+  by_model: UsageEnergyModel[];
+}
+
+export type UsageCoverageStatus = "complete" | "partial" | "no-data";
+
+export interface UsageEnergyDay {
+  date: string;
+  energy_kwh: number | null;
+  measured_seconds: number;
+  expected_seconds: number;
+  coverage_pct: number | null;
+  avg_power_w: number | null;
+  peak_power_w: number | null;
+  status: UsageCoverageStatus;
+}
+
+export interface UsageEnergyModel {
+  /** Null is measured energy no resident alias could be attributed to. */
+  model: string | null;
+  energy_kwh: number;
+  measured_seconds: number;
+  avg_power_w: number | null;
+  peak_power_w: number | null;
+}
+
+/** Cost is absent by design: the tariff is a client preference. */
+export interface UsageEfficiency {
+  totals: {
+    processed_tokens: number;
+    energy_kwh: number | null;
+    tokens_per_kwh: number | null;
+    kwh_per_million_processed: number | null;
+    coverage_pct: number | null;
+    /** True when the denominator is only a measured fraction of the period. */
+    partial: boolean;
+  };
+  daily: UsageEfficiencyDay[];
+  by_model: UsageEfficiencyModel[];
+}
+
+export interface UsageEfficiencyDay {
+  date: string;
+  processed_tokens: number;
+  energy_kwh: number | null;
+  tokens_per_kwh: number | null;
+  kwh_per_million_processed: number | null;
+  coverage_pct: number | null;
+}
+
+export interface UsageEfficiencyModel {
+  model: string;
+  processed_tokens: number;
+  energy_kwh: number | null;
+  tokens_per_kwh: number | null;
+  kwh_per_million_processed: number | null;
 }

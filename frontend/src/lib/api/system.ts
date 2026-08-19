@@ -153,7 +153,10 @@ export function createSystemApi(core: ApiCore) {
       error?: string;
     }> => core.request("/peak-metrics", { retries: 0 }),
 
-    getUsageStats: (): Promise<UsageStats> => core.request("/usage", { retries: 0 }),
+    getUsageStats: (query?: Record<string, string>): Promise<UsageStats> => {
+      const search = new URLSearchParams(query ?? {}).toString();
+      return core.request(search ? `/usage?${search}` : "/usage", { retries: 0 });
+    },
 
     getStatus: async (
       options?: RequestOptions,
