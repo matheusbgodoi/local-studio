@@ -293,8 +293,14 @@ unchanged and travel with every copy.
 
 ## Owner fork notes
 
-This repository is a customised fork. Two things behave differently from
-upstream and are documented separately:
+This repository is a customised fork of
+[`sybil-solutions/local-studio`](https://github.com/sybil-solutions/local-studio),
+cut from upstream **2.1.0**. Current owner build:
+**[`v2.1.0-local.1`](https://github.com/matheusbgodoi/local-studio/releases/tag/v2.1.0-local.1)**
+— source only, built locally, ad-hoc signed. Every modification is listed in
+[`NOTICE`](NOTICE) as Apache-2.0 requires.
+
+Three things behave differently from upstream and are documented separately:
 
 - **[`docs/upstream-updates.md`](docs/upstream-updates.md)** — the app never
   replaces itself with an upstream artefact. Upgrading is a deliberate merge into

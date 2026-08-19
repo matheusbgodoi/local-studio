@@ -32,6 +32,45 @@ if even the notification is unwanted.
 
 **Never** install the upstream DMG over `/Applications/Local Studio.app`.
 
+## Where this fork sits today
+
+|                |                                                                                                             |
+| -------------- | ----------------------------------------------------------------------------------------------------------- |
+| Fork base      | upstream **2.1.0** (merge-base `eeeb3406`)                                                                  |
+| Fork build     | **`v2.1.0-local.1`** — [release](https://github.com/matheusbgodoi/local-studio/releases/tag/v2.1.0-local.1) |
+| Upstream today | **v2.9.9**                                                                                                  |
+
+The fork is deliberately behind. Upstream has released eight minor versions on top
+of the base this fork was cut from, and none of them has been merged, because a
+sync is a decision with a cost — every one of the five divergences in
+[`NOTICE`](../NOTICE) has to be re-reconciled by hand afterwards. Being behind is
+a choice; not knowing by how much would be the problem.
+
+Check the real numbers before planning a sync:
+
+```bash
+git fetch origin fork
+git rev-list --left-right --count origin/main...main   # upstream-only <TAB> ours-only
+git log --oneline origin/main ^main                    # what we would be taking
+```
+
+## Versioning an owner build
+
+Upstream owns `x.y.z`, so the fork must never claim one. An owner build is a
+SemVer **pre-release** naming the base it derives from:
+
+```
+<upstream base>-local.<n>        e.g. v2.1.0-local.1
+```
+
+`2.1.0-local.1` sorts _below_ upstream `2.1.0`, which is the correct signal: it is
+a derivative of that base, not a successor to it. `n` increments for each owner
+build cut from the same base; adopting a newer upstream base restarts it at `.1`.
+
+Tag owner `main` only, never a feature branch. The full policy — including why no
+binary is attached to a fork release — lives in the parent project's
+[`RELEASING.md`](https://github.com/matheusbgodoi/local-ai-3090-stack/blob/main/RELEASING.md).
+
 ## The upgrade path
 
 ```bash
@@ -52,11 +91,19 @@ npm --prefix frontend run build
 # merge to owner main through the fork's normal workflow, then:
 git push fork main                # no --force, ever
 
-npm --prefix frontend run desktop:dist
+npm --prefix frontend run desktop:dist -- --config.mac.identity=null
 # install the freshly built artefact over /Applications/Local Studio.app
+
+git tag -a v<new base>-local.1 -m "..."   # on owner main, after it is final
+git push fork v<new base>-local.1
 ```
 
 Keep a rollback copy of the previous `.app` before replacing it.
+
+The build is **ad-hoc signed** — this fork has no Developer ID certificate and no
+notarisation. Gatekeeper will warn on first launch. That is expected for a build
+you made yourself, and it is why a fork release ships source rather than a DMG
+that would look official and is not.
 
 ## What must survive an upgrade
 
