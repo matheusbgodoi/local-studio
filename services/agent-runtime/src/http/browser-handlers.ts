@@ -2,7 +2,16 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { sanitizeBrowserPaneUrl } from "../../../../shared/agent/sanitize-embedded-browser-url";
 import { browserHost, type KeyInput, type MouseInput } from "../browser-host/browser-host";
+import {
+  challengeNotice,
+  clearChallenge,
+  detectChallenge,
+  pendingChallenge,
+  rememberChallenge,
+  type ChallengeDetection,
+} from "../browser-host/challenge";
 import { fetchReadable } from "../browser-host/reader";
+import { webSearch } from "../browser-host/search";
 
 const ALLOWED_VERBS = new Set([
   "navigate",
@@ -16,6 +25,8 @@ const ALLOWED_VERBS = new Set([
   "back",
   "forward",
   "reload",
+  "search",
+  "verify",
 ]);
 
 const UNAVAILABLE_ERROR = "Browser unavailable: no Chromium found — set LOCAL_STUDIO_CHROME_PATH";
@@ -55,6 +66,9 @@ async function readPayload(request: Request): Promise<Record<string, unknown>> {
 }
 
 async function dispatchVerb(verb: string, payload: Record<string, unknown>): Promise<VerbResult> {
+  // Search never needs Chromium: it is an HTTP fetch through the reader's
+  // transport, so it keeps working on a machine with no browser at all.
+  if (verb === "search") return searchVerb(payload);
   if (!browserHost.isAvailable()) return fallbackVerb(verb, payload);
   try {
     return await runHostVerb(verb, payload);
@@ -70,12 +84,16 @@ async function runHostVerb(verb: string, payload: Record<string, unknown>): Prom
   switch (verb) {
     case "navigate":
       return navigateVerb(payload);
+    case "search":
+      return searchVerb(payload);
+    case "verify":
+      return verifyVerb(payload);
     case "get-url":
       return { ok: true, data: await browserHost.getUrl() };
     case "get-text":
-      return { ok: true, data: { text: await browserHost.getText() } };
+      return readVerb("text");
     case "get-html":
-      return { ok: true, data: { html: await browserHost.getHtml() } };
+      return readVerb("html");
     case "screenshot":
       return { ok: true, data: { dataUri: await browserHost.screenshot() } };
     case "click":
@@ -108,8 +126,106 @@ async function navigateVerb(payload: Record<string, unknown>): Promise<VerbResul
   // pane's main job); other private ranges stay blocked.
   const url = sanitizeBrowserPaneUrl(String(payload.url ?? ""));
   if (!url) return { ok: false, error: "valid public or localhost http(s) url required" };
+  // A site that has already asked for a human is not asked again on a timer.
+  // Declining locally is the whole point: no refresh loop, no user-agent
+  // shuffling, no proxy - the page and its cookies are simply left as they are.
+  const outstanding = pendingChallenge(url);
+  if (outstanding) return challengeResult(outstanding);
   const result = await browserHost.navigate(url);
-  return { ok: true, data: result };
+  return afterRead({ ok: true, data: result });
+}
+
+// Every read of the live page is also a challenge check, which is what lets the
+// model resume by itself once the owner has verified: the next get-text simply
+// comes back with the page instead of the notice.
+async function readVerb(kind: "text" | "html"): Promise<VerbResult> {
+  const state = await browserHost.getState();
+  const body = kind === "text" ? await browserHost.getText() : await browserHost.getHtml();
+  const detection = detectChallenge({
+    url: state.url,
+    title: state.title,
+    ...(kind === "text" ? { text: body } : { html: body }),
+  });
+  if (detection) {
+    rememberChallenge(detection);
+    return challengeResult(detection);
+  }
+  clearChallenge(state.url);
+  return { ok: true, data: kind === "text" ? { text: body } : { html: body } };
+}
+
+async function afterRead(result: VerbResult): Promise<VerbResult> {
+  const url = (result.data as { url?: string } | undefined)?.url;
+  if (!url) return result;
+  const state = await browserHost.getState().catch(() => null);
+  if (!state) return result;
+  const detection = detectChallenge({ url: state.url, title: state.title });
+  if (!detection) return result;
+  rememberChallenge(detection);
+  return challengeResult(detection);
+}
+
+function challengeResult(detection: ChallengeDetection): VerbResult {
+  return {
+    ok: true,
+    data: {
+      verificationRequired: true,
+      provider: detection.provider,
+      site: detection.site,
+      url: detection.url,
+      reason: detection.reason,
+      notice: challengeNotice(detection),
+    },
+  };
+}
+
+async function verifyVerb(payload: Record<string, unknown>): Promise<VerbResult> {
+  const raw = String(payload.url ?? "").trim();
+  const url = raw ? sanitizeBrowserPaneUrl(raw) : "";
+  if (raw && !url) return { ok: false, error: "valid public or localhost http(s) url required" };
+  const state = await browserHost.openForVerification(url || undefined);
+  if (url) clearChallenge(url);
+  return {
+    ok: true,
+    data: {
+      ...state,
+      interactive: true,
+      notice:
+        "A visible browser window is open on the same Local Studio profile. Complete the verification or sign-in there, then read the page again. Nothing is solved automatically.",
+    },
+  };
+}
+
+async function searchVerb(payload: Record<string, unknown>): Promise<VerbResult> {
+  const query = String(payload.query ?? "").trim();
+  if (!query) return { ok: false, error: "query required" };
+  const outcome = await webSearch(query, payload.maxResults);
+  if (outcome.verificationRequired) {
+    return {
+      ok: true,
+      data: {
+        query: outcome.query,
+        results: [],
+        verificationRequired: true,
+        provider: outcome.verificationRequired.provider,
+        site: outcome.verificationRequired.site,
+        url: outcome.verificationRequired.url,
+        reason: outcome.verificationRequired.reason,
+        notice: challengeNotice(outcome.verificationRequired),
+      },
+    };
+  }
+  return {
+    ok: true,
+    data: {
+      query: outcome.query,
+      provider: outcome.provider,
+      count: outcome.results.length,
+      cached: outcome.cached,
+      results: outcome.results,
+      ...(outcome.note ? { note: outcome.note } : {}),
+    },
+  };
 }
 
 async function scrollVerb(payload: Record<string, unknown>): Promise<VerbResult> {

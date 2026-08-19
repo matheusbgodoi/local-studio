@@ -44,6 +44,30 @@ class BrowserHost {
     return hosted;
   }
 
+  // Hand the CURRENT profile to the owner in a visible window so they can pass a
+  // challenge or sign in themselves. The hosted pages are dropped first because
+  // switching modes closes the context they wrap; the cookies they earned live
+  // in the profile directory and survive the swap, which is the entire reason
+  // this is a relaunch rather than a second browser.
+  async openForVerification(url?: string): Promise<{ url: string; title: string; headful: boolean }> {
+    const target = url ?? (await this.peekState())?.url ?? "";
+    for (const page of this.pages.values()) page.close();
+    this.pages.clear();
+    this.activeId = null;
+    await playwrightManager.setInteractive(true);
+    if (!target) {
+      const page = await this.page();
+      const state = await page.readState();
+      return { url: state.url, title: state.title, headful: true };
+    }
+    const state = await this.navigate(target);
+    return { ...state, headful: true };
+  }
+
+  isInteractive(): boolean {
+    return playwrightManager.isHeadful();
+  }
+
   async navigate(url: string, pageId?: string): Promise<{ url: string; title: string }> {
     const page = await this.page(pageId);
     await page.navigate(normalizeUrl(url), NAVIGATION_TIMEOUT_MS);
