@@ -1,13 +1,29 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { chromium, type BrowserContext } from "playwright-core";
+import { resolveDataDir } from "../data-dir";
 import { getGlobalSingleton } from "../instances";
 
 const LAUNCH_TIMEOUT_MS = 15_000;
 
-const browserDataDirectory = (): string => path.join(os.tmpdir(), "local-studio-browser-profile");
+// The profile is where a site's cookies live after the owner has legitimately
+// signed in or passed a verification check, so it belongs beside the rest of
+// Local Studio's user data rather than in os.tmpdir(), which the OS is entitled
+// to sweep and which every other process on the machine can read. It stays a
+// DEDICATED profile: the owner's own Chrome profile is never opened or copied.
+const browserDataDirectory = (): string => {
+  const override = process.env.LOCAL_STUDIO_BROWSER_PROFILE_DIR?.trim();
+  if (override) return override;
+  try {
+    const directory = path.join(resolveDataDir(), "browser-profile");
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    return directory;
+  } catch {
+    return path.join(os.tmpdir(), "local-studio-browser-profile");
+  }
+};
 
 const resolveOnPath = (binary: string): string | null => {
   try {
@@ -72,9 +88,18 @@ export const findBrowserBinary = (): string | null => {
 class PlaywrightManager {
   private context: BrowserContext | null = null;
   private launching: Promise<BrowserContext> | null = null;
+  private headful = false;
 
   isAvailable(): boolean {
     return findBrowserBinary() !== null;
+  }
+
+  isHeadful(): boolean {
+    return this.headful;
+  }
+
+  profileDirectory(): string {
+    return browserDataDirectory();
   }
 
   async ensure(): Promise<BrowserContext> {
@@ -84,10 +109,11 @@ class PlaywrightManager {
     if (!executablePath) {
       throw new Error("Browser unavailable: no Chromium found — set LOCAL_STUDIO_CHROME_PATH");
     }
+    const headless = !this.headful;
     const launch = (userDataDir: string): Promise<BrowserContext> =>
       chromium.launchPersistentContext(userDataDir, {
         executablePath,
-        headless: true,
+        headless,
         viewport: { width: 1280, height: 800 },
         timeout: LAUNCH_TIMEOUT_MS,
         args: ["--no-first-run", "--no-default-browser-check", "--disable-dev-shm-usage"],
@@ -95,7 +121,13 @@ class PlaywrightManager {
     const dataDirectory = browserDataDirectory();
     this.launching = launch(dataDirectory)
       .catch((error: unknown) => {
+        // A second Chromium on the same userDataDir corrupts it, so Playwright
+        // refuses. Falling back to a per-pid profile keeps the browser usable
+        // but LOSES every cookie the owner verified with - hence the warning.
         if (!String(error).includes("ProcessSingleton")) throw error;
+        console.warn(
+          "[browser] profile already in use; starting an isolated copy — verified sessions will not carry over",
+        );
         return launch(`${dataDirectory}-${process.pid}`);
       })
       .then((context) => {
@@ -109,6 +141,24 @@ class PlaywrightManager {
         this.launching = null;
       });
     return this.launching;
+  }
+
+  // Reopen the SAME profile with a visible window so the owner can complete a
+  // challenge or a login by hand.
+  //
+  // Chromium cannot switch a live context between headless and headful, and two
+  // processes must never hold one userDataDir at once, so the only safe order is
+  // close-then-relaunch. Cookies and local storage survive because they live in
+  // the profile on disk, not in the process - which is exactly why the profile
+  // had to stop being a temp directory.
+  async setInteractive(headful: boolean): Promise<BrowserContext> {
+    if (this.headful === headful && this.context) return this.context;
+    if (this.launching) await this.launching.catch(() => undefined);
+    const previous = this.context;
+    this.context = null;
+    if (previous) await previous.close().catch(() => undefined);
+    this.headful = headful;
+    return this.ensure();
   }
 
   stop(): void {

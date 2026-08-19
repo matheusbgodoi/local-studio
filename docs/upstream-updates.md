@@ -73,11 +73,18 @@ Verify after every rebuild:
 - Usage Energy shows kWh with a coverage figure, and cost stays "Set rate" until
   a tariff is entered
 - Usage Efficiency shows processed tokens per kWh, or says which half is missing
+- the Browser toggle still gates everything: with it OFF no `browser_*` tool
+  (including `browser_search`) reaches the model; with it ON search returns
+  results and a page opens and reads
 - Automations still respond
 
 User data lives in `~/Library/Application Support/Local Studio` and is not touched
 by a rebuild: `api-settings.json`, `connectors.json`, sessions, `pi-agent/`,
 automations, last-used model and thinking preferences.
+
+The browser profile — where verification and login cookies live — is
+`<userData>/browser-profile` and is not touched by a rebuild. See
+[`web-search.md`](web-search.md).
 
 Usage's currency, electricity rate and calendar timezone live in the renderer's
 `localStorage` under `local-studio.usage.energy`, mirrored to

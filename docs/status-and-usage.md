@@ -176,6 +176,11 @@ condition instead of printing the transport error:
 
 A missing optional metric never blanks the page; only that metric is affected.
 
+## Related
+
+[`web-search.md`](web-search.md) covers `browser_search`, the reader-first
+research path and the human-verification workflow.
+
 ## Update policy
 
 This build is customised and does not accept upstream artefacts. See

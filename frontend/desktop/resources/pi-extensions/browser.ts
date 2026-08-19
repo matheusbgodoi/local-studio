@@ -80,6 +80,43 @@ async function safeBrowserAction(
 
 export default function registerBrowserExtension(pi: ExtensionAPI) {
   pi.registerTool({
+    name: "browser_search",
+    label: "Browser: Web Search",
+    description:
+      "Search the public web and return ranked results (title, url, domain, snippet). Discovery only - it does not open or read the pages. Pick the strongest one to three results and read them with browser_navigate + browser_get_text.",
+    parameters: Type.Object({
+      query: Type.String({ description: "Search query. Precise phrasing beats a long sentence." }),
+      maxResults: Type.Optional(
+        Type.Number({ description: "How many results to return (default 8, maximum 15)" }),
+      ),
+    }),
+    async execute(_id, params, signal) {
+      return safeBrowserAction(
+        "search",
+        params.maxResults === undefined
+          ? { query: params.query }
+          : { query: params.query, maxResults: params.maxResults },
+        signal,
+      );
+    },
+  });
+
+  pi.registerTool({
+    name: "browser_verify",
+    label: "Browser: Human Verification",
+    description:
+      "Open a visible browser window on the same session so the user can complete a CAPTCHA, security check or sign-in by hand. Call this only after a tool reported verificationRequired. Nothing is solved automatically; after the user finishes, read the page again.",
+    parameters: Type.Object({
+      url: Type.Optional(
+        Type.String({ description: "Page needing verification; defaults to the current page" }),
+      ),
+    }),
+    async execute(_id, params, signal) {
+      return safeBrowserAction("verify", params.url ? { url: params.url } : {}, signal);
+    },
+  });
+
+  pi.registerTool({
     name: "browser_navigate",
     label: "Browser: Navigate",
     description:
