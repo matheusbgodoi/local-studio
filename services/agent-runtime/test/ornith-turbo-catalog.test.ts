@@ -66,6 +66,18 @@ describe("ornith-turbo reasoning is native, not an effort ladder", () => {
     expect(isNativeAlwaysOnThinkingModelId("gemma-write")).toBe(false);
   });
 
+  test("qwen-uncensored is qwen-daily, so it declares the SAME contract", () => {
+    // One GGUF, one llama-server, one chat template. If these two ever diverge,
+    // one of them is describing a model that does not exist.
+    expect(declaredModelReasoning("qwen-uncensored")).toEqual(
+      declaredModelReasoning("qwen-daily"),
+    );
+    expect(isNativeAlwaysOnThinkingModelId("qwen-uncensored")).toBe(false);
+    expect(controllerModelThinkingLevels(true, "qwen-uncensored")).toEqual(
+      controllerModelThinkingLevels(true, "qwen-daily"),
+    );
+  });
+
   test("one fixed level, so the picker cannot offer a ladder the template ignores", () => {
     // The gateway reports reasoning:false for this alias - truthfully, about the
     // request contract. That must not collapse to "Off".
@@ -103,6 +115,11 @@ describe("the catalogue the gateway advertises", () => {
         },
       },
       {
+        // The gateway clones this row from qwen-daily's, because it IS qwen-daily.
+        id: "qwen-uncensored",
+        metadata: { contextWindow: 149504, maxTokens: 32768, reasoning: true, vision: true },
+      },
+      {
         id: "gemma-write",
         metadata: { contextWindow: 131072, maxTokens: 32768, reasoning: false, vision: false },
       },
@@ -114,6 +131,9 @@ describe("the catalogue the gateway advertises", () => {
     expect(byId["ornith-turbo"].contextWindow).toBe(196608);
     expect(byId["qwen-daily"].contextWindow).toBe(149504);
     expect(byId["gemma-write"].contextWindow).toBe(131072);
+    // Same server, same window. A client that shows two different numbers for one
+    // model is lying about one of them.
+    expect(byId["qwen-uncensored"].contextWindow).toBe(byId["qwen-daily"].contextWindow);
   });
 
   test("vision is on for both llama.cpp roles and off for the vLLM one", () => {
@@ -121,5 +141,6 @@ describe("the catalogue the gateway advertises", () => {
     expect(byId["ornith-turbo"].vision).toBe(true);
     expect(byId["qwen-daily"].vision).toBe(true);
     expect(byId["gemma-write"].vision).toBe(false);
+    expect(byId["qwen-uncensored"].vision).toBe(true);
   });
 });
