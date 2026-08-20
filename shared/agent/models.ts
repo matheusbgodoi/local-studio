@@ -62,8 +62,14 @@ export function inferReasoningSupport(modelId: string): boolean {
 export type DeclaredModelReasoning = {
   reasoning: boolean;
   /** Wire contract the checkpoint's chat template speaks, when it is not the
-   *  plain OpenAI `reasoning_effort` default. Consumed by the agent runtime. */
-  thinkingContract?: "chat-template-effort";
+   *  plain OpenAI `reasoning_effort` default. Consumed by the agent runtime.
+   *
+   *  `chat-template-effort` — the template validates a reasoning_effort string,
+   *  so the picker offers a real ladder.
+   *  `native-always-on` — the template opens `<think>` in the generation prompt
+   *  itself. The model reasons on every turn and there is no level to choose, so
+   *  the picker shows one fixed state instead of a ladder it cannot honour. */
+  thinkingContract?: "chat-template-effort" | "native-always-on";
 };
 
 /**
@@ -81,11 +87,23 @@ const DECLARED_MODEL_REASONING: Readonly<Record<string, DeclaredModelReasoning>>
   // Qwen3.8-27B behind llama-swap. Its chat template takes
   // chat_template_kwargs { enable_thinking, reasoning_effort: low|medium|xhigh }.
   "qwen-daily": { reasoning: true, thinkingContract: "chat-template-effort" },
+  // Ornith-1.5-35B-A3B behind llama-swap. Its template carries no
+  // reasoning_effort string at all, so the gateway advertises reasoning:false —
+  // truthfully, about the request contract. It still thinks on every turn: the
+  // template emits `<think>` as part of the generation prompt and the server
+  // returns the trace as reasoning_content. Declaring it here is what stops the
+  // picker showing "Off" for a model that cannot be turned off.
+  "ornith-turbo": { reasoning: true, thinkingContract: "native-always-on" },
 };
 
 /** Declared capabilities for `modelId`, or undefined when nothing is declared. */
 export function declaredModelReasoning(modelId: string): DeclaredModelReasoning | undefined {
   return DECLARED_MODEL_REASONING[modelId.trim().toLowerCase()];
+}
+
+/** True when the alias reasons on every turn with no selectable level. */
+export function isNativeAlwaysOnThinkingModelId(modelId: string): boolean {
+  return declaredModelReasoning(modelId)?.thinkingContract === "native-always-on";
 }
 
 export function inferVisionSupport(modelId: string): boolean {

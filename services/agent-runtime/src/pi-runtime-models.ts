@@ -10,6 +10,7 @@ import {
   normalizeOpenAIModels,
   inferReasoningSupport,
   declaredModelReasoning,
+  isNativeAlwaysOnThinkingModelId,
   type AgentModel,
 } from "../../../shared/agent/models";
 import { AGENT_THINKING_LEVELS, type AgentThinkingLevel } from "../../../shared/agent/agent-turn";
@@ -145,6 +146,9 @@ function isChatTemplateThinkingModelId(modelId: string): boolean {
   return declaredModelReasoning(modelId)?.thinkingContract === "chat-template-effort";
 }
 
+/** One entry, so the picker renders a FIXED state instead of a ladder. */
+const NATIVE_ALWAYS_ON_THINKING_LEVELS: readonly AgentThinkingLevel[] = ["high"];
+
 /** Off / Low / Medium / XHigh — the only efforts the chat template accepts.
  *  Minimal, High and Max are deliberately absent, and XHigh is never Max. */
 const CHAT_TEMPLATE_THINKING_LEVELS: readonly AgentThinkingLevel[] = [
@@ -160,6 +164,12 @@ export function controllerModelThinkingLevels(
 ): AgentThinkingLevel[] {
   if (reasoning && isChatTemplateThinkingModelId(modelId)) {
     return [...CHAT_TEMPLATE_THINKING_LEVELS];
+  }
+  // Deliberately NOT gated on `reasoning`: the gateway reports reasoning:false
+  // for this alias because it accepts no effort contract, which is a different
+  // statement from "does not think".
+  if (isNativeAlwaysOnThinkingModelId(modelId)) {
+    return [...NATIVE_ALWAYS_ON_THINKING_LEVELS];
   }
   if (reasoning && isInklingModelId(modelId)) {
     return ["off", "minimal", "low", "medium", "high", "max"];
