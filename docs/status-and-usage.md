@@ -75,10 +75,34 @@ this rig, 44.40M of 45.81M prompt tokens were cache reuse.
 | Logical tokens       | logical prompt + generated — total context traffic, secondary |
 | Cache hit            | cached input over logical prompt                              |
 
-Performance is the engine's own measurement (llama.cpp `timings`), not request
-duration: HTTP wall time contains queueing, the network and the gateway, and
-calling that "decode speed" would understate the engine. Where the backend
-reported no timing the row reads `—`, never `0`.
+**Observed performance** — renamed from "Performance" on 2026-08-20 — is the
+engine's own measurement (llama.cpp `timings`), not request duration: HTTP wall
+time contains queueing, the network and the gateway, and calling that "decode
+speed" would understate the engine. Where the backend reported no timing the row
+reads `—`, never `0`. The card now says where the numbers come from, because the
+old title let a workload measurement read as a synthetic GPU benchmark.
+
+**Speculative decoding** sits beside it. `draft_n` and `draft_n_accepted` come
+from the same `timings` block, and llama.cpp attaches them only when a drafter
+actually ran. Acceptance is `SUM(accepted) / SUM(drafted)` over the selection,
+never the mean of per-request percentages — a request that drafted 2 and kept 2,
+next to one that drafted 200 and kept 100, is 50.5%, not 75%.
+
+Two counts are shown rather than one, because a percentage over the wrong
+denominator is the same lie in a different place: **MTP requests** counts the
+requests that actually drafted, not every request in the period. When nothing was
+measured the card says so **in words**. It never renders `0%`, which would claim
+speculation ran and accepted nothing — a real and much worse state than "this
+model has no drafter". `ornith-turbo` runs without speculation and reads that way.
+
+**Decode by context** is the table underneath, and it exists to stop one aggregate
+Decode figure being read as a benchmark. Every timed request is bucketed by the
+same context definition the Context card uses — `<16K`, `16–64K`, `64–128K`,
+`128–192K`, `192K+` — and each bucket is weighted by tokens over the engine's own
+clock. On this rig it immediately shows what the average hides: **56.2 tok/s** at
+16–64K, **43.6** at 64–128K, **39.1** at 128–192K, against a single overall figure
+of 46.7. Only buckets with data appear; an empty bucket is one nothing was measured
+in, and inventing a row for it would suggest otherwise.
 
 Context shows average, P95 and peak against the resident server's own configured
 window, so "do I actually use the 146K context" is answerable: on this rig the
