@@ -50,6 +50,7 @@ export type {
 
 export type {
   ControllerUsageStats,
+  UsageContextBucket,
   UsageCoverageStatus,
   UsageEfficiency,
   UsageEfficiencyDay,
@@ -59,6 +60,7 @@ export type {
   UsageEnergyModel,
   UsageFilters,
   UsagePeriod,
+  UsageSpeculative,
   UsageStats,
   UsageTokenDay,
   UsageTokenModel,

@@ -38,7 +38,7 @@ import {
 import type { ChatPaneHandle } from "@/features/agent/ui/chat-pane";
 import type { SessionDropPayload } from "@/features/agent/ui/pane-grid";
 import {
-  readDefaultAgentModel,
+  readAndMigrateDefaultAgentModel,
   writeDefaultAgentModel,
 } from "@/features/agent/workspace/model-preference";
 import { readModelThinkingLevel } from "@/features/agent/workspace/thinking-level-preference";
@@ -220,7 +220,7 @@ export function useWorkspace({ ephemeral = false }: UseWorkspaceOptions = {}): U
           dispatch({
             type: "setModels",
             models: models.models ?? [],
-            preferredModelId: readDefaultAgentModel(window.localStorage),
+            preferredModelId: readAndMigrateDefaultAgentModel(window.localStorage),
           });
         })
         .catch((error) => {

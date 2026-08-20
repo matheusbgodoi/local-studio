@@ -39,6 +39,8 @@ export function UsageTokensTab({
   const totals = tokens.totals;
   const performance = tokens.performance;
   const context = tokens.context;
+  const speculative = performance.speculative;
+  const byContext = performance.by_context;
 
   const cells: ActivityCell[] = tokens.daily.map((day) => ({
     date: day.date,
@@ -90,8 +92,8 @@ export function UsageTokensTab({
 
       <PanelGrid>
         <PanelCard
-          title="Performance"
-          description="Measured by the engine, not by request duration."
+          title="Observed performance"
+          description="Measured from real engine requests; workload and context affect throughput."
         >
           <MetricRows
             metrics={[
@@ -103,6 +105,34 @@ export function UsageTokensTab({
               { label: "P95 latency", value: milliseconds(performance.p95_latency_ms) },
             ]}
           />
+        </PanelCard>
+
+        <PanelCard
+          title="Speculative decoding"
+          description={
+            speculative.available
+              ? "Accepted over drafted across the period, not an average of per-request rates."
+              : "Reported only while a model with a drafter is serving."
+          }
+        >
+          {speculative.available ? (
+            <MetricRows
+              metrics={[
+                { label: "MTP acceptance", value: percent(speculative.acceptance_rate, 1) },
+                { label: "Accepted", value: compactTokens(speculative.accepted_tokens) },
+                { label: "Drafted", value: compactTokens(speculative.drafted_tokens) },
+                {
+                  label: "MTP requests",
+                  value: exactNumber(speculative.speculative_requests),
+                },
+              ]}
+            />
+          ) : (
+            <EmptyNote>
+              Disabled for this selection. No speculative decoding was measured, which is not the
+              same as an acceptance rate of 0%.
+            </EmptyNote>
+          )}
         </PanelCard>
 
         <PanelCard
@@ -133,6 +163,26 @@ export function UsageTokensTab({
           />
         </PanelCard>
       </PanelGrid>
+
+      <PanelBlock title="Decode by context">
+        {byContext.length === 0 ? (
+          <EmptyNote>No timed requests yet.</EmptyNote>
+        ) : (
+          <BreakdownTable
+            columns={["Context", "Decode", "Generated", "Requests"]}
+            emptyLabel="No timed requests in this period."
+            rows={byContext.map((bucket) => ({
+              key: bucket.bucket,
+              cells: [
+                bucket.label,
+                tokensPerSecond(bucket.decode_tps),
+                compactTokens(bucket.generated_tokens),
+                exactNumber(bucket.requests),
+              ],
+            }))}
+          />
+        )}
+      </PanelBlock>
 
       <PanelBlock title="Daily processed tokens">
         {cells.length === 0 ? (

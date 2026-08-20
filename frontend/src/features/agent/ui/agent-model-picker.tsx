@@ -15,6 +15,7 @@ import type { AgentModel } from "@/features/agent/workspace/types";
 import { POPOVER_MENU_CLASS } from "@/ui/popover";
 import { cx } from "@/ui/utils";
 import { splitVisibleAgentModels } from "./model-visibility";
+import { isNativeAlwaysOnThinkingModelId } from "@shared/agent/models";
 
 type AgentModelPickerProps = {
   models: AgentModel[];
@@ -41,6 +42,17 @@ const REASONING_LABELS: Record<AgentThinkingLevel, string> = {
   xhigh: "XHigh",
   max: "Max",
 };
+
+/** A model whose template opens the reasoning block itself has exactly one state,
+ *  and it is not a rung on a ladder. Naming it "High" would invite the user to
+ *  look for the level below it. */
+function reasoningTriggerLabel(
+  active: AgentModel | null,
+  effectiveReasoning: AgentThinkingLevel,
+): string {
+  const id = active?.rawId ?? active?.id ?? "";
+  return isNativeAlwaysOnThinkingModelId(id) ? "Native" : REASONING_LABELS[effectiveReasoning];
+}
 
 export function AgentModelPicker({
   models,
@@ -77,7 +89,7 @@ export function AgentModelPicker({
   const effectiveReasoning = reasoningLevels.includes(reasoningLevel ?? "off")
     ? (reasoningLevel ?? "off")
     : (reasoningLevels.at(-1) ?? "off");
-  const reasoningLabel = REASONING_LABELS[effectiveReasoning];
+  const reasoningLabel = reasoningTriggerLabel(active, effectiveReasoning);
   const triggerLabel = supportsReasoning ? `${modelLabel} ${reasoningLabel}` : modelLabel;
   const selectedModelNotRunning = !loading && Boolean(active && active.active === false);
   const close = useCallback(() => {
