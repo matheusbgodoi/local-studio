@@ -94,6 +94,14 @@ const DECLARED_MODEL_REASONING: Readonly<Record<string, DeclaredModelReasoning>>
   // returns the trace as reasoning_content. Declaring it here is what stops the
   // picker showing "Off" for a model that cannot be turned off.
   "ornith-turbo": { reasoning: true, thinkingContract: "native-always-on" },
+  // `qwen-uncensored` is NOT a fourth model. It is `qwen-daily` served with a
+  // rank-1 refusal adapter at lambda 1 — the same GGUF in the same llama-server
+  // process — so it speaks the identical chat template and therefore the
+  // identical thinking contract. It is declared here rather than inferred for
+  // the same reason `qwen-daily` is: the alias hides the checkpoint, and no
+  // heuristic over the string "qwen-uncensored" can find the Qwen3 underneath.
+  // See local-ai-3090-stack docs/adr/ADR-008.
+  "qwen-uncensored": { reasoning: true, thinkingContract: "chat-template-effort" },
 };
 
 /** Declared capabilities for `modelId`, or undefined when nothing is declared. */
