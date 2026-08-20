@@ -1,8 +1,10 @@
 import type {
+  UsageContextBucket,
   UsageEfficiency,
   UsageEnergy,
   UsageFilters,
   UsagePeriod,
+  UsageSpeculative,
   UsageStats,
   UsageTokens,
 } from "@/lib/types";
@@ -156,6 +158,34 @@ function normalizeFilters(value: unknown): UsageFilters | undefined {
   };
 }
 
+function normalizeSpeculative(value: unknown): UsageSpeculative {
+  const spec = record(value);
+  const drafted = nullableNum(spec.drafted_tokens);
+  const accepted = nullableNum(spec.accepted_tokens);
+  return {
+    available: spec.available === true && drafted !== null,
+    drafted_tokens: drafted,
+    accepted_tokens: accepted,
+    acceptance_rate: nullableNum(spec.acceptance_rate),
+    speculative_requests: nullableNum(spec.speculative_requests),
+    measured_requests: nullableNum(spec.measured_requests),
+  };
+}
+
+function normalizeContextBuckets(value: unknown): UsageContextBucket[] {
+  return array(value)
+    .map((bucket) => ({
+      bucket: text(bucket.bucket, ""),
+      label: text(bucket.label, ""),
+      lower_tokens: num(bucket.lower_tokens),
+      upper_tokens: nullableNum(bucket.upper_tokens),
+      requests: num(bucket.requests),
+      generated_tokens: num(bucket.generated_tokens),
+      decode_tps: nullableNum(bucket.decode_tps),
+    }))
+    .filter((bucket) => bucket.bucket !== "" && bucket.requests > 0);
+}
+
 function normalizeTokens(value: unknown): UsageTokens | undefined {
   const tokens = record(value);
   if (Object.keys(tokens).length === 0) return undefined;
@@ -188,6 +218,8 @@ function normalizeTokens(value: unknown): UsageTokens | undefined {
       p95_ttft_ms: nullableNum(performance.p95_ttft_ms),
       avg_latency_ms: nullableNum(performance.avg_latency_ms),
       p95_latency_ms: nullableNum(performance.p95_latency_ms),
+      speculative: normalizeSpeculative(performance.speculative),
+      by_context: normalizeContextBuckets(performance.by_context),
     },
     context: {
       avg_tokens: nullableNum(context.avg_tokens),

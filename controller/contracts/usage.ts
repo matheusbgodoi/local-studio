@@ -252,6 +252,8 @@ export interface UsageTokens {
     p95_ttft_ms: number | null;
     avg_latency_ms: number | null;
     p95_latency_ms: number | null;
+    speculative: UsageSpeculative;
+    by_context: UsageContextBucket[];
   };
   context: {
     avg_tokens: number | null;
@@ -263,6 +265,38 @@ export interface UsageTokens {
   };
   daily: UsageTokenDay[];
   by_model: UsageTokenModel[];
+}
+
+/**
+ * Speculative decoding over the selected period, computed by the host.
+ *
+ * `acceptance_rate` is `accepted_tokens / drafted_tokens` for the whole period,
+ * never a mean of per-request rates. It is null — never 0 — when nothing was
+ * drafted: a model with no drafter and a drafter whose every token was rejected
+ * are different facts and must not render the same way.
+ */
+export interface UsageSpeculative {
+  /** False when the engine never reported speculative timings in this period. */
+  available: boolean;
+  drafted_tokens: number | null;
+  accepted_tokens: number | null;
+  acceptance_rate: number | null;
+  /** Requests that actually drafted at least one token. */
+  speculative_requests: number | null;
+  /** Requests the engine reported speculative timings for at all. */
+  measured_requests: number | null;
+}
+
+/** One context-depth bucket of observed decode throughput. Empty buckets are absent. */
+export interface UsageContextBucket {
+  bucket: string;
+  label: string;
+  lower_tokens: number;
+  upper_tokens: number | null;
+  requests: number;
+  generated_tokens: number;
+  /** SUM(generated) / SUM(engine decode seconds) inside the bucket. */
+  decode_tps: number | null;
 }
 
 export interface UsageTokenDay {
