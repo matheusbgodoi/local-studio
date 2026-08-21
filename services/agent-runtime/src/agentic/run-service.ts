@@ -41,7 +41,12 @@ export function createAgenticRunService(options: AgenticRunServiceOptions) {
     budgetPolicy: options.budgetPolicy,
   });
 
-  const startRun = async (input: StartRunInput): Promise<{ run: AgenticRun; step: SchedulerStep }> => {
+  //
+  // Creating a Run is synchronous and durable. No inference is launched here:
+  // the scheduler loop owns every turn, so a caller gets its Run id back
+  // immediately and one local inference slot is never double-booked.
+  //
+  const createRun = (input: StartRunInput): AgenticRun => {
     const validation = validatePlan(seedNodes(input.tasks));
     if (!validation.ok) {
       throw new Error(`Invalid plan: ${validation.reason}`);
@@ -72,21 +77,12 @@ export function createAgenticRunService(options: AgenticRunServiceOptions) {
     store.recordPlanRevision({ runId: run.id, reason: "initial plan", tasks: input.tasks });
     store.updateRun(run.id, { status: "PLANNING" });
     scheduler.applyReadiness(run.id);
+    return store.requireRun(run.id);
+  };
 
-    const planned = store.requireRun(run.id);
-    const first = scheduler.applyReadiness(run.id).find((task) => task.status === "READY");
-    if (!first) {
-      store.updateRun(run.id, { status: "FAILED", failureReason: "no task is ready in the initial plan" });
-      return { run: store.requireRun(run.id), step: { kind: "failed", reason: "no ready task" } };
-    }
-    const step = await scheduler.launch(
-      planned,
-      first,
-      options.session(planned),
-      input.capability,
-      [],
-      [],
-    );
+  const startRun = async (input: StartRunInput): Promise<{ run: AgenticRun; step: SchedulerStep }> => {
+    const run = createRun(input);
+    const step = await scheduler.advance(run.id, input.capability);
     return { run: store.requireRun(run.id), step };
   };
 
@@ -116,6 +112,7 @@ export function createAgenticRunService(options: AgenticRunServiceOptions) {
 
   return {
     scheduler,
+    createRun,
     startRun,
     resumeRun,
     snapshot,
