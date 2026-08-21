@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { isAbsentRouteStatus } from "@/lib/api/http-error-message";
 import {
   ModelIndexSchema,
   bundledModelIndexSource,
@@ -62,8 +63,8 @@ export type ModelIndexSource = "controller" | "bundled";
 
 export type ModelIndexResult = ModelIndexResponse & { source: ModelIndexSource };
 
-const hasStatus = (error: unknown, status: number): boolean =>
-  error instanceof Error && (error as Error & { status?: number }).status === status;
+const statusOf = (error: unknown): number | undefined =>
+  error instanceof Error ? (error as Error & { status?: number }).status : undefined;
 
 export function createStudioApi(core: ApiCore) {
   return {
@@ -94,7 +95,11 @@ export function createStudioApi(core: ApiCore) {
         const index = await core.request<ModelIndexResponse>("/studio/model-index", options);
         return { ...index, source: "controller" };
       } catch (error) {
-        if (!hasStatus(error, 404)) throw error;
+        // The SAME notion of "this route is not here" the retry gate and the error text use.
+        // This asked only about 404, so a backend answering 405 or 501 for an unimplemented
+        // route threw instead of falling back to the bundled catalog — two definitions of one
+        // idea, disagreeing about the middle of the range.
+        if (!isAbsentRouteStatus(statusOf(error))) throw error;
         return { ...bundledModelIndex, source: "bundled" };
       }
     },

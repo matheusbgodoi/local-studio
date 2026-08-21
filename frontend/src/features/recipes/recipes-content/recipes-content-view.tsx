@@ -149,18 +149,33 @@ export function RecipesContentView(props: Props) {
     </section>
   );
 
+  // THE HEADER REFRESH DOES NOT BELONG ON EVERY TAB.
+  //
+  // `onRefresh` is `loadRecipes`: it re-fetches /recipes, /models and /runtime-targets. On the
+  // Local tab none of those are on screen — that tab reads /v1/models and the realtime status
+  // store — so pressing it spun the header, re-requested routes this backend answers 404 for,
+  // and left the served-model list beneath it untouched. Making Local the default put the
+  // wrong Refresh in the page header.
+  //
+  // Local keeps the one it already has, sitting directly above the list it refreshes. The
+  // alternative — driving the tab's refresh from up here — would mean calling useLocalModels()
+  // in this component, and that fetches /v1/models on every tab instead of only the one that
+  // shows it.
+  const showHeaderRefresh = tab !== "local";
   return (
     <>
       {embedded ? (
         <div className="space-y-6">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-(--ui-separator) pb-3">
             <Tabs variant="pill" items={MODEL_TABS} activeTab={tab} onSelectTab={setTab} />
-            <RefreshButton
-              onRefresh={onRefresh}
-              loading={refreshing || loading}
-              label="Refresh models"
-              className="h-8 w-8"
-            />
+            {showHeaderRefresh ? (
+              <RefreshButton
+                onRefresh={onRefresh}
+                loading={refreshing || loading}
+                label="Refresh models"
+                className="h-8 w-8"
+              />
+            ) : null}
           </div>
           {content}
         </div>
@@ -174,12 +189,14 @@ export function RecipesContentView(props: Props) {
           activeTab={tab}
           onSelectTab={setTab}
           actions={
-            <RefreshButton
-              onRefresh={onRefresh}
-              loading={refreshing || loading}
-              label="Refresh models"
-              className="h-8 w-8"
-            />
+            showHeaderRefresh ? (
+              <RefreshButton
+                onRefresh={onRefresh}
+                loading={refreshing || loading}
+                label="Refresh models"
+                className="h-8 w-8"
+              />
+            ) : null
           }
         >
           {content}

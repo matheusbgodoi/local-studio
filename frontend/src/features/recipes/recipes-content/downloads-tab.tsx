@@ -64,7 +64,11 @@ export function DownloadsTab({
           status={<ModelStatus tone="danger">error</ModelStatus>}
         />
       ) : null}
-      {downloads.length === 0 && !unsupported ? (
+      {/* `!error` as well as `!unsupported`. Guarded on `unsupported` alone, a 500 from the
+          download endpoint rendered the red error row AND "No downloads — Queue is empty"
+          directly beneath it: the honest sentence and the confident lie, together. An empty
+          list is only news when the list was actually read. */}
+      {downloads.length === 0 && !unsupported && !error ? (
         <ModelRow
           label="No downloads"
           description="Click Download from Search Models to populate this section."

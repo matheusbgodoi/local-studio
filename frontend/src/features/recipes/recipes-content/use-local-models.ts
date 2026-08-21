@@ -14,8 +14,6 @@ import { useRealtimeStatusStore } from "@/hooks/realtime-status-store";
 import { toGBFromMB } from "@/lib/formatters";
 import type { GPU } from "@/lib/types";
 
-const CONTEXT_KEYS = ["contextWindow", "context_window", "max_model_len"] as const;
-
 export interface LocalModelProfile {
   id: string;
   label: string;
@@ -41,13 +39,6 @@ export interface LocalVramPool {
   usedGb: number;
 }
 
-function declaresContextWindow(row: OpenAIModelListItem): boolean {
-  const extras = { ...row.meta, ...row.metadata };
-  return CONTEXT_KEYS.some(
-    (key) => typeof row[key] === "number" || typeof extras[key] === "number",
-  );
-}
-
 function profileLabel(profile: AgentModel): string {
   return profile.behaviorProfileLabel ?? profile.behaviorProfile ?? profile.name;
 }
@@ -67,22 +58,23 @@ function buildPool(gpus: GPU[]): LocalVramPool | null {
   };
 }
 
-function buildCard(
-  physical: PhysicalModel,
-  residentAlias: string | null,
-  declaredContext: ReadonlySet<string>,
-): LocalModelCard {
+function buildCard(physical: PhysicalModel, residentAlias: string | null): LocalModelCard {
   const isResident = (profile: AgentModel) =>
     profile.active || (residentAlias !== null && profile.id === residentAlias);
-  const withContext = physical.profiles.find((profile) => declaredContext.has(profile.id));
+  // EVERY FIELD BELOW COMES FROM THE WIRE OR IS ABSENT. That is this tab's entire claim, so
+  // each one asks the *declared* value: `contextWindowDeclared` rather than `contextWindow`,
+  // which carries a 128,000 fallback, and `visionDeclared` rather than `vision`, which falls
+  // back to substring-matching the alias against a 44-entry name table. Reading either
+  // fallback here would put a number or a chip on screen that no backend ever sent.
+  const declared = physical.profiles.find((profile) => profile.contextWindowDeclared !== undefined);
   return {
     id: physical.physicalModelId,
     displayName: physical.displayName,
     aliases: physical.profiles.map((profile) => profile.id),
     resident: physical.profiles.some(isResident),
-    contextWindow: withContext?.contextWindow ?? null,
+    contextWindow: declared?.contextWindowDeclared ?? null,
     tools: physical.profiles.some((profile) => profile.tools === true),
-    vision: physical.profiles.some((profile) => profile.vision),
+    vision: physical.profiles.some((profile) => profile.visionDeclared === true),
     nativeThinking: physical.profiles.some((profile) => profile.nativeReasoning === true),
     profiles: physical.profiles.map((profile) => ({
       id: profile.id,
@@ -95,18 +87,17 @@ function buildCard(
 
 export function useLocalModels() {
   const [physicalModels, setPhysicalModels] = useState<PhysicalModel[]>([]);
-  const [declaredContext, setDeclaredContext] = useState<ReadonlySet<string>>(() => new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const { status, gpus, connected } = useRealtimeStatusStore();
+  const { status, statusLoading, gpus, connected } = useRealtimeStatusStore();
 
   const refresh = useCallback(async () => {
+    // `loading` goes back up here, not only down in the `finally`. Without this the Refresh
+    // button was inert from the first paint on: it never disabled and never spun, so repeated
+    // clicks fired concurrent requests at a 30 s timeout with three retries each.
+    setLoading(true);
     try {
       const payload = await api.getOpenAIModels();
-      const rows = payload.data ?? [];
-      setDeclaredContext(
-        new Set(rows.filter(declaresContextWindow).map((row) => String(row.id).trim())),
-      );
       setPhysicalModels(groupByPhysicalModel(normalizeOpenAIModels(payload)));
       setError(null);
     } catch (err) {
@@ -123,11 +114,23 @@ export function useLocalModels() {
   const residentAlias = status?.process?.served_model_name?.trim() || null;
 
   const cards = useMemo(
-    () => physicalModels.map((physical) => buildCard(physical, residentAlias, declaredContext)),
-    [physicalModels, residentAlias, declaredContext],
+    () => physicalModels.map((physical) => buildCard(physical, residentAlias)),
+    [physicalModels, residentAlias],
   );
 
   const pool = useMemo(() => buildPool(gpus), [gpus]);
 
-  return { cards, loading, error, connected, residentAlias, pool, refresh };
+  return {
+    cards,
+    loading,
+    error,
+    connected,
+    // "not connected" and "we have not asked yet" are different states, and the store starts
+    // in the second one ({connected: false, statusLoading: true}). Keyed on `connected` alone,
+    // a hard load painted a red "offline" pill before /status had answered.
+    statusKnown: !statusLoading,
+    residentAlias,
+    pool,
+    refresh,
+  };
 }

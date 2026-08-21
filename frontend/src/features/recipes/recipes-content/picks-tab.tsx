@@ -23,20 +23,40 @@ function catalogSummary(
   loading: boolean,
   error: string | null,
 ): CatalogSummary {
-  if (error) return { tone: "danger", label: "error", provenance: null };
-  if (loading) return { tone: "info", label: "loading", provenance: null };
+  // PROVENANCE OUTLIVES AN ERROR, because the tiers do.
+  //
+  // `useModelIndex` never clears `data` on a failed refresh — deliberately, so a transient
+  // error does not blank a catalogue the reader was already using. But this returned
+  // `provenance: null` for any error, so those still-rendered tiers lost the line saying where
+  // they came from. The bundled case is exactly when it matters: an error pill above a list
+  // silently shipped inside the app, with the sentence that said so now missing.
+  //
+  // So the source line is computed from whatever is on screen, and the error only changes the
+  // tone and adds itself to it.
+  const from = (): string | null => {
+    if (!data) return null;
+    return data.source === "bundled"
+      ? `Shipped with the app on ${data.updated} — this backend has no /studio/model-index, so nothing here reflects it`
+      : `Catalog updated ${data.updated}`;
+  };
+
+  if (error) {
+    const source = from();
+    return {
+      tone: "danger",
+      label: "error",
+      provenance: source ? `${source}. Last refresh failed: ${error}` : null,
+    };
+  }
+  if (loading) return { tone: "info", label: "loading", provenance: from() };
   if (!data) return { tone: "default", label: "empty", provenance: null };
   if (data.source === "bundled") {
-    return {
-      tone: "warning",
-      label: "bundled catalog",
-      provenance: `Shipped with the app on ${data.updated} — this backend has no /studio/model-index, so nothing here reflects it`,
-    };
+    return { tone: "warning", label: "bundled catalog", provenance: from() };
   }
   return {
     tone: tierCount ? "good" : "default",
     label: tierCount ? `${tierCount} tiers` : "empty",
-    provenance: `Catalog updated ${data.updated}`,
+    provenance: from(),
   };
 }
 

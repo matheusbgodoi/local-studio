@@ -45,7 +45,13 @@ function LocalModelRow({ card }: { card: LocalModelCard }) {
     <ModelRow
       label={card.displayName}
       description={card.aliases.join(" · ")}
-      leading={<ModelLogo modelId={card.id} label={card.displayName} />}
+      // NO REMOTE AVATAR. ModelLogo works the owner out by substring-matching the model string
+      // against a keyword table (/qwen|qwq|qvq/i -> "Qwen", /llama/i -> "meta-llama",
+      // /gemma/i -> "google", ...) and fetches that org's avatar from huggingface.co. Two
+      // things wrong with that here: it attributes a vendor no backend named — an alias called
+      // `my-llama-helper` would wear Meta's mark — and "This machine" would make an outbound
+      // request per card, on a tab whose whole premise is that it reports this machine.
+      leading={<ModelLogo modelId={card.id} label={card.displayName} remoteAvatar={false} />}
       value={facts ? <ModelValue mono>{facts}</ModelValue> : undefined}
       status={
         <ModelStatus tone={card.resident ? "good" : "default"}>
@@ -67,20 +73,25 @@ function servedSummary(loading: boolean, error: string | null, count: number): S
   return { tone: "good", label: `${count} models`, empty: "" };
 }
 
+function connection(statusKnown: boolean, connected: boolean): ServedSummary {
+  if (!statusKnown) return { tone: "info", label: "checking…", empty: "" };
+  return connected
+    ? { tone: "good", label: "connected", empty: "" }
+    : { tone: "danger", label: "offline", empty: "" };
+}
+
 export function LocalModelsTab() {
-  const { cards, loading, error, connected, residentAlias, pool, refresh } = useLocalModels();
+  const { cards, loading, error, connected, statusKnown, residentAlias, pool, refresh } =
+    useLocalModels();
   const served = servedSummary(loading, error, cards.length);
+  const link = connection(statusKnown, connected);
 
   return (
     <div className="space-y-6">
       <ModelSection
         title="This machine"
         description="Hardware and the model held in VRAM right now, as the backend reports them."
-        actions={
-          <ModelStatus tone={connected ? "good" : "danger"}>
-            {connected ? "connected" : "offline"}
-          </ModelStatus>
-        }
+        actions={<ModelStatus tone={link.tone}>{link.label}</ModelStatus>}
       >
         {pool ? (
           <ModelRow
