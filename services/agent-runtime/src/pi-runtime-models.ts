@@ -9,9 +9,9 @@ import type { OpenAICompletionsCompat } from "@earendil-works/pi-ai";
 import {
   normalizeOpenAIModels,
   inferReasoningSupport,
-  declaredModelReasoning,
-  isNativeAlwaysOnThinkingModelId,
+  resolveThinkingContract,
   type AgentModel,
+  type ThinkingContractInput,
 } from "../../../shared/agent/models";
 import { AGENT_THINKING_LEVELS, type AgentThinkingLevel } from "../../../shared/agent/agent-turn";
 import { resolveModelVision } from "../../../controller/contracts/model-capabilities";
@@ -103,8 +103,10 @@ function userPiModelToAgentModel(
   const name = model.name ?? rawId;
   const inputs = model.input ?? ["text"];
   const reasoning = model.reasoning ?? inferReasoningSupport(rawId);
+  const id = `${qualifiedProviderId}/${rawId}`;
   return {
-    id: `${qualifiedProviderId}/${rawId}`,
+    id,
+    physicalModelId: id,
     rawId,
     name: `${name} · ${providerName}`,
     provider: "local-studio",
@@ -140,10 +142,23 @@ function isInklingModelId(modelId: string): boolean {
   return modelId.toLowerCase().includes("inkling");
 }
 
-/** True for aliases declared as speaking the configurable chat-template
- *  contract (chat_template_kwargs { enable_thinking, reasoning_effort }). */
-function isChatTemplateThinkingModelId(modelId: string): boolean {
-  return declaredModelReasoning(modelId)?.thinkingContract === "chat-template-effort";
+/** The physical checkpoint as its OWN controller names it.
+ *
+ *  `physicalModelId` is qualified with the provider for every controller after
+ *  the first, exactly as `id` is, while the declaration table is keyed by the
+ *  bare alias. This is the same unqualification `resolvePiModelSelection` does
+ *  for a model id, applied to the grouping key. */
+function barePhysicalModelId(model: AgentModel): string {
+  return resolvePiModelSelection(model.physicalModelId ?? "").modelId;
+}
+
+/** What a model row states about its thinking contract, server first. */
+function modelThinkingContract(model: AgentModel) {
+  return resolveThinkingContract({
+    modelId: model.rawId ?? model.id,
+    physicalModelId: barePhysicalModelId(model),
+    nativeReasoning: model.nativeReasoning,
+  });
 }
 
 /** One entry, so the picker renders a FIXED state instead of a ladder. */
@@ -158,17 +173,29 @@ const CHAT_TEMPLATE_THINKING_LEVELS: readonly AgentThinkingLevel[] = [
   "xhigh",
 ];
 
+/**
+ * The ladder an alias may offer.
+ *
+ * `source` is what the SERVER said about this row — its physical model and its
+ * `nativeReasoning` flag. Passing it is what makes two aliases of one checkpoint
+ * resolve to one ladder; omitting it falls back to the name table alone, which
+ * is all a caller holding a bare id can do.
+ */
 export function controllerModelThinkingLevels(
   reasoning: boolean,
   modelId = "",
+  source: Omit<ThinkingContractInput, "modelId"> = {},
 ): AgentThinkingLevel[] {
-  if (reasoning && isChatTemplateThinkingModelId(modelId)) {
+  const contract = resolveThinkingContract({ ...source, modelId });
+  // Gated on `reasoning` because that IS the server's statement about the
+  // request contract: a checkpoint served with thinking off takes no effort.
+  if (reasoning && contract === "chat-template-effort") {
     return [...CHAT_TEMPLATE_THINKING_LEVELS];
   }
   // Deliberately NOT gated on `reasoning`: the gateway reports reasoning:false
-  // for this alias because it accepts no effort contract, which is a different
-  // statement from "does not think".
-  if (isNativeAlwaysOnThinkingModelId(modelId)) {
+  // for this contract because it accepts no effort contract, which is a
+  // different statement from "does not think".
+  if (contract === "native-always-on") {
     return [...NATIVE_ALWAYS_ON_THINKING_LEVELS];
   }
   if (reasoning && isInklingModelId(modelId)) {
@@ -315,11 +342,17 @@ async function fetchModelsFromController(
       ...model,
       reasoning: model.reasoning,
       id: qualifyModelId(providerId, model.id),
+      physicalModelId: qualifyModelId(providerId, model.physicalModelId),
       rawId: model.id,
       providerId,
       controllerUrl: backendUrl,
       controllerName: label,
-      thinkingLevels: controllerModelThinkingLevels(model.reasoning, model.rawId ?? model.id),
+      // The row is still unqualified here, so its `physicalModelId` is the bare
+      // alias the declaration table is keyed by.
+      thinkingLevels: controllerModelThinkingLevels(model.reasoning, model.rawId ?? model.id, {
+        physicalModelId: model.physicalModelId,
+        nativeReasoning: model.nativeReasoning,
+      }),
       name: multipleControllers ? `${model.name} · ${label}` : model.name,
     }),
   );
@@ -481,7 +514,9 @@ function isInklingReasoningModel(model: AgentModel): boolean {
 }
 
 function isChatTemplateReasoningModel(model: AgentModel): boolean {
-  return model.reasoning && isChatTemplateThinkingModelId(model.rawId ?? model.id);
+  // Same resolution as the ladder, so the levels the picker offers and the wire
+  // shape those levels travel in cannot come apart for a new alias.
+  return model.reasoning && modelThinkingContract(model) === "chat-template-effort";
 }
 
 type PiThinkingContract = {
