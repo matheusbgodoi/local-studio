@@ -264,7 +264,18 @@ fi
 # right tool for verification; the question worth asking of a bundle we are about to copy into
 # /Applications is "is it validly signed and unmodified since signing", and that is
 # `codesign --verify`. The bundle identifier and the executable are checked separately above.
-codesign --verify "$BUILT"
+# An OWNER BUILD ARRIVES UNSIGNED, and that is deliberate — see the long note beside
+# `identity: null` in frontend/desktop/electron-builder.yml. electron-builder cannot both
+# ad-hoc sign and pass its own `codesign --verify --deep --strict` afterwards, because that
+# check never passes for an Electron bundle. So the build leaves it unsigned and the signing
+# happens here, on the staged copy, a few lines below.
+#
+# A RELEASE DOWNLOAD IS DIFFERENT and is verified right now: it arrives signed and notarised,
+# it must already be valid before we touch it, and it must never be re-signed — re-signing
+# strips the notarisation, turning a properly distributed app into a local ad-hoc one.
+if [[ -n "$RELEASE_MOUNT" ]]; then
+  codesign --verify "$BUILT"
+fi
 # GATEKEEPER ASSESSMENT IS FOR SOMETHING THAT CAME OFF THE INTERNET.
 #
 # `spctl --assess --type execute` asks "would macOS let a user open this download?", and the
@@ -282,6 +293,25 @@ mkdir -p "$INSTALL_ROOT" "$ROLLBACK_ROOT"
 rm -rf "$STAGED" "$REPLACED"
 
 ditto "$BUILT" "$STAGED"
+
+# Sign the copy we are about to install, never the build tree and never a release.
+#
+# Ad-hoc is not a lesser signature here, it is the only one available: this Mac holds no
+# Developer ID. What it buys is real — the bundle verifies AS ITSELF
+# (Identifier=org.local.studio.desktop, Info.plist bound) instead of wearing Electron's
+# generic linker signature, so `codesign --verify` can tell afterwards whether anything was
+# modified between here and launch. It does not, and is not meant to, satisfy Gatekeeper:
+# `spctl` correctly rejects a locally built app, which is why it is asked only of the release
+# path.
+#
+# The cost, stated plainly: the cdhash changes on every rebuild, so any TCC grant keyed to it
+# (microphone, speech recognition) is asked for again after each install.
+if [[ -z "$RELEASE_MOUNT" ]]; then
+  echo "==> ad-hoc signing the owner build (no Developer ID on this machine)"
+  codesign --force --sign - \
+    --entitlements "$REPO_ROOT/frontend/desktop/resources/entitlements.mac.plist" \
+    --options runtime "$STAGED"
+fi
 codesign --verify "$STAGED"
 cleanup_release_source
 

@@ -101,7 +101,53 @@ directories:
 mac:
   icon: desktop/resources/icon.icns
   category: public.app-category.developer-tools
-  identity: "sherif cherfa (TZ447KHNZL)"
+  # NO IDENTITY. This fork inherited upstream's Developer ID name here and kept it, which was
+  # wrong twice over.
+  #
+  # It broke the build: with that certificate absent from this keychain, electron-builder
+  # SKIPS signing entirely rather than falling back, so the bundle carried only the ad-hoc
+  # signature Electron's own binary ships with — `Identifier=Electron`, `Info.plist=not bound`
+  # — and `codesign --verify` failed with "code has no resources but signature indicates they
+  # must be present". scripts/install-desktop-app.sh refuses such a bundle, correctly, so the
+  # repo could build an app it would not install.
+  #
+  # And it was an identity claim this project is not entitled to make. RELEASING.md: the fork
+  # "is not upstream and must never present itself as one". Had that certificate ever been
+  # present, every build would have shipped signed as upstream's developer.
+  #
+  # NO IDENTITY, and the signing happens at INSTALL time instead. Three values were tried here
+  # and only the third is workable:
+  #
+  #   "sherif cherfa (TZ447KHNZL)"  upstream's Developer ID, inherited and never changed. Absent
+  #                                 from this keychain, so electron-builder SKIPS signing rather
+  #                                 than falling back, leaving the bundle wearing only the
+  #                                 linker-signed ad-hoc signature Electron's own binary ships
+  #                                 with (Identifier=Electron, Info.plist not bound). The
+  #                                 installer refuses that, correctly — so the repo could build
+  #                                 an app it would not install.
+  #   "-"                           codesign's ad-hoc identity. It DOES sign correctly, and the
+  #                                 result verifies. But electron-builder then runs its own
+  #                                 `codesign --verify --deep --strict` over the result, and
+  #                                 that check CANNOT pass for any Electron bundle — it objects
+  #                                 to the ordinary Versions/Current symlinks inside
+  #                                 Electron Framework.framework. See the long note in
+  #                                 scripts/install-desktop-app.sh, which measured all four
+  #                                 verify variants. So the build fails after producing a
+  #                                 perfectly good app.
+  #   null                          electron-builder skips signing AND skips that impossible
+  #                                 verification. The bundle is unsigned, honestly, and
+  #                                 install-desktop-app.sh ad-hoc signs it as it stages it.
+  #
+  # Signing at install time is not a workaround, it is where the fact lives: this Mac has no
+  # Developer ID, so ad-hoc is the only signature available, and the installer is the step that
+  # knows whether it is handling an owner build or a notarised release (which it must never
+  # re-sign — that would strip the notarisation).
+  #
+  # Naming upstream's certificate was also an identity claim this project is not entitled to
+  # make. RELEASING.md: the fork "is not upstream and must never present itself as one". Had
+  # that certificate ever been present, every build would have shipped signed as its developer.
+  # Someone with their OWN Developer ID sets CSC_NAME or CSC_LINK in the environment.
+  identity: null
   target:
     - target: dmg
       arch:
@@ -117,7 +163,10 @@ mac:
     NSMicrophoneUsageDescription: Record your own voice to create a private, local voice profile.
 
 dmg:
-  sign: true
+  # Nothing to sign it WITH, now that no identity is named. `true` here asked electron-builder
+  # to sign the disk image with a certificate the build has already established it does not
+  # have.
+  sign: false
 
 win:
   target:
