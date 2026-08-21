@@ -37,9 +37,31 @@ export interface AgentModel {
   rawId?: string;
   controllerUrl?: string;
   controllerName?: string;
+  /** Grouping key: the physical checkpoint this row is served from. Several
+   *  aliases share one. Falls back to the row's own id when the server does not
+   *  say, so a model that is its own physical model is a group of one. */
+  physicalModelId: string;
+  /** Which behaviour this alias IS, when the physical model serves more than
+   *  one. Absent on a physical model with a single behaviour. */
+  behaviorProfile?: string;
+  behaviorProfileLabel?: string;
+  /** Which profile a client lands on when it picks the PHYSICAL model without
+   *  naming one. The server declares it on exactly one alias per multi-profile
+   *  model, because the alternative — "whichever sorted first" — is an accident
+   *  of naming, and on the live rows that accident selected the uncensored
+   *  profile. Read from the wire; never inferred. */
+  behaviorProfileDefault?: boolean;
+  /** The PHYSICAL model's name, identical across its aliases. */
+  displayName?: string;
   contextWindow: number;
   maxTokens: number;
   reasoning: boolean;
+  /** The server's OTHER statement about thinking: the chat template opens
+   *  `<think>` in the generation prompt, so the model reasons on every turn with
+   *  no level to choose. `reasoning` answers a different question — whether the
+   *  endpoint accepts a per-request effort — and a model is routinely false
+   *  there and true here. */
+  nativeReasoning?: boolean;
   thinkingLevels?: AgentThinkingLevel[];
   vision: boolean;
   active: boolean;
@@ -109,9 +131,50 @@ export function declaredModelReasoning(modelId: string): DeclaredModelReasoning 
   return DECLARED_MODEL_REASONING[modelId.trim().toLowerCase()];
 }
 
-/** True when the alias reasons on every turn with no selectable level. */
+export type ThinkingContract = NonNullable<DeclaredModelReasoning["thinkingContract"]>;
+
+/** Everything a row has to say about which thinking contract it speaks. */
+export type ThinkingContractInput = {
+  /** The alias as its OWN controller names it — what the table is keyed by. */
+  modelId?: string;
+  /** The physical checkpoint the alias is served from, when the server says. */
+  physicalModelId?: string;
+  /** The server's own statement that the template thinks on every turn. */
+  nativeReasoning?: boolean;
+};
+
+/**
+ * The thinking contract a row speaks.
+ *
+ * THE SERVER FIRST. `nativeReasoning` is published per row, so it answers for an
+ * alias no table has ever heard of; DECLARED_MODEL_REASONING is consulted only
+ * where the row states nothing.
+ *
+ * THEN THE PHYSICAL MODEL, and only then the alias. Aliases of one checkpoint
+ * are one llama-server speaking one chat template, so they MUST resolve to one
+ * contract. Keying on the alias string alone is how a fourth alias of a known
+ * model — "qwen-creative" — drew ["high","max"], a ladder its template rejects,
+ * and how "ornith-uncensored" would have drawn ["off"] for a model that cannot
+ * be turned off.
+ */
+export function resolveThinkingContract(
+  input: ThinkingContractInput,
+): ThinkingContract | undefined {
+  if (input.nativeReasoning === true) return "native-always-on";
+  return (
+    declaredModelReasoning(input.physicalModelId ?? "")?.thinkingContract ??
+    declaredModelReasoning(input.modelId ?? "")?.thinkingContract
+  );
+}
+
+/** True when the row reasons on every turn with no selectable level. */
+export function isNativeAlwaysOnThinkingModel(input: ThinkingContractInput): boolean {
+  return resolveThinkingContract(input) === "native-always-on";
+}
+
+/** Name-only shorthand, for callers that hold an alias and nothing else. */
 export function isNativeAlwaysOnThinkingModelId(modelId: string): boolean {
-  return declaredModelReasoning(modelId)?.thinkingContract === "native-always-on";
+  return isNativeAlwaysOnThinkingModel({ modelId });
 }
 
 export function inferVisionSupport(modelId: string): boolean {
@@ -137,6 +200,15 @@ function firstNumber(values: unknown[], fallback: number): number {
     if (parsed) return parsed;
   }
   return fallback;
+}
+
+function firstString(values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (trimmed) return trimmed;
+  }
+  return undefined;
 }
 
 function resolveContextWindow(
@@ -178,6 +250,31 @@ function resolveReasoning(
   return declaredModelReasoning(id)?.reasoning ?? inferReasoningSupport(id);
 }
 
+function snakeCaseKey(key: string): string {
+  return key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+}
+
+function resolveExtraString(
+  model: OpenAIModelListItem,
+  metadata: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const snake = snakeCaseKey(key);
+  return firstString([metadata[key], metadata[snake], model[key], model[snake]]);
+}
+
+function resolveExtraBoolean(
+  model: OpenAIModelListItem,
+  metadata: Record<string, unknown>,
+  key: string,
+): boolean | undefined {
+  const snake = snakeCaseKey(key);
+  for (const value of [metadata[key], metadata[snake], model[key], model[snake]]) {
+    if (typeof value === "boolean") return value;
+  }
+  return undefined;
+}
+
 /** Extras a controller ships alongside the row. llama-swap uses `meta`, other
  *  OpenAI-compatible hosts use `metadata`; `metadata` wins where both exist. */
 function modelExtras(model: OpenAIModelListItem): Record<string, unknown> {
@@ -196,9 +293,15 @@ export function normalizeOpenAIModel(model: OpenAIModelListItem): AgentModel {
     id,
     name,
     provider: "local-studio",
+    physicalModelId: resolveExtraString(model, metadata, "physicalModelId") ?? id,
+    behaviorProfile: resolveExtraString(model, metadata, "behaviorProfile"),
+    behaviorProfileLabel: resolveExtraString(model, metadata, "behaviorProfileLabel"),
+    behaviorProfileDefault: resolveExtraBoolean(model, metadata, "behaviorProfileDefault"),
+    displayName: resolveExtraString(model, metadata, "displayName"),
     contextWindow,
     maxTokens,
     reasoning: resolveReasoning(model, metadata, id),
+    nativeReasoning: resolveExtraBoolean(model, metadata, "nativeReasoning"),
     vision: resolveModelVision({
       identifiers: [id],
       metadata,
@@ -220,4 +323,96 @@ export function normalizeOpenAIModels(payload: OpenAIModelsResponse): AgentModel
     models.push(model);
   }
   return models.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** One physical checkpoint and every alias served from it. A group of one is
+ *  still a group. */
+export interface PhysicalModel {
+  physicalModelId: string;
+  /** The one label for this model. Callers render THIS; they do not rebuild it. */
+  displayName: string;
+  profiles: AgentModel[];
+  /** The profile the server declares as this model's default — where a client
+   *  lands when it picks the physical model without naming a behaviour. */
+  primary: AgentModel;
+}
+
+/** True when one of this physical model's aliases is `modelId`. */
+export function physicalModelOwnsProfile(
+  physical: PhysicalModel,
+  modelId: string | undefined,
+): boolean {
+  return Boolean(modelId) && physical.profiles.some((profile) => profile.id === modelId);
+}
+
+/**
+ * Which alias a selection of the PHYSICAL model means.
+ *
+ * Falling straight through to the declared default made the OTHER profile
+ * unreachable from a model list and rewrote a stored preference on the way: the
+ * workspace writes its default model on every pick, so with the default on one
+ * profile, a detour through another model and a click back on this one silently
+ * moved the default onto the declared profile.
+ *
+ * Order is the whole rule. The alias already selected wins; then the alias
+ * already stored as the default; and only when this model owns neither does the
+ * server-declared default profile answer.
+ */
+export function resolveProfileId(
+  physical: PhysicalModel,
+  selectedModel: string,
+  defaultModel?: string,
+): string {
+  if (physicalModelOwnsProfile(physical, selectedModel)) return selectedModel;
+  if (defaultModel && physicalModelOwnsProfile(physical, defaultModel)) return defaultModel;
+  return physical.primary.id;
+}
+
+/**
+ * Collapse aliases onto the physical model they are served from, preserving the
+ * order they arrived in — both between groups and within one group's profiles.
+ *
+ * Grouping is a view concern: this reads `physicalModelId` and nothing else, so
+ * two rows that merely share a `displayName` stay apart, and a physical model
+ * that grows a second profile tomorrow needs no change here.
+ */
+export function groupByPhysicalModel(models: AgentModel[]): PhysicalModel[] {
+  const profilesByPhysicalId = new Map<string, AgentModel[]>();
+  for (const model of models) {
+    const key = model.physicalModelId?.trim() || model.id;
+    const profiles = profilesByPhysicalId.get(key);
+    if (profiles) profiles.push(model);
+    else profilesByPhysicalId.set(key, [model]);
+  }
+  const groups: PhysicalModel[] = [];
+  for (const [physicalModelId, profiles] of profilesByPhysicalId) {
+    // THE SERVER NAMES THE DEFAULT. Exactly one alias per multi-profile model
+    // carries `behaviorProfileDefault`, so selecting the physical model lands
+    // where the product says it should rather than where a sort happened to put
+    // it.
+    //
+    // `?? profiles[0]` is the answer for a group that declares NOTHING — a
+    // single-profile model, or a gateway older than the field — and it is not
+    // the mechanism. Index 0 is whatever the caller's sort produced, and both
+    // feed paths sort by `name`: on the live rows llama-swap names the real
+    // block "Qwen3.8-27B (daily)" while the cloned alias is "Qwen3.8-27B",
+    // which sorts FIRST. Index 0 therefore selected the UNCENSORED profile, an
+    // alias that is never a default anywhere.
+    const primary = profiles.find((profile) => profile.behaviorProfileDefault) ?? profiles[0];
+    groups.push({
+      physicalModelId,
+      // ONE LABEL, COMPUTED ONCE. Every surface that names this model — the
+      // picker's list, the picker's trigger — reads it from here, so they
+      // cannot disagree about what the user is talking to.
+      displayName:
+        firstString([
+          ...profiles.map((profile) => profile.displayName),
+          primary.rawId,
+          primary.name,
+        ]) ?? primary.name,
+      profiles,
+      primary,
+    });
+  }
+  return groups;
 }

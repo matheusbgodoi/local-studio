@@ -15,7 +15,13 @@ import type { AgentModel } from "@/features/agent/workspace/types";
 import { POPOVER_MENU_CLASS } from "@/ui/popover";
 import { cx } from "@/ui/utils";
 import { splitVisibleAgentModels } from "./model-visibility";
-import { isNativeAlwaysOnThinkingModelId } from "@shared/agent/models";
+import {
+  groupByPhysicalModel,
+  isNativeAlwaysOnThinkingModel,
+  physicalModelOwnsProfile as ownsProfile,
+  resolveProfileId,
+  type PhysicalModel,
+} from "@shared/agent/models";
 
 type AgentModelPickerProps = {
   models: AgentModel[];
@@ -30,8 +36,15 @@ type AgentModelPickerProps = {
   onSelectReasoning?: (level: AgentThinkingLevel) => void;
 };
 
-type ModelGroup = { key: string; name: string; models: AgentModel[] };
-type PickerView = "root" | "models" | "reasoning";
+type ModelGroup = { key: string; name: string; physicalModels: PhysicalModel[] };
+type ModelSelection = {
+  active: AgentModel | null;
+  /** The physical model's one label — the same string the Model list renders. */
+  label: string | undefined;
+  profiles: AgentModel[];
+  behaviorLabel: string | undefined;
+};
+type PickerView = "root" | "models" | "reasoning" | "behavior";
 
 const REASONING_LABELS: Record<AgentThinkingLevel, string> = {
   off: "Off",
@@ -50,8 +63,15 @@ function reasoningTriggerLabel(
   active: AgentModel | null,
   effectiveReasoning: AgentThinkingLevel,
 ): string {
-  const id = active?.rawId ?? active?.id ?? "";
-  return isNativeAlwaysOnThinkingModelId(id) ? "Native" : REASONING_LABELS[effectiveReasoning];
+  // Resolved from what the row states, not from its name alone, so a new alias
+  // of an always-on checkpoint reads "Native" here for the same reason the
+  // runtime gives it one fixed level.
+  const nativeAlwaysOn = isNativeAlwaysOnThinkingModel({
+    modelId: active?.rawId ?? active?.id,
+    physicalModelId: active?.physicalModelId,
+    nativeReasoning: active?.nativeReasoning,
+  });
+  return nativeAlwaysOn ? "Native" : REASONING_LABELS[effectiveReasoning];
 }
 
 export function AgentModelPicker({
@@ -69,7 +89,12 @@ export function AgentModelPicker({
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<PickerView>("root");
   const [showOtherModels, setShowOtherModels] = useState(false);
-  const active = models.find((model) => model.id === selectedModel) ?? null;
+  const selection = useMemo(
+    () => resolveModelSelection(models, selectedModel),
+    [models, selectedModel],
+  );
+  const active = selection.active;
+  const supportsBehavior = selection.profiles.length > 1;
   const visible = useMemo(
     () => splitVisibleAgentModels(models, showOtherModels),
     [models, showOtherModels],
@@ -79,18 +104,22 @@ export function AgentModelPicker({
     [visible.visibleModels],
   );
   const disabled = loading;
-  const modelLabel = modelTriggerLabel(
-    active,
-    selectedModel,
-    loading,
-    visible.controllerModels.length,
-  );
+  const modelLabel = modelTriggerLabel(selection, selectedModel, visible.controllerModels.length);
+  // ONE TURN LOCK, TWO LISTS. `reasoningDisabled` is Boolean(running) at the call
+  // site. The Behavior list has to freeze with the Reasoning list, not beside it:
+  // picking a profile goes through selectPaneModel, whose patch also rewrites
+  // thinkingLevel — levels are stored per model id and the aliases are separate
+  // keys — so an unlocked Behavior list is a way to change the reasoning level
+  // mid-turn while the Reasoning control next to it is greyed out.
+  const turnRunning = reasoningDisabled;
   const supportsReasoning = Boolean(reasoningLevel && onSelectReasoning);
-  const effectiveReasoning = reasoningLevels.includes(reasoningLevel ?? "off")
-    ? (reasoningLevel ?? "off")
+  const requestedReasoning = reasoningLevel ?? "off";
+  const effectiveReasoning = reasoningLevels.includes(requestedReasoning)
+    ? requestedReasoning
     : (reasoningLevels.at(-1) ?? "off");
   const reasoningLabel = reasoningTriggerLabel(active, effectiveReasoning);
   const triggerLabel = supportsReasoning ? `${modelLabel} ${reasoningLabel}` : modelLabel;
+  const showRoot = supportsReasoning || supportsBehavior;
   const selectedModelNotRunning = !loading && Boolean(active && active.active === false);
   const close = useCallback(() => {
     setOpen(false);
@@ -125,7 +154,7 @@ export function AgentModelPicker({
           if (disabled) return;
           if (open) close();
           else {
-            setView(supportsReasoning ? "root" : "models");
+            setView(showRoot ? "root" : "models");
             setOpen(true);
           }
         }}
@@ -140,9 +169,11 @@ export function AgentModelPicker({
           {view === "root" ? (
             <PickerRoot
               modelLabel={modelLabel}
+              behaviorLabel={selection.behaviorLabel}
               reasoningLabel={reasoningLabel}
               reasoningFixed={reasoningLevels.length <= 1}
               onOpenModels={() => setView("models")}
+              onOpenBehavior={() => setView("behavior")}
               onOpenReasoning={() => setView("reasoning")}
             />
           ) : null}
@@ -153,11 +184,20 @@ export function AgentModelPicker({
               defaultModel={defaultModel}
               showOtherModels={showOtherModels}
               otherModelCount={visible.otherModels.length}
-              onBack={supportsReasoning ? () => setView("root") : undefined}
+              onBack={showRoot ? () => setView("root") : undefined}
               onSelect={select}
               onSetDefault={onSetDefault}
               onToggleOtherModels={() => setShowOtherModels((current) => !current)}
               onClose={close}
+            />
+          ) : null}
+          {view === "behavior" ? (
+            <BehaviorList
+              profiles={selection.profiles}
+              selectedModel={selectedModel}
+              disabled={turnRunning}
+              onBack={() => setView("root")}
+              onSelect={select}
             />
           ) : null}
           {view === "reasoning" && onSelectReasoning ? (
@@ -180,20 +220,27 @@ export function AgentModelPicker({
 
 function PickerRoot({
   modelLabel,
+  behaviorLabel,
   reasoningLabel,
   reasoningFixed,
   onOpenModels,
+  onOpenBehavior,
   onOpenReasoning,
 }: {
   modelLabel: string;
+  behaviorLabel?: string;
   reasoningLabel: string;
   reasoningFixed: boolean;
   onOpenModels: () => void;
+  onOpenBehavior: () => void;
   onOpenReasoning: () => void;
 }) {
   return (
     <div className="grid gap-0.5">
       <PickerRootRow label="Model" value={modelLabel} onClick={onOpenModels} />
+      {behaviorLabel === undefined ? null : (
+        <PickerRootRow label="Behavior" value={behaviorLabel} onClick={onOpenBehavior} />
+      )}
       <PickerRootRow
         label="Reasoning"
         value={reasoningLabel}
@@ -331,12 +378,12 @@ function ModelList({
                 <div className="flex h-7 items-center justify-between px-2.5 text-[length:var(--fs-xs)] font-medium text-(--dim)">
                   <span className="truncate">{group.name}</span>
                   <span className="font-mono text-[length:var(--fs-2xs)]">
-                    {group.models.length}
+                    {group.physicalModels.length}
                   </span>
                 </div>
               ) : null}
               <ModelOptions
-                models={group.models}
+                physicalModels={group.physicalModels}
                 selectedModel={selectedModel}
                 defaultModel={defaultModel}
                 onSelect={onSelect}
@@ -345,6 +392,38 @@ function ModelList({
             </div>
           ))
         )}
+      </div>
+    </div>
+  );
+}
+
+function BehaviorList({
+  profiles,
+  selectedModel,
+  disabled,
+  onBack,
+  onSelect,
+}: {
+  profiles: AgentModel[];
+  selectedModel: string;
+  disabled: boolean;
+  onBack: () => void;
+  onSelect: (modelId: string) => void;
+}) {
+  if (profiles.length < 2) return null;
+  return (
+    <div>
+      <PickerHeader title="Behavior" onBack={onBack} />
+      <div className="grid gap-0.5 pt-1">
+        {profiles.map((profile) => (
+          <PickerOptionRow
+            key={profile.id}
+            label={behaviorProfileLabel(profile)}
+            selected={profile.id === selectedModel}
+            disabled={disabled}
+            onSelect={() => onSelect(profile.id)}
+          />
+        ))}
       </div>
     </div>
   );
@@ -368,24 +447,45 @@ function ReasoningList({
       <PickerHeader title="Reasoning" onBack={onBack} />
       <div className="grid gap-0.5 pt-1">
         {AGENT_THINKING_LEVELS.filter((level) => levels.includes(level)).map((level) => (
-          <button
+          <PickerOptionRow
             key={level}
-            type="button"
-            role="menuitemradio"
-            aria-checked={level === value}
+            label={REASONING_LABELS[level]}
+            selected={level === value}
             disabled={disabled}
-            onClick={() => onSelect(level)}
-            className={cx(
-              "flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[length:var(--fs-base)] text-(--fg) transition-colors hover:bg-(--hover) disabled:opacity-45",
-              level === value && "bg-(--color-input)",
-            )}
-          >
-            <span className="flex-1">{REASONING_LABELS[level]}</span>
-            {level === value ? <Check className="h-3.5 w-3.5" /> : null}
-          </button>
+            onSelect={() => onSelect(level)}
+          />
         ))}
       </div>
     </div>
+  );
+}
+
+function PickerOptionRow({
+  label,
+  selected,
+  disabled = false,
+  onSelect,
+}: {
+  label: string;
+  selected: boolean;
+  disabled?: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitemradio"
+      aria-checked={selected}
+      disabled={disabled}
+      onClick={onSelect}
+      className={cx(
+        "flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[length:var(--fs-base)] text-(--fg) transition-colors hover:bg-(--hover) disabled:opacity-45",
+        selected && "bg-(--color-input)",
+      )}
+    >
+      <span className="flex-1">{label}</span>
+      {selected ? <Check className="h-3.5 w-3.5" /> : null}
+    </button>
   );
 }
 
@@ -430,24 +530,24 @@ function ModelPickerTrigger({
 }
 
 function ModelOptions({
-  models,
+  physicalModels,
   selectedModel,
   defaultModel,
   onSelect,
   onSetDefault,
 }: {
-  models: AgentModel[];
+  physicalModels: PhysicalModel[];
   selectedModel: string;
   defaultModel?: string;
   onSelect: (modelId: string) => void;
   onSetDefault?: (modelId: string) => void;
 }) {
-  return models.map((model) => (
+  return physicalModels.map((physical) => (
     <ModelOption
-      key={model.id}
-      model={model}
-      selected={model.id === selectedModel}
-      isDefault={model.id === defaultModel}
+      key={physical.physicalModelId}
+      physical={physical}
+      selectedModel={selectedModel}
+      defaultModel={defaultModel}
       onSelect={onSelect}
       onSetDefault={onSetDefault}
     />
@@ -455,19 +555,23 @@ function ModelOptions({
 }
 
 function ModelOption({
-  model,
-  selected,
-  isDefault,
+  physical,
+  selectedModel,
+  defaultModel,
   onSelect,
   onSetDefault,
 }: {
-  model: AgentModel;
-  selected: boolean;
-  isDefault: boolean;
+  physical: PhysicalModel;
+  selectedModel: string;
+  defaultModel?: string;
   onSelect: (modelId: string) => void;
   onSetDefault?: (modelId: string) => void;
 }) {
-  const label = model.rawId || model.name;
+  // The label the shared layer computed. Recomputing it here is how the popover
+  // root came to read "qwen-daily" over a list reading "Qwen3.8-27B".
+  const label = physical.displayName;
+  const selected = ownsProfile(physical, selectedModel);
+  const targetId = resolveProfileId(physical, selectedModel, defaultModel);
   return (
     <div
       className={cx(
@@ -479,7 +583,7 @@ function ModelOption({
         type="button"
         role="menuitemradio"
         aria-checked={selected}
-        onClick={() => onSelect(model.id)}
+        onClick={() => onSelect(targetId)}
         className="flex min-h-8 min-w-0 flex-1 items-center gap-2 rounded-lg pl-2.5 text-left focus-visible:outline-none active:translate-y-px"
       >
         <span className="min-w-0 flex-1 truncate" title={label}>
@@ -488,20 +592,67 @@ function ModelOption({
         {selected ? <Check className="h-3.5 w-3.5 shrink-0 text-(--fg)" /> : null}
       </button>
       {onSetDefault ? (
-        <button
-          type="button"
-          onClick={() => onSetDefault(model.id)}
-          aria-label={isDefault ? `${label} is the default model` : `Set ${label} as default model`}
-          title={isDefault ? "Default model" : "Set as default"}
-          className={cx(
-            "mr-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-(--dim) transition-colors hover:bg-(--active) hover:text-(--fg) focus-visible:outline-none",
-            isDefault && "text-(--fg)",
-          )}
-        >
-          <Pin className={cx("h-3.5 w-3.5", isDefault && "fill-current")} strokeWidth={1.5} />
-        </button>
+        <DefaultModelPin
+          physical={physical}
+          defaultModel={defaultModel}
+          onSetDefault={onSetDefault}
+        />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The pin states what IS, and does exactly what it says.
+ *
+ * It used to disagree with itself twice over. `isDefault` was true if ANY alias
+ * in the group held the default, while the click emitted an id derived from the
+ * SELECTION — so with the default on one profile and the pane on another model,
+ * the row rendered a filled pin reading "… is the default model" and clicking
+ * it MOVED the default to a different profile, leaving the pin filled so that
+ * nothing on screen changed.
+ *
+ * Both halves now name the same profile. A group that already owns the default
+ * renders an inert pin that says WHICH profile holds it; a group that does not
+ * offers to set the model's declared default profile, and says so — the row is
+ * the physical model, so pinning it can never store an alias the product says
+ * is never a default.
+ */
+function DefaultModelPin({
+  physical,
+  defaultModel,
+  onSetDefault,
+}: {
+  physical: PhysicalModel;
+  defaultModel?: string;
+  onSetDefault: (modelId: string) => void;
+}) {
+  const multiProfile = physical.profiles.length > 1;
+  // "Qwen3.8-27B is the default" does not say which Qwen3.8-27B, and the two
+  // differ in exactly the way that matters.
+  const nameOf = (profile: AgentModel) =>
+    multiProfile
+      ? `${physical.displayName} · ${behaviorProfileLabel(profile)}`
+      : physical.displayName;
+  const current = physical.profiles.find((profile) => profile.id === defaultModel);
+  return (
+    <button
+      type="button"
+      disabled={Boolean(current)}
+      onClick={() => onSetDefault(physical.primary.id)}
+      aria-label={
+        current
+          ? `${nameOf(current)} is the default model`
+          : `Set ${nameOf(physical.primary)} as default model`
+      }
+      title={current ? `Default model: ${nameOf(current)}` : "Set as default"}
+      className={cx(
+        "mr-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-(--dim) transition-colors focus-visible:outline-none",
+        current ? "cursor-default text-(--fg)" : "hover:bg-(--active) hover:text-(--fg)",
+      )}
+    >
+      <Pin className={cx("h-3.5 w-3.5", current && "fill-current")} strokeWidth={1.5} />
+    </button>
   );
 }
 
@@ -517,15 +668,32 @@ function handleMenuKeyDown(
   else setView("root");
 }
 
+/** ONE LABEL. The trigger names the physical model with the very string the
+ *  Model list renders, so the two halves of the same popover cannot disagree. */
 function modelTriggerLabel(
-  active: AgentModel | null,
+  selection: ModelSelection,
   selectedModel: string,
-  loading: boolean,
   modelCount: number,
 ): string {
   const fallbackLabel = selectedModel || (modelCount === 0 ? "No models" : "model");
-  if (loading) return active?.rawId || active?.name || fallbackLabel || "Loading…";
-  return active?.rawId || active?.name || fallbackLabel;
+  return selection.label || selection.active?.rawId || selection.active?.name || fallbackLabel;
+}
+
+function behaviorProfileLabel(model: AgentModel): string {
+  return model.behaviorProfileLabel || model.behaviorProfile || model.rawId || model.name;
+}
+
+function resolveModelSelection(models: AgentModel[], selectedModel: string): ModelSelection {
+  const active = models.find((model) => model.id === selectedModel) ?? null;
+  const physical = groupByPhysicalModel(models).find((group) => ownsProfile(group, selectedModel));
+  // A single-profile model still has a label — it just has no behaviour to pick.
+  const multiProfile = (physical?.profiles.length ?? 0) > 1;
+  return {
+    active,
+    label: physical?.displayName,
+    profiles: multiProfile && physical ? physical.profiles : [],
+    behaviorLabel: multiProfile && active ? behaviorProfileLabel(active) : undefined,
+  };
 }
 
 function controllerGroupKey(model: AgentModel): string {
@@ -533,14 +701,18 @@ function controllerGroupKey(model: AgentModel): string {
 }
 
 function groupModelsByController(models: AgentModel[]): ModelGroup[] {
-  const groups = new Map<string, ModelGroup>();
+  const groups = new Map<string, { key: string; name: string; models: AgentModel[] }>();
   for (const model of models) {
     const key = controllerGroupKey(model);
     const existing = groups.get(key);
     if (existing) existing.models.push(model);
     else groups.set(key, { key, name: model.controllerName ?? "local", models: [model] });
   }
-  return [...groups.values()];
+  return [...groups.values()].map((group) => ({
+    key: group.key,
+    name: group.name,
+    physicalModels: groupByPhysicalModel(group.models),
+  }));
 }
 
 function stopToolbarEvent(event: MouseEvent | PointerEvent) {
