@@ -16,6 +16,7 @@ import { writeJsonAtomic } from "./helpers/fs-json";
 import { log } from "./helpers/logger";
 import { isHttpUrl } from "./helpers/url";
 import { createMainWindow } from "./logic/window-manager";
+import { probeDictation, startDictation, stopDictation } from "./logic/dictation";
 import { registerNavigationPolicy } from "./logic/security";
 import { startFrontendServer, stopFrontendServer, type ServerHandle } from "./logic/app-server";
 import {
@@ -348,6 +349,25 @@ function registerIpcHandlers(): void {
       });
     },
   );
+
+  // DICTATION. Start/stop are invokes; the transcript arrives as events, because a partial
+  // that only shows up when the user stops speaking is not dictation, it is a slow upload.
+  ipcMain.handle("desktop:dictation-probe", async (_, locale: unknown) =>
+    probeDictation(typeof locale === "string" && locale ? locale : "pt-BR"),
+  );
+  ipcMain.handle("desktop:dictation-start", async (event, locale: unknown) =>
+    startDictation(typeof locale === "string" && locale ? locale : "pt-BR", (message) => {
+      // The window can close mid-utterance. Sending to a destroyed sender throws, and this
+      // callback runs from the helper's stdout, where a throw has nowhere to go.
+      if (!event.sender.isDestroyed()) {
+        event.sender.send("desktop:dictation-event", message);
+      }
+    }),
+  );
+  ipcMain.handle("desktop:dictation-stop", async (_, mode: unknown) => {
+    stopDictation(mode === "cancel" ? "cancel" : "stop");
+    return { ok: true };
+  });
 
   ipcMain.handle("desktop:list-projects", async () => listProjectsWithMeta());
 

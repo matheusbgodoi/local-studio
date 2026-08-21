@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
-import type { DesktopBridge } from "./interfaces";
+import type { DesktopBridge, DictationBridgeEvent } from "./interfaces";
 
 const bridge: DesktopBridge = {
   getRuntime: () => ipcRenderer.invoke("desktop:get-runtime"),
@@ -10,6 +10,20 @@ const bridge: DesktopBridge = {
   startUpdate: () => ipcRenderer.invoke("desktop:start-update"),
   openDirectory: () => ipcRenderer.invoke("desktop:open-directory"),
   getPathForFile: (file) => webUtils.getPathForFile(file),
+  probeDictation: (locale: string) => ipcRenderer.invoke("desktop:dictation-probe", locale),
+  startDictation: (locale: string) => ipcRenderer.invoke("desktop:dictation-start", locale),
+  stopDictation: (mode: "stop" | "cancel") => ipcRenderer.invoke("desktop:dictation-stop", mode),
+  /** Returns its own unsubscribe. The listener is removed by identity, not by wiping every
+   *  listener on the channel — a second composer would otherwise silence the first. */
+  onDictationEvent: (listener: (event: DictationBridgeEvent) => void) => {
+    const handler = (_: unknown, payload: DictationBridgeEvent) => listener(payload);
+    ipcRenderer.on("desktop:dictation-event", handler);
+    // Returns void, not the IpcRenderer that removeListener hands back, so the caller cannot
+    // accidentally depend on the chainable object leaking across the context bridge.
+    return () => {
+      ipcRenderer.removeListener("desktop:dictation-event", handler);
+    };
+  },
   listProjects: () => ipcRenderer.invoke("desktop:list-projects"),
   addProject: (directoryPath) => ipcRenderer.invoke("desktop:add-project", directoryPath),
   removeProject: (id) => ipcRenderer.invoke("desktop:remove-project", id),
