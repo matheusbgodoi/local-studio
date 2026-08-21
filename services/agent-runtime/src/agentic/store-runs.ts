@@ -30,8 +30,8 @@ export type TaskSeed = {
   id?: string;
   title: string;
   description: string;
-  dependencies: string[];
-  acceptance: AcceptanceCriterion[];
+  dependencies: readonly string[];
+  acceptance: readonly AcceptanceCriterion[];
 };
 
 const RUN_COLUMNS: Record<string, string> = {
@@ -231,7 +231,10 @@ export function createRunStore(context: AgenticStoreContext) {
 
   const updateTask = (
     id: string,
-    patch: Partial<AgenticTask> & { acceptance?: AcceptanceCriterion[]; evidence?: string[] },
+    patch: Partial<AgenticTask> & {
+      acceptance?: readonly AcceptanceCriterion[];
+      evidence?: readonly string[];
+    },
   ): AgenticTask => {
     const { assignments, values } = buildPatch(TASK_COLUMNS, patch as Record<string, unknown>);
     if (patch.acceptance !== undefined) {

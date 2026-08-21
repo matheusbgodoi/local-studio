@@ -16,10 +16,10 @@ import type {
   AgenticRun,
   AgenticRunStatus,
   AgenticTask,
+  AgenticTaskStatus,
   AgenticToolOperation,
   AgenticWorkingSet,
 } from "./contract";
-import type { AgenticTaskStatus } from "./dag";
 
 export type Row = Record<string, unknown>;
 

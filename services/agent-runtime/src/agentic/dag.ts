@@ -6,23 +6,12 @@
 // when a plan revision is validated, not discovered when the scheduler starves.
 //
 
-export const AGENTIC_TASK_STATUSES = [
-  "PENDING",
-  "READY",
-  "RUNNING",
-  "BLOCKED",
-  "WAITING_USER",
-  "SUCCEEDED",
-  "FAILED",
-  "CANCELLED",
-] as const;
-
-export type AgenticTaskStatus = (typeof AGENTIC_TASK_STATUSES)[number];
+import type { AgenticTaskStatus } from "../../../../shared/agent/agentic-run";
 
 export type TaskNode = {
   id: string;
   status: AgenticTaskStatus;
-  dependencies: string[];
+  dependencies: readonly string[];
 };
 
 export const TERMINAL_TASK_STATUSES: readonly AgenticTaskStatus[] = [
