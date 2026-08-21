@@ -1,8 +1,10 @@
 import type {
   UsageContextBucket,
   UsageEfficiency,
+  UsageEfficiencyRatios,
   UsageEnergy,
   UsageEnergyRates,
+  UsageFilterModel,
   UsageFilters,
   UsagePeriod,
   UsageSpeculative,
@@ -136,6 +138,31 @@ function nullableText(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+/**
+ * The picker's rows, or nothing.
+ *
+ * A row with no id cannot be sent as `?model=`, and a row whose label the host could not
+ * resolve falls back to the id — which is what a retired alias honestly is. Order is the
+ * host's: served first, then by the name the reader sees, which is the chat's own order.
+ */
+function normalizeFilterModels(value: unknown): UsageFilterModel[] {
+  return array(value).flatMap((entry) => {
+    const id = text(entry.id, "");
+    if (id === "") return [];
+    const aliases = strings(entry.aliases);
+    return [
+      {
+        id,
+        label: text(entry.label, id),
+        aliases: aliases.includes(id) ? aliases : [id, ...aliases],
+        // Retirement is asserted only when the host says so. A host that never learned
+        // about `served` leaves it undefined, and every model would read as retired.
+        served: entry.served !== false,
+      },
+    ];
+  });
+}
+
 function normalizeFilters(value: unknown): UsageFilters | undefined {
   const filters = record(value);
   if (Object.keys(filters).length === 0) return undefined;
@@ -149,6 +176,7 @@ function normalizeFilters(value: unknown): UsageFilters | undefined {
     model: text(filters.model, "all"),
     supported_periods: periods.length > 0 ? periods : [...USAGE_PERIODS],
     supported_models: strings(filters.supported_models),
+    models: normalizeFilterModels(filters.models),
     range: { first_day: nullableText(range.first_day), last_day: nullableText(range.last_day) },
     heatmap_range: {
       first_day: nullableText(heatmap.first_day),
@@ -259,10 +287,19 @@ function normalizeEnergy(value: unknown): UsageEnergy | undefined {
   const energy = record(value);
   if (Object.keys(energy).length === 0) return undefined;
   const totals = record(energy.totals);
+  const attribution = record(energy.attribution_model);
   return {
     available: energy.available === true,
+    attribution: {
+      inference_kwh: nullableNum(totals.inference_kwh),
+      other_gpu_work_kwh: nullableNum(totals.other_gpu_work_kwh),
+      idle_kwh: nullableNum(totals.idle_kwh),
+      models_without_floor: strings(attribution.models_without_floor),
+      inference_is_lower_bound: totals.inference_is_lower_bound === true,
+    },
     totals: {
       energy_kwh: nullableNum(totals.energy_kwh),
+      inference_kwh: nullableNum(totals.inference_kwh),
       measured_seconds: num(totals.measured_seconds),
       expected_seconds: num(totals.expected_seconds),
       coverage_pct: nullableNum(totals.coverage_pct),
@@ -277,6 +314,7 @@ function normalizeEnergy(value: unknown): UsageEnergy | undefined {
     daily: array(energy.daily).map((day) => ({
       date: text(day.date, ""),
       energy_kwh: nullableNum(day.energy_kwh),
+      inference_kwh: nullableNum(day.inference_kwh),
       measured_seconds: num(day.measured_seconds),
       expected_seconds: num(day.expected_seconds),
       coverage_pct: nullableNum(day.coverage_pct),
@@ -287,10 +325,30 @@ function normalizeEnergy(value: unknown): UsageEnergy | undefined {
     by_model: array(energy.by_model).map((model) => ({
       model: nullableText(model.model),
       energy_kwh: num(model.energy_kwh),
+      inference_kwh: nullableNum(model.inference_kwh),
+      other_gpu_work_kwh: nullableNum(model.other_gpu_work_kwh),
       measured_seconds: num(model.measured_seconds),
       avg_power_w: nullableNum(model.avg_power_w),
       peak_power_w: nullableNum(model.peak_power_w),
     })),
+  };
+}
+
+/**
+ * Both denominators off one row, and no arithmetic here.
+ *
+ * A missing `*_inference` stays null rather than falling back to the gross figure: the two
+ * differ by about 3x on the owner's own rig, and silently reading one under the other's
+ * label is the exact defect AI mode exists to fix.
+ */
+function ratios(row: UnknownRecord): UsageEfficiencyRatios {
+  return {
+    energy_kwh: nullableNum(row.energy_kwh),
+    inference_kwh: nullableNum(row.inference_kwh),
+    tokens_per_kwh: nullableNum(row.tokens_per_kwh),
+    kwh_per_million_processed: nullableNum(row.kwh_per_million_processed),
+    tokens_per_kwh_inference: nullableNum(row.tokens_per_kwh_inference),
+    kwh_per_million_processed_inference: nullableNum(row.kwh_per_million_processed_inference),
   };
 }
 
@@ -300,19 +358,17 @@ function normalizeEfficiency(value: unknown): UsageEfficiency | undefined {
   const totals = record(efficiency.totals);
   return {
     totals: {
+      ...ratios(totals),
       processed_tokens: num(totals.processed_tokens),
-      energy_kwh: nullableNum(totals.energy_kwh),
-      tokens_per_kwh: nullableNum(totals.tokens_per_kwh),
-      kwh_per_million_processed: nullableNum(totals.kwh_per_million_processed),
       coverage_pct: nullableNum(totals.coverage_pct),
       partial: totals.partial === true,
+      partial_inference: totals.partial_inference === true,
+      inference_is_lower_bound: totals.inference_is_lower_bound === true,
     },
     daily: array(efficiency.daily).map((day) => ({
+      ...ratios(day),
       date: text(day.date, ""),
       processed_tokens: num(day.processed_tokens),
-      energy_kwh: nullableNum(day.energy_kwh),
-      tokens_per_kwh: nullableNum(day.tokens_per_kwh),
-      kwh_per_million_processed: nullableNum(day.kwh_per_million_processed),
       coverage_pct: nullableNum(day.coverage_pct),
     })),
     by_model: array(efficiency.by_model).map((model) => ({
@@ -322,6 +378,14 @@ function normalizeEfficiency(value: unknown): UsageEfficiency | undefined {
       tokens_per_kwh: nullableNum(model.tokens_per_kwh),
       kwh_per_million_processed: nullableNum(model.kwh_per_million_processed),
     })),
+    by_physical_model: array(efficiency.by_physical_model).map((model) => ({
+      ...ratios(model),
+      model: text(model.model, "unknown"),
+      aliases: strings(model.aliases),
+      processed_tokens: num(model.processed_tokens),
+      idle_floor_w: nullableNum(model.idle_floor_w),
+      idle_floor_source: nullableText(model.idle_floor_source),
+    })),
   };
 }
 
@@ -329,13 +393,16 @@ function normalizeEnergyRates(value: unknown): UsageEnergyRates | undefined {
   const rates = record(value);
   if (Object.keys(rates).length === 0) return undefined;
 
-  // A rate is only a rate if BOTH sides are finite numbers. Half a measurement is not a
-  // measurement, and a model that arrives half-measured belongs with the unmeasured ones
-  // rather than on screen beside a number the reader would assume was checked.
+  // A rate is only a rate if BOTH sides are finite and POSITIVE. Half a measurement is not
+  // a measurement, and a model that arrives half-measured belongs with the unmeasured ones
+  // rather than on screen beside a number the reader would assume was checked. Zero or
+  // negative is a degenerate fit, not a free forward pass: prefilling a million tokens
+  // costs energy, and letting one through promotes it to a headline money figure whose
+  // hero bar is clamped to 2% so it still looks measured.
   const measured = array(rates.by_physical_model).flatMap((entry) => {
     const input = nullableNum(entry.wh_per_1m_input);
     const output = nullableNum(entry.wh_per_1m_output);
-    if (input === null || output === null) return [];
+    if (input === null || output === null || input <= 0 || output <= 0) return [];
     return [
       {
         model: text(entry.model, "unknown"),
