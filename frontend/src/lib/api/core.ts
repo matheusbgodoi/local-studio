@@ -109,9 +109,25 @@ export function createApiCore(params: {
     Boolean(headers["X-Backend-Url"]) &&
     !retriedWithoutBackendOverride;
 
-  const responseError = async (response: Response): Promise<Error> => {
-    const errorBody: unknown = await response.json().catch(() => ({ detail: "Request failed" }));
-    const error = new Error(formatHttpErrorMessage(response.status, errorBody));
+  const routeName = (endpoint: string): string =>
+    endpoint.startsWith(baseUrl) ? endpoint.slice(baseUrl.length) || "/" : endpoint;
+
+  const readErrorMessage = async (response: Response, endpoint: string): Promise<string> => {
+    const raw = (await response.text().catch(() => "")).trim();
+    const looksJson = raw.startsWith("{") || raw.startsWith("[");
+    let body: unknown = raw;
+    if (looksJson) {
+      try {
+        body = JSON.parse(raw) as unknown;
+      } catch {
+        body = raw;
+      }
+    }
+    return formatHttpErrorMessage(response.status, body, routeName(endpoint));
+  };
+
+  const responseError = async (response: Response, endpoint: string): Promise<Error> => {
+    const error = new Error(await readErrorMessage(response, endpoint));
     (error as Error & { status: number }).status = response.status;
     return error;
   };
@@ -217,7 +233,7 @@ export function createApiCore(params: {
             continue;
           }
 
-          lastError = await responseError(response);
+          lastError = await responseError(response, endpoint);
           if (shouldRetryAttempt(lastError, response.status, attempt, retries)) {
             await waitBeforeRetry(
               endpoint,
@@ -350,10 +366,7 @@ export function createApiCore(params: {
     });
 
     if (!response.ok || !response.body) {
-      const errorBody = await response.json().catch(() => ({ detail: "Request failed" }));
-      const errorMessage =
-        errorBody.detail || errorBody.error?.message || `HTTP ${response.status}`;
-      throw new Error(errorMessage);
+      throw new Error(await readErrorMessage(response, endpoint));
     }
 
     const reader = response.body.getReader();
@@ -404,10 +417,7 @@ export function createApiCore(params: {
     maybeClearInvalidBackendOverride(response);
 
     if (!response.ok || !response.body) {
-      const errorBody = await response.json().catch(() => ({ detail: "Request failed" }));
-      const errorMessage =
-        errorBody.detail || errorBody.error?.message || `HTTP ${response.status}`;
-      throw new Error(errorMessage);
+      throw new Error(await readErrorMessage(response, endpoint));
     }
 
     const runId = response.headers.get("x-run-id");
