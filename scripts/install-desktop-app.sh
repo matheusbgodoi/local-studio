@@ -14,12 +14,14 @@ RELEASE_MOUNT=""
 channel="stable"
 keep_backup=1
 mode="install"
+allow_upstream="${LOCAL_STUDIO_ALLOW_UPSTREAM_RELEASE:-0}"
 
 for arg in "$@"; do
   case "$arg" in
     stable|dev) channel="$arg" ;;
     --no-backup) keep_backup=0 ;;
     --migrate-rollbacks) mode="migrate" ;;
+    --from-upstream-release) allow_upstream=1 ;;
     *) echo "error: unknown argument $arg" >&2; exit 2 ;;
   esac
 done
@@ -180,7 +182,39 @@ SWAP_VERIFIED=0
 TARGET_INSTALLED=0
 trap cleanup_temporary_paths EXIT
 
+# THE UPSTREAM RELEASE IS OPT-IN, AND IT IS NOT THIS PRODUCT.
+#
+# `stable` with no built bundle used to silently download
+# sybil-solutions/local-studio's DMG and install it over the owner fork. That is not a
+# different version of the same app: in the published DMG the Pi packages are bundled into
+# standalone.mjs instead of existing as real directories, so Pi's extension loader resolves
+# none of them, getAliases() throws, and EVERY extension fails to load — MCP connectors
+# included. It was measured on 2026-08-18 and it is written up in
+# docs/33-installation-policy.md as "the upstream DMG is never installed over it".
+#
+# The operator who hits this path is not asking for upstream. They forgot to build, or the
+# build failed. Downloading a different product for them is the wrong answer to that.
+if [[ "$channel" == "stable" && -z "$BUILT" && "$allow_upstream" != "1" ]]; then
+  cat >&2 <<'NOBUILD'
+error: no built bundle, and this installer will NOT fetch the upstream release for you.
+
+       The upstream DMG is a DIFFERENT PRODUCT: its Pi packages are bundled into
+       standalone.mjs rather than being real directories, so every extension — MCP
+       connectors included — fails to load. See docs/33-installation-policy.md.
+
+       Build the owner fork first:
+           npm --prefix frontend run desktop:dist
+       then install the exact bundle it produced:
+           LOCAL_STUDIO_BUILT_APP="$PWD/frontend/dist-desktop/mac-arm64/Local Studio.app" \
+             scripts/install-desktop-app.sh
+
+       If you genuinely want upstream, say so: --from-upstream-release
+NOBUILD
+  exit 2
+fi
+
 if [[ "$channel" == "stable" && -z "$BUILT" ]]; then
+  echo "==> WARNING: installing the UPSTREAM release, not the owner fork (--from-upstream-release)" >&2
   RELEASE_TEMP="$(mktemp -d "${TMPDIR:-/tmp}/local-studio-release.XXXXXX")"
   RELEASE_MOUNT="$RELEASE_TEMP/mount"
   release_dmg="$RELEASE_TEMP/Local-Studio-arm64.dmg"
@@ -216,15 +250,39 @@ if [[ "$BUILT" != /* ]]; then
   exit 2
 fi
 
-codesign --verify --deep --strict "$BUILT"
-if [[ "$channel" == "stable" ]]; then
+# `--deep --strict` CANNOT PASS FOR ANY BUNDLE THIS PROJECT BUILDS, and a gate that always
+# fails is not protecting anything — it is only steering the operator toward the upstream
+# download. Measured on both the freshly built bundle and the one already installed:
+#
+#     codesign --verify                       exit 0
+#     codesign --verify --strict              exit 1
+#     codesign --verify --deep                exit 1
+#     codesign --verify --deep --strict       exit 1   "invalid destination for symbolic link"
+#
+# The symlinks it objects to are the ordinary `Versions/Current` layout inside
+# Electron Framework.framework and friends. Apple's own guidance is that `--deep` is not the
+# right tool for verification; the question worth asking of a bundle we are about to copy into
+# /Applications is "is it validly signed and unmodified since signing", and that is
+# `codesign --verify`. The bundle identifier and the executable are checked separately above.
+codesign --verify "$BUILT"
+# GATEKEEPER ASSESSMENT IS FOR SOMETHING THAT CAME OFF THE INTERNET.
+#
+# `spctl --assess --type execute` asks "would macOS let a user open this download?", and the
+# honest answer for a locally built, ad-hoc-signed bundle is no — measured: the currently
+# installed owner build is `rejected` by exactly this check. Running it on our own build meant
+# `stable` REJECTED the owner fork while happily accepting the upstream download, which is
+# half of how upstream ended up installed over it.
+#
+# The signature is still verified for every bundle, one line above. The notarisation gate now
+# applies only to the release path, where it is the right question.
+if [[ -n "$RELEASE_MOUNT" ]]; then
   spctl --assess --type execute "$BUILT"
 fi
 mkdir -p "$INSTALL_ROOT" "$ROLLBACK_ROOT"
 rm -rf "$STAGED" "$REPLACED"
 
 ditto "$BUILT" "$STAGED"
-codesign --verify --deep --strict "$STAGED"
+codesign --verify "$STAGED"
 cleanup_release_source
 
 if [[ -d "$TARGET" && "$keep_backup" == "1" ]]; then
@@ -264,8 +322,11 @@ fi
 
 mv "$STAGED" "$TARGET"
 TARGET_INSTALLED=1
-codesign --verify --deep --strict "$TARGET"
-if [[ "$channel" == "stable" ]]; then
+codesign --verify "$TARGET"   # see the note above: --deep --strict never passes for an Electron bundle
+# Same reasoning as the pre-install assessment: Gatekeeper answers "would macOS let a user open
+# this DOWNLOAD", and a locally built, ad-hoc-signed bundle is correctly `rejected`. Asking it
+# of our own build made `stable` refuse the owner fork after having already installed it.
+if [[ -n "$RELEASE_MOUNT" ]]; then
   spctl --assess --type execute "$TARGET"
 fi
 SWAP_VERIFIED=1
