@@ -181,7 +181,25 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
       summary: reason,
     });
 
-    const outcome = await runCompaction(session, rendered, store.now(), store.now);
+    let outcome;
+    try {
+      outcome = await runCompaction(session, rendered, store.now(), store.now);
+    } catch (error) {
+      //
+      // A backend may refuse to compact a session it considers too short,
+      // whatever its token count. That means no headroom can be created here,
+      // not that the goal is over: the rebuilt working set is still the right
+      // prompt, and the loop guard is what stops a refusal repeating forever.
+      //
+      const message = error instanceof Error ? error.message : String(error);
+      store.appendEvent({
+        runId: run.id,
+        taskId: task?.id ?? null,
+        type: "COMPACTION_REFUSED",
+        summary: message,
+      });
+      return { prompt: rendered, effective: false };
+    }
     const checkpoint = store.recordCheckpoint({
       runId: run.id,
       taskId: task?.id ?? null,

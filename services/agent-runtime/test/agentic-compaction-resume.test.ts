@@ -207,6 +207,65 @@ describe("context pressure checkpoints, compacts and resumes the same task by it
     }
   });
 
+  //
+  // Found by a real-Qwen run: the backend refuses to compact a session it
+  // considers too short, whatever its token count. A refusal means no headroom
+  // can be created here, not that the goal is over — so the run carries on
+  // with the rebuilt working set and only gives up if it keeps happening.
+  //
+  test("a backend that refuses to compact does not end the run", async () => {
+    const harness = createHarness({
+      model: { contextWindow: 9_000, maxTokens: 2_000 },
+      backend: { ...longTaskBackend(), compactionError: "Nothing to compact (session too small)" },
+    });
+    try {
+      const { run } = await startLongTask(harness);
+      const refusalsAfterEachTurn = [];
+      for (let turn = 0; turn < 8; turn += 1) {
+        await harness.service.onTurnSettled(run.id);
+        const refusals = harness.store
+          .listEvents(run.id)
+          .filter((event) => event.type === "COMPACTION_REFUSED");
+        refusalsAfterEachTurn.push({
+          refusals: refusals.length,
+          status: harness.store.requireRun(run.id).status,
+          prompts: harness.backend.promptsSent.length,
+        });
+        if (refusals.length === 1) break;
+      }
+
+      const first = refusalsAfterEachTurn[refusalsAfterEachTurn.length - 1];
+      expect(first?.refusals).toBe(1);
+      expect(first?.status).toBe("RUNNING");
+      expect(first?.prompts).toBeGreaterThan(1);
+      expect(
+        harness.store.listEvents(run.id).find((event) => event.type === "COMPACTION_REFUSED")?.summary,
+      ).toContain("too small");
+    } finally {
+      harness.dispose();
+    }
+  });
+
+  test("a backend that always refuses eventually gives up rather than looping", async () => {
+    const harness = createHarness({
+      model: { contextWindow: 9_000, maxTokens: 2_000 },
+      backend: {
+        ...longTaskBackend(),
+        baseTokens: 6_000,
+        compactionError: "Nothing to compact (session too small)",
+        fallback: () => ({ text: "still working", ...GROWTH }),
+      },
+    });
+    try {
+      const { run } = await startLongTask(harness);
+      const settled = await driveToSettled(harness, run.id, 40);
+      expect(settled.status).toBe("FAILED");
+      expect(settled.steps).toBeLessThan(40);
+    } finally {
+      harness.dispose();
+    }
+  });
+
   test("a window wide enough for the whole run compacts nothing and still finishes", async () => {
     const harness = createHarness({
       model: { contextWindow: 262_144, maxTokens: 32_768 },

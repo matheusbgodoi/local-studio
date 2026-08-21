@@ -31,6 +31,7 @@ export type FakeBackendOptions = {
   fallback?: (turnIndex: number) => ScriptedTurn;
   compactionFloorTokens?: number;
   ineffectiveCompaction?: boolean;
+  compactionError?: string;
   startIndex?: number;
 };
 
@@ -82,6 +83,7 @@ export function createFakeBackend(options: FakeBackendOptions): FakeBackend {
       lastUsage = { input: inputTokens, output: outputTokens, cache: 0 };
     },
     compact: async (instructions: string): Promise<void> => {
+      if (options.compactionError) throw new Error(options.compactionError);
       const before = activeTokens;
       const after = options.ineffectiveCompaction
         ? before
