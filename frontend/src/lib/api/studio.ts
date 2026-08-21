@@ -58,6 +58,10 @@ export interface RuntimeJobResponse {
 
 const bundledModelIndex = Schema.decodeUnknownSync(ModelIndexSchema)(bundledModelIndexSource);
 
+export type ModelIndexSource = "controller" | "bundled";
+
+export type ModelIndexResult = ModelIndexResponse & { source: ModelIndexSource };
+
 const hasStatus = (error: unknown, status: number): boolean =>
   error instanceof Error && (error as Error & { status?: number }).status === status;
 
@@ -85,12 +89,13 @@ export function createStudioApi(core: ApiCore) {
 
     getStudioStorage: (): Promise<StorageInfo> => core.request("/studio/storage"),
 
-    getModelIndex: async (options?: RequestOptions): Promise<ModelIndexResponse> => {
+    getModelIndex: async (options?: RequestOptions): Promise<ModelIndexResult> => {
       try {
-        return await core.request("/studio/model-index", options);
+        const index = await core.request<ModelIndexResponse>("/studio/model-index", options);
+        return { ...index, source: "controller" };
       } catch (error) {
         if (!hasStatus(error, 404)) throw error;
-        return bundledModelIndex;
+        return { ...bundledModelIndex, source: "bundled" };
       }
     },
 

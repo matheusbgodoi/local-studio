@@ -63,6 +63,9 @@ export interface AgentModel {
    *  there and true here. */
   nativeReasoning?: boolean;
   thinkingLevels?: AgentThinkingLevel[];
+  /** The server's statement that this row accepts tool calls. Wire-only:
+   *  absent when the controller does not publish it, never guessed from a name. */
+  tools?: boolean;
   vision: boolean;
   active: boolean;
 }
@@ -302,6 +305,7 @@ export function normalizeOpenAIModel(model: OpenAIModelListItem): AgentModel {
     maxTokens,
     reasoning: resolveReasoning(model, metadata, id),
     nativeReasoning: resolveExtraBoolean(model, metadata, "nativeReasoning"),
+    tools: resolveExtraBoolean(model, metadata, "tools"),
     vision: resolveModelVision({
       identifiers: [id],
       metadata,

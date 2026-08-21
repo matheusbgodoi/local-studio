@@ -10,7 +10,7 @@ import { cx } from "@/ui/utils";
 import api from "@/lib/api/client";
 import type {
   ModelIndexModel,
-  ModelIndexResponse,
+  ModelIndexResult,
   ModelIndexTier,
   ModelIndexVariant,
   ModelIndexVariantFormat,
@@ -54,7 +54,7 @@ function formatContextTokens(tokens: number): string {
 }
 
 export function useModelIndex() {
-  const [data, setData] = useState<ModelIndexResponse | null>(null);
+  const [data, setData] = useState<ModelIndexResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 

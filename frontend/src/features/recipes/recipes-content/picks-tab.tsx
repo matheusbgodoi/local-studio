@@ -4,10 +4,41 @@ import { useCallback } from "react";
 import { RefreshCw } from "@/ui/icon-registry";
 import { ModelButton } from "@/ui";
 import { cx } from "@/ui/utils";
-import type { ModelIndexVariant } from "@/lib/api/studio";
+import type { ModelIndexResult, ModelIndexVariant } from "@/lib/api/studio";
 import { useDownloads } from "@/hooks/use-downloads";
-import { ModelRow, ModelSection, ModelStatus, ModelValue } from "./model-page";
+import {
+  ModelRow,
+  ModelSection,
+  ModelStatus,
+  ModelValue,
+  type ModelStatusTone,
+} from "./model-page";
 import { TierSection, useHardwareProfile, useModelIndex } from "./picks-shared";
+
+type CatalogSummary = { tone: ModelStatusTone; label: string; provenance: string | null };
+
+function catalogSummary(
+  data: ModelIndexResult | null,
+  tierCount: number,
+  loading: boolean,
+  error: string | null,
+): CatalogSummary {
+  if (error) return { tone: "danger", label: "error", provenance: null };
+  if (loading) return { tone: "info", label: "loading", provenance: null };
+  if (!data) return { tone: "default", label: "empty", provenance: null };
+  if (data.source === "bundled") {
+    return {
+      tone: "warning",
+      label: "bundled catalog",
+      provenance: `Shipped with the app on ${data.updated} — this backend has no /studio/model-index, so nothing here reflects it`,
+    };
+  }
+  return {
+    tone: tierCount ? "good" : "default",
+    label: tierCount ? `${tierCount} tiers` : "empty",
+    provenance: `Catalog updated ${data.updated}`,
+  };
+}
 
 export function PicksTab() {
   const { data, loading, error, refresh } = useModelIndex();
@@ -16,6 +47,7 @@ export function PicksTab() {
     downloadsByModel,
     startingModelIds,
     error: downloadError,
+    unsupported: downloadsUnsupported,
     startDownload,
   } = useDownloads();
 
@@ -30,25 +62,16 @@ export function PicksTab() {
   );
 
   const tiers = data?.tiers ?? [];
+  const summary = catalogSummary(data, tiers.length, loading, error);
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2.5">
-          <ModelStatus
-            tone={error ? "danger" : loading ? "info" : tiers.length ? "good" : "default"}
-          >
-            {error
-              ? "error"
-              : loading
-                ? "loading"
-                : tiers.length
-                  ? `${tiers.length} tiers`
-                  : "empty"}
-          </ModelStatus>
-          {data?.updated ? (
+          <ModelStatus tone={summary.tone}>{summary.label}</ModelStatus>
+          {summary.provenance ? (
             <span className="text-[length:var(--fs-sm)] text-(--ui-muted)">
-              Catalog updated {data.updated}
+              {summary.provenance}
             </span>
           ) : null}
           {hardware.poolGb > 0 ? (
@@ -64,7 +87,16 @@ export function PicksTab() {
       </div>
 
       {downloadError ? (
-        <div className="text-[length:var(--fs-sm)] text-(--err)">{downloadError}</div>
+        <div
+          className={cx(
+            "text-[length:var(--fs-sm)]",
+            downloadsUnsupported ? "text-(--ui-muted)" : "text-(--err)",
+          )}
+        >
+          {downloadsUnsupported
+            ? `Downloads are unavailable on this backend — ${downloadError}`
+            : downloadError}
+        </div>
       ) : null}
 
       {loading && tiers.length === 0 ? (
