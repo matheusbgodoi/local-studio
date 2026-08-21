@@ -15,6 +15,12 @@ import type { Session, UpdateSession } from "@/features/agent/runtime/types";
 import type { AgentModel } from "@/features/agent/workspace/types";
 import { AgentModelPicker } from "@/features/agent/ui/agent-model-picker";
 import { ChatPane } from "@/features/agent/ui/chat-pane";
+import { thinkingAfterModelSelection } from "@/features/agent/messages/thinking-level-pref";
+import {
+  browserThinkingStorage,
+  readModelThinkingLevel,
+  writeModelThinkingLevel,
+} from "@/features/agent/workspace/thinking-level-preference";
 
 const LazyAgentBrowser = lazy(() =>
   import("@/features/agent/ui/agent-browser").then(({ AgentBrowser }) => ({
@@ -130,9 +136,33 @@ function SideChatTab({
           <AgentModelPicker
             models={models}
             selectedModel={modelId}
-            onSelect={(nextModelId) =>
-              onUpdateSideChatTabs((tabs) => tabs.map((tab) => ({ ...tab, modelId: nextModelId })))
-            }
+            onSelect={(selection) => {
+              // The same rule as the main panes, applied by hand because these tabs
+              // live outside the workspace reducer: setting modelId alone left a tab
+              // whose thinkingLevel was never saved falling back to the incoming
+              // alias's key, so a behaviour switch reset the effort here too.
+              const levels = models.find((model) => model.id === selection.modelId)
+                ?.thinkingLevels ?? ["off"];
+              const thinking = thinkingAfterModelSelection(
+                selection,
+                levels,
+                readModelThinkingLevel(browserThinkingStorage(), selection.modelId),
+              );
+              onUpdateSideChatTabs((tabs) =>
+                tabs.map((tab) => ({
+                  ...tab,
+                  modelId: selection.modelId,
+                  thinkingLevel: thinking.level,
+                })),
+              );
+              if (thinking.remember) {
+                writeModelThinkingLevel(
+                  browserThinkingStorage(),
+                  selection.modelId,
+                  thinking.level,
+                );
+              }
+            }}
             loading={modelsLoading}
             {...reasoning}
           />

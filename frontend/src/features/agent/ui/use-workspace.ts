@@ -41,7 +41,12 @@ import {
   readAndMigrateDefaultAgentModel,
   writeDefaultAgentModel,
 } from "@/features/agent/workspace/model-preference";
-import { readModelThinkingLevel } from "@/features/agent/workspace/thinking-level-preference";
+import {
+  readModelThinkingLevel,
+  writeModelThinkingLevel,
+} from "@/features/agent/workspace/thinking-level-preference";
+import { thinkingAfterModelSelection } from "@/features/agent/messages/thinking-level-pref";
+import type { AgentModelSelection } from "@shared/agent/models";
 import type { AgentThinkingLevel } from "@/features/agent/contracts";
 
 export type WorkspaceHandles = {
@@ -62,7 +67,7 @@ export type WorkspaceHandles = {
     side: "a" | "b",
     payload: SessionDropPayload,
   ) => void;
-  selectPaneModel: (paneId: PaneId, modelId: string) => void;
+  selectPaneModel: (paneId: PaneId, selection: AgentModelSelection) => void;
   setDefaultModel: (modelId: string) => void;
   notifySessionsChanged: () => void;
   startComputerResize: (event: ReactMouseEvent<HTMLDivElement>) => void;
@@ -217,6 +222,9 @@ export function useWorkspace({ ephemeral = false }: UseWorkspaceOptions = {}): U
       dispatch({ type: "setError", error: "" });
       void loadAgentModelsPayload()
         .then((models) => {
+          // Restoring the last-used model also restores THAT model's level: the
+          // catalogue arrives, selectedModel settles on the remembered id, and the
+          // seed a fresh session opens at follows it from the per-model store.
           dispatch({
             type: "setModels",
             models: models.models ?? [],
@@ -252,9 +260,6 @@ export function useWorkspace({ ephemeral = false }: UseWorkspaceOptions = {}): U
     };
   }, [dispatch]);
 
-  // Restoring the last-used model must also restore THAT model's level: on app
-  // start the catalogue arrives, selectedModel settles on the remembered id, and
-  // the seed a fresh session opens at follows it here.
   const handles = useMemo<WorkspaceHandles>(
     () => ({
       registerComputerAside: (element: HTMLElement | null) => {
@@ -306,19 +311,40 @@ export function useWorkspace({ ephemeral = false }: UseWorkspaceOptions = {}): U
           newPaneId: newPaneId(),
           tab: makeFreshTab(),
         }),
-      selectPaneModel: (paneId: PaneId, modelId: string) => {
+      selectPaneModel: (paneId: PaneId, selection: AgentModelSelection) => {
+        const { modelId } = selection;
+        const storage = ephemeral ? createMemoryStorage() : window.localStorage;
         // LAST USED IS THE DEFAULT. Picking a model in any pane also records it as the
         // workspace default, so a new pane, a new session and the next app start all open
-        // on the model actually used last instead of on a hardcoded one.
-        writeDefaultAgentModel(ephemeral ? createMemoryStorage() : window.localStorage, modelId);
-        // A THINKING LEVEL BELONGS TO ITS MODEL. Switching models restores the level this
-        // pane last used ON THE MODEL BEING SWITCHED TO — Off when that model has never
-        // had one — so no model ever inherits the level of the model it replaced.
+        // on the model actually used last instead of on a hardcoded one. A behaviour pick
+        // records it too, so the profile you were last on is the one a fresh pane opens at.
+        //
+        // NOT within this session, though, and the distinction is worth keeping straight:
+        // this writes STORAGE, while the `defaultModel` the picker hands resolveProfileId
+        // comes from `state.selectedModel`, which only `setDefaultModel` dispatches. So a
+        // detour to another model and back lands on the profile resolveProfileId picks from
+        // the UNCHANGED in-session default — this write changes where the NEXT app start
+        // opens, not where a return trip inside this one lands.
+        writeDefaultAgentModel(storage, modelId);
+        // `?? ["off"]` is the ladder ChatPane is handed for the same row, so this cannot
+        // disagree with the pane about which levels exist.
+        const levels = stateRef.current.models.find((model) => model.id === modelId)
+          ?.thinkingLevels ?? ["off"];
+        const thinking = thinkingAfterModelSelection(
+          selection,
+          levels,
+          adoptModelThinkingLevel(modelId),
+        );
         dispatch({
           type: "patchActiveTab",
           paneId,
-          patch: { modelId, thinkingLevel: adoptModelThinkingLevel(modelId) },
+          patch: { modelId, thinkingLevel: thinking.level },
         });
+        // PIN THE CARRIED LEVEL UNDER THE ALIAS IT LANDED ON — the session is only half of
+        // it. The pane's level falls back to the per-alias store whenever the session never
+        // saved one, so an unwritten key sends the effort back to Off the next time this
+        // pane leaves the model and returns, and on the next app start.
+        if (thinking.remember) writeModelThinkingLevel(storage, modelId, thinking.level);
       },
       setDefaultModel: (modelId: string) => {
         writeDefaultAgentModel(ephemeral ? createMemoryStorage() : window.localStorage, modelId);

@@ -20,6 +20,7 @@ import {
   isNativeAlwaysOnThinkingModel,
   physicalModelOwnsProfile as ownsProfile,
   resolveProfileId,
+  type AgentModelSelection,
   type PhysicalModel,
 } from "@shared/agent/models";
 
@@ -27,7 +28,7 @@ type AgentModelPickerProps = {
   models: AgentModel[];
   selectedModel: string;
   defaultModel?: string;
-  onSelect: (id: string) => void;
+  onSelect: (selection: AgentModelSelection) => void;
   onSetDefault?: (id: string) => void;
   loading: boolean;
   reasoningLevel?: AgentThinkingLevel;
@@ -37,6 +38,10 @@ type AgentModelPickerProps = {
 };
 
 type ModelGroup = { key: string; name: string; physicalModels: PhysicalModel[] };
+/** Every list in this popover emits a pick AND what that pick means, so a list
+ *  added later cannot quietly reintroduce a profile switch that reads as a model
+ *  switch. */
+type SelectModel = (modelId: string, physicalModel: AgentModelSelection["physicalModel"]) => void;
 type ModelSelection = {
   active: AgentModel | null;
   /** The physical model's one label — the same string the Model list renders. */
@@ -106,11 +111,15 @@ export function AgentModelPicker({
   const disabled = loading;
   const modelLabel = modelTriggerLabel(selection, selectedModel, visible.controllerModels.length);
   // ONE TURN LOCK, TWO LISTS. `reasoningDisabled` is Boolean(running) at the call
-  // site. The Behavior list has to freeze with the Reasoning list, not beside it:
-  // picking a profile goes through selectPaneModel, whose patch also rewrites
-  // thinkingLevel — levels are stored per model id and the aliases are separate
-  // keys — so an unlocked Behavior list is a way to change the reasoning level
-  // mid-turn while the Reasoning control next to it is greyed out.
+  // site, and the Behavior list freezes with it. No longer because picking a
+  // profile moves the reasoning level — the pick now states that the checkpoint is
+  // unchanged and the level is carried across — but because the alias is read
+  // again while the turn runs: the queued send, a steer, a follow-up, a retry and
+  // a compaction all send with the session's current modelId, so flipping Standard
+  // to Uncensored mid-turn answers the rest of that turn with the ablated weights
+  // and splits one turn across two rows in Usage, which attributes per alias. The
+  // Model list carries the same hazard and is not locked; that gap is older and
+  // wider than this control and is not narrowed here.
   const turnRunning = reasoningDisabled;
   const supportsReasoning = Boolean(reasoningLevel && onSelectReasoning);
   const requestedReasoning = reasoningLevel ?? "off";
@@ -125,12 +134,19 @@ export function AgentModelPicker({
     setOpen(false);
     setView("root");
   }, []);
+  // ONE FUNNEL, TWO MEANINGS, AND THE ROW KNOWS WHICH. The Behavior list and the
+  // Model list both end here, so the callee cannot tell a behaviour switch from a
+  // model switch unless the row says. The Behavior list knows it structurally —
+  // every row it draws is a profile of the group that owns the selection — and
+  // the Model list already computed it for its checkmark. `effectiveReasoning` is
+  // attached here because this is the level the trigger is displaying; the lists
+  // never see it.
   const select = useCallback(
-    (modelId: string) => {
-      onSelect(modelId);
+    (modelId: string, physicalModel: AgentModelSelection["physicalModel"]) => {
+      onSelect({ modelId, physicalModel, thinkingLevel: effectiveReasoning });
       close();
     },
-    [close, onSelect],
+    [close, onSelect, effectiveReasoning],
   );
 
   return (
@@ -317,7 +333,7 @@ function ModelList({
   showOtherModels: boolean;
   otherModelCount: number;
   onBack?: () => void;
-  onSelect: (modelId: string) => void;
+  onSelect: SelectModel;
   onSetDefault?: (modelId: string) => void;
   onToggleOtherModels: () => void;
   onClose: () => void;
@@ -408,7 +424,7 @@ function BehaviorList({
   selectedModel: string;
   disabled: boolean;
   onBack: () => void;
-  onSelect: (modelId: string) => void;
+  onSelect: SelectModel;
 }) {
   if (profiles.length < 2) return null;
   return (
@@ -421,7 +437,7 @@ function BehaviorList({
             label={behaviorProfileLabel(profile)}
             selected={profile.id === selectedModel}
             disabled={disabled}
-            onSelect={() => onSelect(profile.id)}
+            onSelect={() => onSelect(profile.id, "unchanged")}
           />
         ))}
       </div>
@@ -539,7 +555,7 @@ function ModelOptions({
   physicalModels: PhysicalModel[];
   selectedModel: string;
   defaultModel?: string;
-  onSelect: (modelId: string) => void;
+  onSelect: SelectModel;
   onSetDefault?: (modelId: string) => void;
 }) {
   return physicalModels.map((physical) => (
@@ -564,7 +580,7 @@ function ModelOption({
   physical: PhysicalModel;
   selectedModel: string;
   defaultModel?: string;
-  onSelect: (modelId: string) => void;
+  onSelect: SelectModel;
   onSetDefault?: (modelId: string) => void;
 }) {
   // The label the shared layer computed. Recomputing it here is how the popover
@@ -583,7 +599,12 @@ function ModelOption({
         type="button"
         role="menuitemradio"
         aria-checked={selected}
-        onClick={() => onSelect(targetId)}
+        // `selected` is the same binding that draws the checkmark, so the arm cannot disagree
+        // with what the row shows. Clicking the row that is ALREADY checked reports
+        // "unchanged" and therefore files the displayed level under the alias it is already
+        // on — a write on a visual no-op, and deliberate: the level shown is the level in
+        // use, and pinning it is the same thing the pane does when the level itself changes.
+        onClick={() => onSelect(targetId, selected ? "unchanged" : "changed")}
         className="flex min-h-8 min-w-0 flex-1 items-center gap-2 rounded-lg pl-2.5 text-left focus-visible:outline-none active:translate-y-px"
       >
         <span className="min-w-0 flex-1 truncate" title={label}>

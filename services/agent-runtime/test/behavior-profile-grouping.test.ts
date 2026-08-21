@@ -7,7 +7,13 @@ import {
   resolveProfileId,
   resolveThinkingContract,
   type AgentModel,
+  type AgentModelSelection,
 } from "../../../shared/agent/models";
+import { thinkingAfterModelSelection } from "../../../frontend/src/features/agent/messages/thinking-level-pref";
+import {
+  readModelThinkingLevel,
+  writeModelThinkingLevel,
+} from "../../../frontend/src/features/agent/workspace/thinking-level-preference";
 import { controllerModelThinkingLevels } from "../src/pi-runtime-models";
 
 // The rows the gateway serves today: three physical models, four aliases. The
@@ -70,6 +76,14 @@ const LIVE_MODELS = {
     },
   ],
 };
+
+/** The ladder the agent-runtime layer resolves for a row — what lands in
+ *  AgentModel.thinkingLevels, and what the picker offers. */
+const ladderFor = (model: AgentModel) =>
+  controllerModelThinkingLevels(model.reasoning, model.rawId ?? model.id, {
+    physicalModelId: model.physicalModelId,
+    nativeReasoning: model.nativeReasoning,
+  });
 
 function agentModel(overrides: Partial<AgentModel> & { id: string }): AgentModel {
   return {
@@ -366,11 +380,6 @@ describe("resolveProfileId", () => {
 
 // D7. The thinking contract follows the checkpoint, not the alias string.
 describe("one physical model, one thinking ladder", () => {
-  const ladderFor = (model: AgentModel) =>
-    controllerModelThinkingLevels(model.reasoning, model.rawId ?? model.id, {
-      physicalModelId: model.physicalModelId,
-      nativeReasoning: model.nativeReasoning,
-    });
   const rowsById = Object.fromEntries(
     normalizeOpenAIModels(LIVE_MODELS).map((model) => [model.id, model]),
   );
@@ -428,5 +437,147 @@ describe("one physical model, one thinking ladder", () => {
     ]);
     expect(controllerModelThinkingLevels(true, "some-reasoner")).toEqual(["high", "max"]);
     expect(controllerModelThinkingLevels(false, "some-reasoner")).toEqual(["off"]);
+  });
+});
+
+// D8. Changing the BEHAVIOUR must change nothing but the behaviour.
+//
+// The picker's Behavior list and its Model list funnelled into one callback, so
+// every pick adopted the level filed under the id being switched TO. Levels are
+// filed per alias, and two profiles of one checkpoint are two keys, so choosing
+// Uncensored on a pane running at Medium reset it to Off — the never-written
+// default of a key that names a LoRA scale rather than a model. The pick now
+// states whether the checkpoint changed, and the rule below is the only place
+// that decides what that means for the effort.
+describe("a behaviour profile is not a model", () => {
+  const rows = normalizeOpenAIModels(LIVE_MODELS);
+  const qwen = groupByPhysicalModel(rows).find((group) => group.profiles.length > 1)!;
+  // Derived, never named: the pair is "the checkpoint that serves two profiles",
+  // which is the same statement the product makes on the wire.
+  const standard = qwen.primary;
+  const uncensored = qwen.profiles.find((profile) => profile.id !== standard.id)!;
+  const otherModel = rows.find((row) => row.physicalModelId !== qwen.physicalModelId)!;
+
+  function memoryStorage() {
+    const entries = new Map<string, string>();
+    return {
+      entries,
+      getItem: (key: string) => entries.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        entries.set(key, value);
+      },
+    };
+  }
+
+  // Both picker mounts do exactly this: resolve the level for the row picked,
+  // then file it under that row when the rule calls it a preference. The write is
+  // half the fix and lives here so it is pinned rather than reviewed —
+  // persistThinkingLevelByModel deliberately skips a level that did not change,
+  // and a carried level never changes.
+  function pick(
+    storage: ReturnType<typeof memoryStorage>,
+    target: AgentModel,
+    selection: Omit<AgentModelSelection, "modelId">,
+  ) {
+    const result = thinkingAfterModelSelection(
+      { ...selection, modelId: target.id },
+      ladderFor(target),
+      readModelThinkingLevel(storage, target.id),
+    );
+    if (result.remember) writeModelThinkingLevel(storage, target.id, result.level);
+    return result.level;
+  }
+
+  test("switching behaviour keeps the effort the pane is running at", () => {
+    const storage = memoryStorage();
+    writeModelThinkingLevel(storage, standard.id, "medium");
+    // What the old rule read, and what it reset the pane to.
+    expect(readModelThinkingLevel(storage, uncensored.id)).toBe("off");
+
+    expect(pick(storage, uncensored, { physicalModel: "unchanged", thinkingLevel: "medium" })).toBe(
+      "medium",
+    );
+    // And back, with the profile the user left still remembering its own answer.
+    expect(pick(storage, standard, { physicalModel: "unchanged", thinkingLevel: "medium" })).toBe(
+      "medium",
+    );
+  });
+
+  test("the carried effort does not snap back on the next switch", () => {
+    const storage = memoryStorage();
+    writeModelThinkingLevel(storage, standard.id, "xhigh");
+    pick(storage, uncensored, { physicalModel: "unchanged", thinkingLevel: "xhigh" });
+
+    // The alias now HAS the history it lacked. Without the write the level was
+    // right on screen and wrong one switch later: leave for another model, come
+    // back, and the adopt read the untouched key.
+    expect(readModelThinkingLevel(storage, uncensored.id)).toBe("xhigh");
+    pick(storage, otherModel, { physicalModel: "changed", thinkingLevel: "xhigh" });
+    expect(
+      pick(storage, uncensored, {
+        physicalModel: "changed",
+        thinkingLevel: ladderFor(otherModel)[0]!,
+      }),
+    ).toBe("xhigh");
+  });
+
+  test("a genuinely different model still adopts its own remembered level", () => {
+    const storage = memoryStorage();
+    writeModelThinkingLevel(storage, standard.id, "xhigh");
+
+    // Arriving from elsewhere at whatever that model was showing: the target's own
+    // memory wins, which is the rule this change narrows rather than replaces.
+    expect(
+      pick(storage, standard, {
+        physicalModel: "changed",
+        thinkingLevel: ladderFor(otherModel)[0]!,
+      }),
+    ).toBe("xhigh");
+
+    // And a model with nothing remembered opens at Off without being given a key
+    // it never had — the model-switch path writes nothing at all.
+    const before = new Map(storage.entries);
+    expect(pick(storage, otherModel, { physicalModel: "changed", thinkingLevel: "xhigh" })).toBe(
+      "off",
+    );
+    expect([...storage.entries]).toEqual([...before]);
+  });
+
+  test("a profile used for the first time inherits from its sibling, never from another model", () => {
+    const storage = memoryStorage();
+    writeModelThinkingLevel(storage, otherModel.id, "xhigh");
+
+    // Nothing has ever been filed under either Qwen profile. Coming from a
+    // different checkpoint, the fresh profile answers Off — the level of the model
+    // being left is not its to inherit.
+    expect(pick(storage, uncensored, { physicalModel: "changed", thinkingLevel: "xhigh" })).toBe(
+      "off",
+    );
+    // Coming from its own sibling, the same fresh profile keeps the effort: one
+    // checkpoint, one llama-server, one reasoning contract.
+    expect(pick(storage, uncensored, { physicalModel: "unchanged", thinkingLevel: "medium" })).toBe(
+      "medium",
+    );
+    expect(readModelThinkingLevel(storage, otherModel.id)).toBe("xhigh");
+  });
+
+  test("a profile that cannot honour the effort is not given it", () => {
+    // Two profiles share a ladder only while both draw it from the checkpoint;
+    // nativeReasoning is a per-row wire field and short-circuits ahead of it, so a
+    // gateway can declare a pair that disagrees.
+    const narrow = agentModel({
+      id: `${uncensored.id}-native`,
+      physicalModelId: qwen.physicalModelId,
+      reasoning: true,
+      nativeReasoning: true,
+    });
+    expect(ladderFor(narrow)).toEqual(["high"]);
+
+    const storage = memoryStorage();
+    expect(pick(storage, narrow, { physicalModel: "unchanged", thinkingLevel: "medium" })).toBe(
+      "high",
+    );
+    // The level in force is what gets filed. An unsupported one is never stored.
+    expect(readModelThinkingLevel(storage, narrow.id)).toBe("high");
   });
 });

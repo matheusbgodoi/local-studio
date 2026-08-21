@@ -378,6 +378,31 @@ export interface PhysicalModel {
   primary: AgentModel;
 }
 
+/**
+ * A pick in the model picker, carrying the one fact the picker must not make
+ * its callee re-derive: whether the id it emits is served by the checkpoint the
+ * user was already talking to.
+ *
+ * `unchanged` is a behaviour profile of the model in hand — one checkpoint, one
+ * llama-server, one chat template, a different LoRA scale — or the alias already
+ * selected. `changed` is a different physical model.
+ *
+ * Stated here rather than computed downstream because only the picker knows the
+ * id it was SHOWING: a fresh session carries no modelId, and the id on screen is
+ * resolved for the pane rather than stored on it. The Behavior list answers it
+ * structurally (its rows are one PhysicalModel's own profiles) and the Model
+ * list already computes it to draw its checkmark.
+ */
+export type AgentModelSelection = {
+  modelId: string;
+  physicalModel: "unchanged" | "changed";
+  /** The effort the trigger was displaying when the pick was made. Carried, not
+   *  re-read: the level on screen is pickThinkingLevel over a ladder, a session
+   *  field and a per-alias store, and reproducing that in a second place is how
+   *  the two would drift. */
+  thinkingLevel: AgentThinkingLevel;
+};
+
 /** True when one of this physical model's aliases is `modelId`. */
 export function physicalModelOwnsProfile(
   physical: PhysicalModel,
