@@ -48,9 +48,12 @@ const ALL_MODELS = "all";
  * Labels come off the wire (the router's displayName), so this file names no model — the same
  * rule the chat's picker follows.
  *
- * History-only aliases are GROUPED rather than hidden: their rows are real measurements, and
- * dropping them would make a period of genuine traffic unreachable. Grouping answers "um monte
- * de modelo q nem uso" without deleting the answer to "what did I run last month".
+ * History-only aliases are DROPPED. They were grouped under a "No longer served" heading first,
+ * on the argument that their rows are real measurements — but the owner runs three models and
+ * asked twice not to be shown the others, and a filter is a list of things you can choose, not
+ * an archive. Nothing is lost from any total: their traffic still aggregates into "All models",
+ * and the host still publishes them with `served: false`, so restoring the group is a one-line
+ * change here rather than a schema change.
  *
  * Lifted out of UsagePage because inlining it pushed that component past the complexity gate. */
 function buildModelOptions(filters: UsageFilters | undefined) {
@@ -61,13 +64,7 @@ function buildModelOptions(filters: UsageFilters | undefined) {
     // options at all would be worse than an ugly one.
     return [all, ...(filters?.supported_models ?? []).map((a) => ({ value: a, label: a }))];
   }
-  return [
-    all,
-    ...models.filter((m) => m.served).map((m) => ({ value: m.id, label: m.label })),
-    ...models
-      .filter((m) => !m.served)
-      .map((m) => ({ value: m.id, label: m.label, group: "No longer served" })),
-  ];
+  return [all, ...models.filter((m) => m.served).map((m) => ({ value: m.id, label: m.label }))];
 }
 
 export default function UsagePage() {
