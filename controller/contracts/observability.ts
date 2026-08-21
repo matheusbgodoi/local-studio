@@ -79,8 +79,13 @@ export interface Metrics {
   lifetime_energy_kwh?: number;
   lifetime_uptime_hours?: number;
   kwh_per_million_tokens?: number;
-  kwh_per_million_input?: number;
-  kwh_per_million_output?: number;
+  // kwh_per_million_input / _output were here. Both divided the SAME lifetime energy —
+  // one by the prompt tokens, one by the completion tokens — so each field claimed 100%
+  // of it. Quote either alone and that side is charged for the other side's watts; quote
+  // both and the energy is counted twice. The real split on this hardware is 20.4:1, so
+  // the error was an order of magnitude in both directions at once. The measured split
+  // now arrives as UsageEnergyRates on the usage report, from a bench run that separated
+  // the phases in the workload, because no arithmetic over lifetime totals can.
   current_power_watts?: number;
 }
 

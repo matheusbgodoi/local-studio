@@ -55,6 +55,8 @@ export type {
   UsageEfficiency,
   UsageEfficiencyDay,
   UsageEfficiencyModel,
+  UsageEnergyRate,
+  UsageEnergyRates,
   UsageEnergy,
   UsageEnergyDay,
   UsageEnergyModel,

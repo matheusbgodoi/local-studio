@@ -204,6 +204,65 @@ export interface UsageStats {
   tokens?: UsageTokens;
   energy?: UsageEnergy;
   efficiency?: UsageEfficiency;
+  /** Measured, not derived from anything above. See {@link UsageEnergyRates}. */
+  energy_rates?: UsageEnergyRates;
+}
+
+
+/**
+ * MEASURED energy rates, per side of the token count, keyed by PHYSICAL model.
+ *
+ * Nothing else in this payload can produce these, and the backend does not try. The
+ * telemetry store knows what N tokens cost in TOTAL — that is `kwh_per_million_processed`
+ * above — but it cannot split that total between prefill and decode: its energy samples
+ * carry no request id and have a 60-second grain, while most requests are shorter than a
+ * minute. So the split is measured in the workload by a bench run and read from a config
+ * with its provenance attached.
+ *
+ * The provenance is not decoration and must reach the reader. `scope: "marginal"` means
+ * idle draw is excluded; `energy_source: "gpu_board_power"` means the CPU and the rest of
+ * the host are excluded. A cost built from these is a floor, not a bill, and a UI that
+ * renders the number without the sentence is quoting a price it cannot honour.
+ */
+export interface UsageEnergyRate {
+  /** The physical model the energy was measured on. */
+  model: string;
+  /** Every logical alias that runs on it, and therefore shares the rate. */
+  aliases: string[];
+  wh_per_1m_input: number;
+  wh_per_1m_output: number;
+  /** Board draw with the model resident and serving nothing. Excluded from the rates. */
+  idle_watts: number | null;
+  /** "marginal" — above idle. Anything else must be read before the number is trusted. */
+  scope: string | null;
+  /** "gpu_board_power" — the card only. */
+  energy_source: string | null;
+  significant_figures: number | null;
+  measured_at: string | null;
+  measured_on_alias: string | null;
+  context_tokens: number | null;
+  method: string | null;
+  sample: {
+    requests: number | null;
+    input_tokens: number | null;
+    output_tokens: number | null;
+  } | null;
+  /** What the number does not include. Render it. */
+  excludes: string[];
+  /** False means cached input was deliberately defeated and is NOT priced by this sample. */
+  cached_input_priced: boolean;
+  notes: string[];
+}
+
+export interface UsageEnergyRates {
+  by_physical_model: UsageEnergyRate[];
+  /**
+   * Named, not merely absent. "We did not measure this" and "this costs nothing" are
+   * different statements, and a model with no measurement must never borrow another
+   * model's rate or have one derived from the combined figure.
+   */
+  unmeasured_physical_models: string[];
+  measured: boolean;
 }
 
 export const USAGE_PERIODS = ["today", "7d", "30d", "365d", "all"] as const;

@@ -10,6 +10,7 @@ import { instantLabel } from "@/features/usage/usage-formatters";
 import { UsageTokensTab } from "@/features/usage/usage-tokens-tab";
 import { UsageEnergyTab } from "@/features/usage/usage-energy-tab";
 import { UsageEfficiencyTab } from "@/features/usage/usage-efficiency-tab";
+import { UsageEnergyRatesPanel } from "@/features/usage/usage-energy-rates";
 import { useEnergyPreferences } from "@/features/usage/energy-preferences";
 import type { UsagePeriod } from "@/lib/types";
 import { Upload } from "@/ui/icon-registry";
@@ -185,13 +186,21 @@ export default function UsagePage() {
                 collectionStartedAt={stats.energy_collection_started_at ?? null}
               />
             ) : null}
-            {tab === "efficiency" && stats.efficiency ? (
-              <UsageEfficiencyTab
-                efficiency={stats.efficiency}
-                tokens={stats.tokens}
-                filters={stats.filters}
-                preferences={preferences}
-              />
+            {tab === "efficiency" ? (
+              <>
+                {stats.efficiency ? (
+                  <UsageEfficiencyTab
+                    efficiency={stats.efficiency}
+                    tokens={stats.tokens}
+                    filters={stats.filters}
+                    preferences={preferences}
+                  />
+                ) : null}
+                {/* Not gated on stats.efficiency: these rates are a measurement, not a
+                    reading of this period's traffic, so they are just as true on a rig
+                    whose telemetry has nothing to say yet. */}
+                <UsageEnergyRatesPanel rates={stats.energy_rates} preferences={preferences} />
+              </>
             ) : null}
           </>
         ) : (
