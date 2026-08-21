@@ -158,6 +158,7 @@ describe("context pressure checkpoints, compacts and resumes the same task by it
       const settled = await driveToSettled(harness, run.id, 40);
       expect(settled.status).toBe("FAILED");
       expect(harness.store.requireRun(run.id).failureReason).toContain("compact in a circle");
+      expect(harness.store.requireRun(run.id).failureReason).toContain("usable budget is");
     } finally {
       harness.dispose();
     }

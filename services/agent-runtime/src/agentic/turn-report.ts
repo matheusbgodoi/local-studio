@@ -84,5 +84,11 @@ export function applyEvidence(
 export function acceptanceRejection(outcome: AcceptanceOutcome, report: TurnReport): string | null {
   if (!report.claimedComplete || outcome.satisfied) return null;
   if (outcome.acceptance.length === 0) return null;
-  return `claimed complete with unmet acceptance criteria: ${outcome.outstanding.join(", ")}`;
+  //
+  // Say exactly what is missing and exactly how to supply it. A gate that
+  // only announces a refusal invites the same refusal next turn, which the
+  // stall detector would then read as no progress.
+  //
+  const lines = outcome.outstanding.map((id) => `TASK_EVIDENCE ${id}: <what proves it>`);
+  return `claimed complete with unmet acceptance criteria: ${outcome.outstanding.join(", ")}. Emit one line per criterion, exactly: ${lines.join(" | ")}`;
 }

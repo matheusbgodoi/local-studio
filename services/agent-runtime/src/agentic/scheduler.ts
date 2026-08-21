@@ -114,6 +114,7 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
   const stallByTask = new Map<string, StallState>();
   const ineffectiveCompactions = new Map<string, number>();
   const sessions = new Map<string, AgenticInferenceSession>();
+  const consumedTurns = new Map<string, string>();
 
   //
   // Exactly one session object per Run. The adapter that fronts a real backend
@@ -288,7 +289,13 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
       const strikes = result.effective ? 0 : (ineffectiveCompactions.get(run.id) ?? 0) + 1;
       ineffectiveCompactions.set(run.id, strikes);
       if (strikes >= MAX_INEFFECTIVE_COMPACTIONS) {
-        const reason = "compaction cannot create headroom; refusing to compact in a circle";
+        //
+        // Name both numbers. "Cannot create headroom" on its own sends the
+        // reader looking for a bug; what actually happened is that the usable
+        // budget sits below the floor this backend can reach, and the fix is
+        // to raise the budget, not to compact harder.
+        //
+        const reason = `compaction cannot create headroom: the usable budget is ${budget.usableLimit} tokens and the session will not go below ${reading.tokens}; refusing to compact in a circle`;
         store.updateRun(run.id, { status: "FAILED", failureReason: reason });
         store.appendEvent({ runId: run.id, taskId: task.id, type: "RUN_FAILED", summary: reason });
         return { kind: "failed", reason };
@@ -352,7 +359,17 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     const lastError = session.lastError();
     const errors = lastError ? [lastError] : [];
     const finalText = session.lastAssistantText();
-    const report = parseTurnReport(finalText);
+    //
+    // A step that ends without launching — a replan, for one — leaves the
+    // previous turn's text in place. Reading it again would charge a second
+    // attempt for one piece of work, and could attribute its evidence to
+    // whichever task the revision made current.
+    //
+    const alreadyConsumed = consumedTurns.get(run.id) === finalText;
+    consumedTurns.set(run.id, finalText);
+    const report = alreadyConsumed
+      ? { evidence: [], claimedComplete: false, blockedReason: null, userQuestion: null, errors: [] }
+      : parseTurnReport(finalText);
     const tail: string[] = [];
 
     let tasks = store.listTasks(run.id);

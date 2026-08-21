@@ -147,6 +147,43 @@ describe("a run that cannot progress replans and then stops, in bounded time", (
     }
   });
 
+  //
+  // Seen against the real card: a replan ends a step without launching, so the
+  // previous turn's text was still sitting there and got read a second time —
+  // charging two attempts for one piece of work.
+  //
+  test("a step that does not launch never charges a second attempt for one turn", async () => {
+    const harness = createHarness({
+      model: { contextWindow: 60_000, maxTokens: 8_000 },
+      backend: {
+        contextWindow: 60_000,
+        fallback: () => ({ text: "TASK_BLOCKED the same import error again", outputTokens: 60 }),
+      },
+    });
+    try {
+      const { run } = await harness.service.startRun({
+        goal: "make the suite green",
+        capability: harness.capability,
+        sessionId: "s",
+        piSessionId: "p",
+        cwd: "/tmp/p",
+        tasks: [task("Fix the failing import")],
+      });
+      await driveToSettled(harness, run.id, 40);
+
+      const attempts = harness.store
+        .listTasks(run.id)
+        .reduce((total, entry) => total + entry.attemptCount, 0);
+      const started = harness.store
+        .listEvents(run.id)
+        .filter((event) => event.type === "TASK_STARTED").length;
+      expect(attempts).toBe(started);
+      expect(harness.backend.turnIndex()).toBe(started);
+    } finally {
+      harness.dispose();
+    }
+  });
+
   test("the revised plan keeps the accepted work and re-points the failing task at the diagnosis", async () => {
     const harness = createHarness({
       model: { contextWindow: 60_000, maxTokens: 8_000 },
