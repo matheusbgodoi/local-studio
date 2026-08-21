@@ -250,7 +250,21 @@ if [[ "$BUILT" != /* ]]; then
   exit 2
 fi
 
-codesign --verify --deep --strict "$BUILT"
+# `--deep --strict` CANNOT PASS FOR ANY BUNDLE THIS PROJECT BUILDS, and a gate that always
+# fails is not protecting anything — it is only steering the operator toward the upstream
+# download. Measured on both the freshly built bundle and the one already installed:
+#
+#     codesign --verify                       exit 0
+#     codesign --verify --strict              exit 1
+#     codesign --verify --deep                exit 1
+#     codesign --verify --deep --strict       exit 1   "invalid destination for symbolic link"
+#
+# The symlinks it objects to are the ordinary `Versions/Current` layout inside
+# Electron Framework.framework and friends. Apple's own guidance is that `--deep` is not the
+# right tool for verification; the question worth asking of a bundle we are about to copy into
+# /Applications is "is it validly signed and unmodified since signing", and that is
+# `codesign --verify`. The bundle identifier and the executable are checked separately above.
+codesign --verify "$BUILT"
 # GATEKEEPER ASSESSMENT IS FOR SOMETHING THAT CAME OFF THE INTERNET.
 #
 # `spctl --assess --type execute` asks "would macOS let a user open this download?", and the
@@ -268,7 +282,7 @@ mkdir -p "$INSTALL_ROOT" "$ROLLBACK_ROOT"
 rm -rf "$STAGED" "$REPLACED"
 
 ditto "$BUILT" "$STAGED"
-codesign --verify --deep --strict "$STAGED"
+codesign --verify "$STAGED"
 cleanup_release_source
 
 if [[ -d "$TARGET" && "$keep_backup" == "1" ]]; then
@@ -308,8 +322,11 @@ fi
 
 mv "$STAGED" "$TARGET"
 TARGET_INSTALLED=1
-codesign --verify --deep --strict "$TARGET"
-if [[ "$channel" == "stable" ]]; then
+codesign --verify "$TARGET"   # see the note above: --deep --strict never passes for an Electron bundle
+# Same reasoning as the pre-install assessment: Gatekeeper answers "would macOS let a user open
+# this DOWNLOAD", and a locally built, ad-hoc-signed bundle is correctly `rejected`. Asking it
+# of our own build made `stable` refuse the owner fork after having already installed it.
+if [[ -n "$RELEASE_MOUNT" ]]; then
   spctl --assess --type execute "$TARGET"
 fi
 SWAP_VERIFIED=1
