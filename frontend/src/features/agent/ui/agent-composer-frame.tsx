@@ -1,5 +1,6 @@
 "use client";
 
+import type { TranscriptPhase } from "./use-chat-pane-composer-actions";
 import type {
   ChangeEventHandler,
   ClipboardEventHandler,
@@ -71,7 +72,7 @@ export type AgentComposerFrameProps = {
   onSelectMention: (entry: MentionRow) => void;
   onSteerQueued: (queueId: string) => void;
   onSubmit: FormEventHandler<HTMLFormElement>;
-  onTranscript: (text: string) => void;
+  onTranscript: (text: string, phase?: TranscriptPhase) => void;
   onToggleBrowserBackend: () => void;
   onToggleBrowserTool: () => void;
   placeholder: string;

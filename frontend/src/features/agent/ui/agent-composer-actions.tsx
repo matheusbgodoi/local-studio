@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode, RefObject } from "react";
+import type { TranscriptPhase } from "./use-chat-pane-composer-actions";
 import { Spinner } from "@/ui";
 import { ArrowUp, Plus } from "@/ui/icon-registry";
 import type { BrowserBackend } from "@/features/agent/tools/types";
@@ -35,7 +36,7 @@ export function AgentComposerActions({
   onToggleBrowserBackend: () => void;
   onToggleBrowserTool: () => void;
   onAbortTurn: () => void;
-  onTranscript: (text: string) => void;
+  onTranscript: (text: string, phase?: TranscriptPhase) => void;
   modelSelector?: ReactNode;
 }) {
   const inputHasText = Boolean(input.trim());
