@@ -62,13 +62,14 @@ function compactionDetail(event: AgenticEvent) {
   if (!detail || typeof detail !== "object") return null;
   const record = detail as Record<string, unknown>;
   const before = Number(record.tokensBefore);
-  const after = Number(record.tokensAfter);
   const limit = Number(record.usableLimit);
+  const measured = record.afterMeasured !== false;
+  const after = Number(measured ? record.tokensAfter : record.tokensAfterEstimated);
   if (!Number.isFinite(before) || !Number.isFinite(after)) return null;
   return (
     <RowDetailLine mono>
-      {formatTokens(before)} → {formatTokens(after)} of {formatTokens(limit)} usable · the task
-      resumed automatically
+      {formatTokens(before)} → {measured ? "" : "≈"}
+      {formatTokens(after)} of {formatTokens(limit)} usable · the task resumed automatically
     </RowDetailLine>
   );
 }

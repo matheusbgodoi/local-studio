@@ -267,6 +267,35 @@ describe("context pressure checkpoints, compacts and resumes the same task by it
     }
   });
 
+  //
+  // Against the real card the backend reported no context usage until the next
+  // turn produced some, so every checkpoint read "-> 0 tokens". Zero is a
+  // measurement nobody took.
+  //
+  test("an absent post-compaction reading is published as an estimate, never as zero", async () => {
+    const harness = createHarness({
+      model: { contextWindow: 9_000, maxTokens: 2_000 },
+      backend: { ...longTaskBackend(), compactionFloorTokens: 0, baseTokens: 0 },
+    });
+    try {
+      const { run } = await startLongTask(harness);
+      await driveToSettled(harness, run.id, 20);
+      const compacted = harness.store
+        .listEvents(run.id)
+        .filter((event) => event.type === "COMPACTED");
+      expect(compacted.length).toBeGreaterThan(0);
+      for (const event of compacted) {
+        const detail = event.detail as Record<string, unknown>;
+        if (detail.afterMeasured === false) {
+          expect(Number(detail.tokensAfterEstimated)).toBeGreaterThan(0);
+          expect(event.summary).toContain("~");
+        }
+      }
+    } finally {
+      harness.dispose();
+    }
+  });
+
   test("a window wide enough for the whole run compacts nothing and still finishes", async () => {
     const harness = createHarness({
       model: { contextWindow: 262_144, maxTokens: 32_768 },

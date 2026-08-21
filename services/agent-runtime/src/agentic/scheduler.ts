@@ -216,14 +216,26 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
       compactionCount: run.compactionCount + 1,
       latestCheckpointId: checkpoint.id,
     });
+    //
+    // A backend reports no context usage until the next turn produces some, so
+    // immediately after a compaction the reading is often absent rather than
+    // zero. Publishing it as zero would be a measurement nobody took; the
+    // working set that was just rebuilt is the honest estimate, and the flag
+    // says which of the two the reader is looking at.
+    //
+    const measuredAfter = outcome.tokensAfter > 0;
     store.appendEvent({
       runId: run.id,
       taskId: task?.id ?? null,
       type: "COMPACTED",
-      summary: `${outcome.tokensBefore} -> ${outcome.tokensAfter} tokens · checkpoint #${checkpoint.sequence}`,
+      summary: measuredAfter
+        ? `${outcome.tokensBefore} -> ${outcome.tokensAfter} tokens · checkpoint #${checkpoint.sequence}`
+        : `${outcome.tokensBefore} -> ~${required} tokens · checkpoint #${checkpoint.sequence}`,
       detail: {
         tokensBefore: outcome.tokensBefore,
         tokensAfter: outcome.tokensAfter,
+        tokensAfterEstimated: measuredAfter ? null : required,
+        afterMeasured: measuredAfter,
         targetTokens: target.target,
         usableLimit: budget.usableLimit,
         belowFloor: target.belowFloor,
