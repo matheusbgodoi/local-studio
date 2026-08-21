@@ -5,11 +5,34 @@
 //
 
 import { agenticRuntime } from "../agentic/service";
+import { resolveAllowedWorkspace } from "../projects-store";
 import type { AcceptanceCriterion } from "../agentic/contract";
 import type { TaskSeed } from "../agentic/store";
 import { errorMessage, jsonError, readJsonBody } from "./helpers";
 
 const asString = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
+
+const ACCEPTANCE_KINDS = ["command", "file", "artifact", "review", "assertion"] as const;
+
+//
+// The kind reaches the owner-facing view through a schema that only accepts
+// these five. Casting an arbitrary string here made one bad request break the
+// decoding of every snapshot for that Run, permanently.
+//
+const asKind = (value: unknown): AcceptanceCriterion["kind"] => {
+  const raw = asString(value);
+  return (ACCEPTANCE_KINDS as readonly string[]).includes(raw)
+    ? (raw as AcceptanceCriterion["kind"])
+    : "assertion";
+};
+
+const goalCriterion = (): AcceptanceCriterion => ({
+  id: "goal",
+  description: "The stated goal is achieved, with observable evidence",
+  kind: "assertion",
+  satisfied: false,
+  evidence: null,
+});
 
 const asCriteria = (value: unknown, taskIndex: number): AcceptanceCriterion[] => {
   if (!Array.isArray(value)) return [];
@@ -33,7 +56,7 @@ const asCriteria = (value: unknown, taskIndex: number): AcceptanceCriterion[] =>
       {
         id: asString(record.id) || `t${taskIndex}c${index + 1}`,
         description,
-        kind: (asString(record.kind) || "assertion") as AcceptanceCriterion["kind"],
+        kind: asKind(record.kind),
         satisfied: false,
         evidence: null,
       },
@@ -48,6 +71,12 @@ const asTasks = (value: unknown): TaskSeed[] => {
     const record = entry as Record<string, unknown>;
     const title = asString(record.title);
     if (!title) return [];
+    //
+    // A task with no criteria would have nothing to prove and nothing to
+    // reject, so a caller that supplies none gets the goal criterion rather
+    // than a task the runtime can only fail.
+    //
+    const acceptance = asCriteria(record.acceptance, index + 1);
     return [
       {
         title,
@@ -55,7 +84,7 @@ const asTasks = (value: unknown): TaskSeed[] => {
         dependencies: Array.isArray(record.dependencies)
           ? record.dependencies.map(asString).filter(Boolean)
           : [],
-        acceptance: asCriteria(record.acceptance, index + 1),
+        acceptance: acceptance.length > 0 ? acceptance : [goalCriterion()],
       },
     ];
   });
@@ -81,9 +110,20 @@ export async function handleAgenticRunCreate(request: Request): Promise<Response
   const body = await readJsonBody(request);
   const goal = asString(body?.goal);
   const modelId = asString(body?.modelId);
-  const cwd = asString(body?.cwd);
-  if (!goal || !modelId || !cwd) {
+  const requestedCwd = asString(body?.cwd);
+  if (!goal || !modelId || !requestedCwd) {
     return jsonError("Body must include goal, modelId and cwd.");
+  }
+  //
+  // Every other route that takes a working directory confines it to
+  // WORKSPACE_ROOTS. A Run drives tools with full access, so this one is the
+  // last place that should have been the exception.
+  //
+  let cwd: string;
+  try {
+    cwd = resolveAllowedWorkspace(requestedCwd);
+  } catch (error) {
+    return jsonError(errorMessage(error, "cwd is outside the allowed workspace roots."), 403);
   }
   const tasks = asTasks(body?.tasks);
   const plan: TaskSeed[] =
@@ -94,15 +134,7 @@ export async function handleAgenticRunCreate(request: Request): Promise<Response
             title: goal.slice(0, 120),
             description: goal,
             dependencies: [],
-            acceptance: [
-              {
-                id: "goal",
-                description: "The stated goal is achieved, with observable evidence",
-                kind: "assertion",
-                satisfied: false,
-                evidence: null,
-              },
-            ],
+            acceptance: [goalCriterion()],
           },
         ];
   try {

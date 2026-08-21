@@ -18,6 +18,12 @@ export type AgenticContextReading = {
 };
 
 export type AgenticInferenceSession = {
+  //
+  // A monotonic count of turns this session has actually run. Identifying a
+  // turn by its text discarded a genuinely new turn whenever a model repeated
+  // itself, which is exactly what a stuck agent does.
+  //
+  turnId(): number;
   readContext(): Promise<AgenticContextReading>;
   prompt(text: string): Promise<void>;
   compact(instructions: string): Promise<void>;

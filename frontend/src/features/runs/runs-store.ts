@@ -64,9 +64,14 @@ export async function refreshSnapshot(runId: string): Promise<void> {
   try {
     const snapshot = await Effect.runPromise(loadRunSnapshot(runId));
     if (state.selectedId === runId) publish({ snapshot });
-  } catch {
-    // A snapshot that fails to load leaves the previous one on screen; the
-    // list request is what reports an outage.
+  } catch (cause) {
+    //
+    // A snapshot that never arrives used to leave a spinner with no
+    // explanation, because only the list request reported anything.
+    //
+    if (state.selectedId === runId) {
+      publish({ error: failure(cause, "Failed to load this run") });
+    }
   }
 }
 

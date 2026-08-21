@@ -32,6 +32,7 @@ export type FakeBackendOptions = {
   compactionFloorTokens?: number;
   ineffectiveCompaction?: boolean;
   compactionError?: string;
+  promptError?: string;
   startIndex?: number;
 };
 
@@ -67,11 +68,13 @@ export function createFakeBackend(options: FakeBackendOptions): FakeBackend {
   };
 
   const session: AgenticInferenceSession = {
+    turnId: () => index,
     readContext: async (): Promise<AgenticContextReading> => ({
       tokens: activeTokens,
       contextWindow,
     }),
     prompt: async (text: string): Promise<void> => {
+      if (options.promptError) throw new Error(options.promptError);
       const turn = nextTurn();
       index += 1;
       promptsSent.push(text);

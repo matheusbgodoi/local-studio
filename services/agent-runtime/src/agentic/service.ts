@@ -9,7 +9,11 @@
 //
 
 import { resolveAgenticCapability, withRuntimeContextWindow, type AgenticCapability } from "./capability";
-import { DEFAULT_CONTEXT_BUDGET_POLICY, type ContextBudgetPolicy } from "./context-budget";
+import {
+  computeContextBudget,
+  DEFAULT_CONTEXT_BUDGET_POLICY,
+  type ContextBudgetPolicy,
+} from "./context-budget";
 import type { AgenticRun, AgenticRunSnapshot } from "./contract";
 import { createPiAgenticSession } from "./pi-session-adapter";
 import { createAgenticRunService, type StartRunInput } from "./run-service";
@@ -73,7 +77,14 @@ function createRuntime(): RuntimeState {
       behaviorProfile: run.behaviorProfile,
       behaviorProfileLabel: null,
       contextWindow: run.contextWindow,
-      maxOutputTokens: Math.min(run.contextWindow, 32_768),
+      //
+      // Derived from the window rather than named: this fallback exists for a
+      // Run whose model has left the catalogue, and it must not smuggle one
+      // checkpoint's output size into the budget of another. Tools stay true
+      // because reserving room for a result nobody asked for is the safe
+      // direction.
+      //
+      maxOutputTokens: Math.max(512, Math.floor(run.contextWindow * FALLBACK_OUTPUT_SHARE)),
       reasoning: false,
       tools: true,
       vision: false,
@@ -95,6 +106,7 @@ function createRuntime(): RuntimeState {
   return { store, service, loops: new Map(), cancelled: new Set(), capabilities };
 }
 
+const FALLBACK_OUTPUT_SHARE = 0.2;
 const TERMINAL = new Set(["COMPLETED", "FAILED", "CANCELLED", "WAITING_USER"]);
 const MAX_LOOP_STEPS = 10_000;
 
@@ -125,7 +137,15 @@ export function agenticRuntime() {
       );
       state.capabilities.set(runId, observed);
       if (observed.contextWindow !== run.contextWindow) {
-        state.store.updateRun(runId, { contextWindow: observed.contextWindow });
+        //
+        // The window moved, so the budget derived from it moved too. Leaving
+        // the stored limit behind would show the owner a capacity the
+        // scheduler no longer uses.
+        //
+        state.store.updateRun(runId, {
+          contextWindow: observed.contextWindow,
+          usableLimit: computeContextBudget(observed, agenticBudgetPolicy()).usableLimit,
+        });
       }
       //
       // The pi session id only exists once the runtime has started. Adopting
