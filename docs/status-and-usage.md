@@ -144,15 +144,72 @@ There is deliberately no default tariff. Until one is entered, every cost reads
 
 ![Usage — efficiency](assets/screenshots/usage-efficiency.png)
 
-**Processed tokens / kWh**, with kWh per 1M processed and cost per 1M beside it.
-It is computed only when both halves exist; otherwise the page says which one is
-missing instead of showing a ratio. When energy coverage for the period is thin
-the caption says so rather than presenting a partly measured denominator as
-exact.
+The hero is **what one million tokens cost, per side** — input on the left,
+output on the right, in your currency, with the `output / input` ratio between
+them. The two are one order of magnitude apart and are deliberately set at the
+same type size: size encodes hierarchy here, not magnitude, and shrinking the
+input side would tell you it does not matter. The gap is carried by the ratio,
+by the Wh sub-line, and by two bars on one shared scale.
+
+With no electricity rate set, the same layout renders the same two figures in
+**Wh** instead of money. Nothing moves and no slot says "set a rate" — the
+no-tariff state is a unit swap, and the rate control appears directly under the
+hero.
+
+**Measured, your traffic, and modelled are three different things**, and the tab
+labels every card with which one it is:
+
+- **Measured** — the per-side rates come from a bench run on this rig and are
+  read from a config file with their provenance attached. The hero footnote says
+  when they were measured and what they exclude, and it reads those exclusions
+  off the payload rather than asserting them: `scope: "marginal"` is what means
+  idle draw is outside the rate and `energy_source: "gpu_board_power"` is what
+  means the rest of the host is. A config that says neither gets neither claim.
+- **Your traffic** — this period's telemetry, which moves with the period
+  selector. `kwh_per_million_processed` is the **combined** figure: all measured
+  board energy over all processed tokens, idle included. It is a different
+  measurement from the two bench rates, not a merge of them, and it is never
+  divided to fake a per-side number.
+- **Modelled** — your own token counts priced at the measured rate. Arithmetic
+  on the two, not a third measurement. Under **All models** the token totals span
+  every alias on the rig, so only the traffic that ran on the measured model is
+  priced; any other alias that ran is named beside the figures and left unpriced.
+  When nothing attributable is left, the modelled tiles and card do not render at
+  all.
+
+The split cannot be derived from telemetry and the controller does not try: the
+energy samples carry no request id and have a 60-second grain, while most
+requests are shorter than a minute. The store knows what N tokens cost in total;
+it cannot know how that total divided between reading a prompt and writing an
+answer. That is the whole reason the per-side rates are bench-measured and read
+from a config, and it is why a UI that renders them next to telemetry has to keep
+saying which is which.
+
+An **unmeasured** physical model is named, never zeroed and never given another
+model's rate — "nobody measured this" and "this costs nothing" are different
+statements. The by-model table leaves its input and output columns blank for the
+same reason.
+
+The `How <model> was measured` disclosure carries the long form: the method, the
+sample, the exclusions, and the config's own notes. Those notes arrive as wrapped
+lines and are joined back into prose before rendering, verbatim — the client does
+not rewrite text it was handed.
+
+Efficiency itself is computed only when both halves exist; otherwise the page
+says which one is missing instead of showing a ratio. When energy coverage for
+the period is thin, the strip, this-period card and cache card all say so, and so
+does the combined hero — its numerator is the sampled seconds while its
+denominator is the whole period's tokens, so it reads low. The bench hero does
+not, because coverage has no bearing on a bench measurement. Board energy and
+period cost under partial coverage are floors, never the period's bill, which is
+also why a marginal request cost can exceed them.
 
 Selecting one model recalculates from that model's processed tokens and the
-energy measured while it was resident — observational comparison without running
-a benchmark.
+energy measured while it was resident — and picks that model's bench rate for the
+hero. Selecting a model no bench run measured shows **no** per-side price: it is
+named as unmeasured rather than handed the other model's rate. With more than one
+measured model and no selection, no price is shown either — two measured models
+do not average into a third.
 
 ### Days, and where midnight is
 
