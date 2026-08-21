@@ -48,10 +48,17 @@ type RuntimeState = {
   capabilities: Map<string, AgenticCapability>;
 };
 
-const sessionFor = (run: AgenticRun) => {
-  const { session } = piRuntimeManager.getSessionForLookup(run.sessionId, run.piSessionId);
-  return createPiAgenticSession(session, run.contextWindow);
-};
+const piSessionFor = (run: AgenticRun) =>
+  piRuntimeManager.getSessionForLookup(run.sessionId, run.piSessionId).session;
+
+const sessionFor = (run: AgenticRun) =>
+  createPiAgenticSession({
+    session: piSessionFor(run),
+    modelId: run.modelId,
+    cwd: run.cwd,
+    piSessionId: run.piSessionId,
+    fallbackContextWindow: run.contextWindow,
+  });
 
 function createRuntime(): RuntimeState {
   const store = createAgenticStore(resolveDataDir());
@@ -119,6 +126,18 @@ export function agenticRuntime() {
       state.capabilities.set(runId, observed);
       if (observed.contextWindow !== run.contextWindow) {
         state.store.updateRun(runId, { contextWindow: observed.contextWindow });
+      }
+      //
+      // The pi session id only exists once the runtime has started. Adopting
+      // it is what lets a restart find the same rollout instead of opening a
+      // second conversation for a Run already in flight.
+      //
+      const adopted = piSessionFor(run).status.piSessionId;
+      if (adopted && adopted !== run.piSessionId) {
+        state.store.updateRun(runId, { piSessionId: adopted });
+        for (const agent of state.store.listAgents(runId)) {
+          state.store.updateAgent(agent.id, { piSessionId: adopted });
+        }
       }
       await state.service.scheduler.advance(runId, observed);
     }

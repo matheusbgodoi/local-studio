@@ -11,6 +11,7 @@
 import { lastAssistantResult } from "../session-text";
 import { emptyUsageTotals, readSessionUsageTotals, type SessionUsageTotals } from "../session-usage";
 import { findSessionFile } from "../sessions-store";
+import type { RuntimeStartOptions } from "../pi-runtime-helpers";
 import type { PiAgentSession } from "../pi-runtime-types";
 import type {
   AgenticContextReading,
@@ -20,12 +21,35 @@ import type {
 
 const FALLBACK_CONTEXT_WINDOW = 8_192;
 
-export function createPiAgenticSession(
-  session: PiAgentSession,
-  fallbackContextWindow: number,
-): AgenticInferenceSession {
+export type PiAgenticSessionInput = {
+  session: PiAgentSession;
+  modelId: string;
+  cwd: string;
+  piSessionId: string | null;
+  fallbackContextWindow: number;
+  startOptions?: RuntimeStartOptions;
+};
+
+export function createPiAgenticSession(input: PiAgenticSessionInput): AgenticInferenceSession {
+  const { session, fallbackContextWindow } = input;
   let previousTotals: SessionUsageTotals = emptyUsageTotals();
   let lastUsage: AgenticTurnUsage = { input: 0, output: 0, cache: 0 };
+  let started: Promise<void> | null = null;
+
+  //
+  // The scheduler only knows how to ask for a turn, so starting the underlying
+  // runtime is this adapter's job. It is idempotent by fingerprint on the pi
+  // side, so asking once per session object is enough.
+  //
+  const ensureStarted = (): Promise<void> => {
+    started ??= session.ensureStarted(
+      input.modelId,
+      input.cwd,
+      input.piSessionId,
+      input.startOptions,
+    );
+    return started;
+  };
 
   const rolloutPath = (): string | null => {
     const status = session.status;
@@ -51,6 +75,7 @@ export function createPiAgenticSession(
 
   return {
     readContext: async (): Promise<AgenticContextReading> => {
+      await ensureStarted();
       const usage = session.status.contextUsage;
       return {
         tokens: Math.max(0, Math.floor(usage?.tokens ?? 0)),
@@ -61,10 +86,12 @@ export function createPiAgenticSession(
       };
     },
     prompt: async (text: string): Promise<void> => {
+      await ensureStarted();
       await session.prompt(text, () => undefined, { source: "rpc" });
       await captureUsage();
     },
     compact: async (instructions: string): Promise<void> => {
+      await ensureStarted();
       await session.compact(instructions);
     },
     lastAssistantText: (): string => {
