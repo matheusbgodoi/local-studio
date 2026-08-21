@@ -162,13 +162,17 @@ export function createRunStore(context: AgenticStoreContext) {
       const revision = run.planRevision + 1;
       const at = ms();
       const byTitle = new Map(listTasks(input.runId).map((task) => [task.title, task] as const));
-      const ids: string[] = [];
+
+      const carriedFor = (seed: TaskSeed) => (seed.id ? getTask(seed.id) : byTitle.get(seed.title));
+      const ids = input.tasks.map((seed) => carriedFor(seed)?.id ?? seed.id ?? `task_${randomUUID()}`);
+      const idByTitle = new Map(input.tasks.map((seed, index) => [seed.title, ids[index] as string]));
 
       input.tasks.forEach((seed, position) => {
-        const carried = seed.id ? getTask(seed.id) : byTitle.get(seed.title);
-        const id = carried?.id ?? seed.id ?? `task_${randomUUID()}`;
-        ids.push(id);
-        const dependencies = JSON.stringify(seed.dependencies);
+        const carried = carriedFor(seed);
+        const id = ids[position] as string;
+        const dependencies = JSON.stringify(
+          seed.dependencies.map((dependency) => idByTitle.get(dependency) ?? dependency),
+        );
         const acceptance = JSON.stringify(seed.acceptance);
         if (carried) {
           context.run(
