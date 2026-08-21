@@ -124,21 +124,14 @@ export function useExplore() {
   }, [catalogModels, poolGb]);
 
   const loadCatalogAndGpus = useCallback(async () => {
-    try {
-      const [indexData, presetsData, gpuData] = await Promise.all([
-        api.getModelIndex(),
-        api.getStarterPresets().catch(() => null),
-        api.getGPUs().catch(() => ({ gpus: [] as GPU[] })),
-      ]);
-      setCatalogModels(indexData.tiers?.flatMap((tier) => tier.models) ?? []);
-      const vram = typeof presetsData?.max_vram_gb === "number" ? presetsData.max_vram_gb : 0;
-      setApiMaxVramGb(vram);
-      setGpus(gpuData.gpus ?? []);
-    } catch {
-      setCatalogModels([]);
-      setApiMaxVramGb(0);
-      setGpus([]);
-    }
+    const [indexData, presetsData, gpuData] = await Promise.all([
+      api.getModelIndex().catch(() => null),
+      api.getStarterPresets().catch(() => null),
+      api.getGPUs().catch(() => ({ gpus: [] as GPU[] })),
+    ]);
+    setCatalogModels(indexData?.tiers?.flatMap((tier) => tier.models) ?? []);
+    setApiMaxVramGb(typeof presetsData?.max_vram_gb === "number" ? presetsData.max_vram_gb : 0);
+    setGpus(gpuData.gpus ?? []);
   }, []);
 
   useMountSubscription(() => {
