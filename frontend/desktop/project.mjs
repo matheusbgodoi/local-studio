@@ -1878,10 +1878,10 @@ function setupRepository() {
   console.log("Repository setup complete");
 }
 function auditLayout() {
-  let expected = ["frontend/desktop/project.mjs", "scripts/install-controller.sh", "scripts/install-desktop-app.sh"], actual = readdirSync10(path11.join(root5, "scripts"), { withFileTypes: !0 }).filter((entry) => entry.isFile()).map((entry) => `scripts/${entry.name}`).sort(), executable = git(["ls-files", "-s"]).split("\n").filter((line) => line.startsWith("100755 ")).map((line) => line.split("\t")[1]).sort(), stale = ["frontend/scripts", "controller/scripts", "services/agent-runtime/scripts"].filter((directory) => existsSync(path11.join(root5, directory)));
-  if (JSON.stringify(actual) !== JSON.stringify(expected.slice(1)) || JSON.stringify(executable) !== JSON.stringify(expected) || stale.length > 0)
+  let expected = ["frontend/desktop/project.mjs", "frontend/desktop/speech/build.sh", "scripts/install-controller.sh", "scripts/install-desktop-app.sh"], expectedScripts = ["scripts/install-controller.sh", "scripts/install-desktop-app.sh"], actual = readdirSync10(path11.join(root5, "scripts"), { withFileTypes: !0 }).filter((entry) => entry.isFile()).map((entry) => `scripts/${entry.name}`).sort(), executable = git(["ls-files", "-s"]).split("\n").filter((line) => line.startsWith("100755 ")).map((line) => line.split("\t")[1]).sort(), stale = ["frontend/scripts", "controller/scripts", "services/agent-runtime/scripts"].filter((directory) => existsSync(path11.join(root5, directory)));
+  if (JSON.stringify(actual) !== JSON.stringify(expectedScripts) || JSON.stringify(executable) !== JSON.stringify(expected) || stale.length > 0)
     throw Error(`Automation layout drifted: scripts=${actual.join(",")}; executable=${executable.join(",")}; stale=${stale.join(",")}`);
-  console.log("Automation layout passed: exactly three scripts");
+  console.log("Automation layout passed: two scripts and the dictation helper build");
 }
 function git(args3, options = {}) {
   return execFileSync6("git", args3, { cwd: root5, encoding: "utf8", ...options }).trim();
