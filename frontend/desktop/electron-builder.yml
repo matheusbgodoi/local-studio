@@ -40,12 +40,19 @@ extraResources:
   # helper spawned over stdio needs none of them and does not have to be rebuilt when Electron
   # moves. Built by desktop/speech/build.sh; see the header of LocalStudioDictation.swift.
   #
-  # It is `optional` because it only exists after that script has run and only makes sense on
-  # macOS 26+. A build without it produces an app whose dictation button is simply absent,
-  # which is the correct degradation — not a button that fails when pressed.
-  - from: desktop/speech/LocalStudioDictation
-    to: speech/LocalStudioDictation
-    optional: true
+  # It has to be OPTIONAL: it only exists after that script has run, and only on macOS. A build
+  # without it must still succeed and produce an app whose dictation button is simply absent —
+  # the correct degradation, and not a button that fails when pressed.
+  #
+  # Expressed as a directory plus a filter, not as `optional: true`. `optional` is not a key
+  # electron-builder knows: it does not warn about it, it just fails the whole FileSet against
+  # the schema and reports `extraResources.0 should be a string`, which points at the entry
+  # rather than at the invented key. A `from` directory that always exists with a filter that
+  # may match nothing gives the tolerance that key was reaching for, using the schema as it is.
+  - from: desktop/speech
+    to: speech
+    filter:
+      - LocalStudioDictation
   - from: desktop/resources/app-update.yml
     to: app-update.yml
   - from: ../services/agent-runtime/dist/standalone.mjs
