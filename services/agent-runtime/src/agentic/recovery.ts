@@ -63,10 +63,16 @@ export function reconcileRun(store: AgenticStore, run: AgenticRun): RunRecovery 
     }
   }
 
+  //
+  // A Run that stopped because it asked the owner a question is still asking
+  // it. Reopening it as PAUSED loses that fact, and the next resume finds no
+  // runnable task and fails a Run that was only ever waiting.
+  //
+  const waiting = store.listTasks(run.id).find((task) => task.status === "WAITING_USER");
   const summary = `${recovery.interruptedAgents} agent(s) interrupted, ${recovery.resetTasks.length} task(s) reset, ${recovery.preservedTasks.length} task(s) preserved, ${recovery.operationsNeedingReconciliation.length} operation(s) awaiting reconciliation`;
   store.updateRun(run.id, {
-    status: "PAUSED",
-    activeTaskId: null,
+    status: waiting ? "WAITING_USER" : "PAUSED",
+    activeTaskId: waiting?.id ?? null,
     recoveryState: summary,
   });
   store.appendEvent({ runId: run.id, type: "RUN_RECOVERED", summary, detail: recovery });

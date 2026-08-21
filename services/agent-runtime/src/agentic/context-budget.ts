@@ -93,10 +93,16 @@ export function computeContextBudget(
   const floor = share(contextWindow, MIN_USABLE_SHARE);
   const naturalLimit = Math.max(floor, computed);
 
+  //
+  // An override may only narrow, and it must still leave a budget a prompt can
+  // fit in: a fractional value floored to zero would have made every preflight
+  // overflow with nothing able to fix it.
+  //
   const override = policy.usableContextOverride;
-  const overridden =
-    typeof override === "number" && Number.isFinite(override) && override > 0 && override < naturalLimit;
-  const usableLimit = overridden ? Math.floor(override as number) : naturalLimit;
+  const flooredOverride =
+    typeof override === "number" && Number.isFinite(override) ? Math.floor(override) : 0;
+  const overridden = flooredOverride > 0 && flooredOverride < naturalLimit;
+  const usableLimit = overridden ? flooredOverride : naturalLimit;
 
   return {
     contextWindow,
