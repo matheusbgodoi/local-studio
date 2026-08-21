@@ -92,6 +92,21 @@ no user-agent shuffling, no proxy — and hands the page to you in a visible win
 on the same browser profile. Human verification is supported;
 **automated CAPTCHA bypass is not implemented**.
 
+### Runs that survive their own compaction
+
+Hand the agent a goal and leave. **Runs**, **Tasks** and **Agents** are durable
+records outside the model's context, so a compaction checkpoints, rebuilds the
+working set from the store and schedules the next inference itself — the same
+task stays running, and nobody types "continue". A task completes on acceptance
+evidence rather than on the word "done"; repeated non-progress replans within a
+bound; a restart preserves finished work and reconciles anything side-effecting
+that was in flight instead of replaying it.
+
+Context reserves are fractions of whatever window the serving contract declares,
+so a 32K, 176128 or future 1M model needs no code change.
+
+Details: [`docs/durable-agentic-runtime.md`](docs/durable-agentic-runtime.md).
+
 ### Lazy tools
 
 Skills load on demand and MCP connectors are armed per chat session rather than
@@ -391,6 +406,9 @@ Three things behave differently from upstream and are documented separately:
   read the same remote controller that serves Chat, with no demo data anywhere.
 - **[`docs/web-search.md`](docs/web-search.md)** — `browser_search`, reader-first
   research, and the human-verification path for sites that ask for a person.
+- **[`docs/durable-agentic-runtime.md`](docs/durable-agentic-runtime.md)** — the
+  durable Run/Task/Agent runtime: schema, scheduler, context budget, compaction,
+  recovery, idempotency, and why a bigger model needs no code change.
 
 The rig this fork is built to drive, and the project it belongs to, is
 [`matheusbgodoi/local-ai-3090-stack`](https://github.com/matheusbgodoi/local-ai-3090-stack).

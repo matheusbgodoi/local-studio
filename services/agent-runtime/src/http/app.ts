@@ -49,6 +49,14 @@ import {
 } from "./pty-handlers";
 import { handleAgentModels } from "./model-handlers";
 import {
+  handleAgenticArtifact,
+  handleAgenticRunCancel,
+  handleAgenticRunCreate,
+  handleAgenticRunGet,
+  handleAgenticRunResume,
+  handleAgenticRunsList,
+} from "./agentic-handlers";
+import {
   handleAllSessions,
   handleSessionGet,
   handleSessionPatch,
@@ -86,6 +94,12 @@ export function createAgentRuntimeApp() {
   );
   app.delete("/api/agent/automations/:id", (c) => handleAutomationDelete(c.req.param("id")));
   app.post("/api/agent/automations/:id/run", (c) => handleAutomationRun(c.req.param("id")));
+  app.get("/api/agent/runs", () => handleAgenticRunsList());
+  app.post("/api/agent/runs", (c) => handleAgenticRunCreate(c.req.raw));
+  app.get("/api/agent/runs/:id", (c) => handleAgenticRunGet(c.req.param("id")));
+  app.post("/api/agent/runs/:id/resume", (c) => handleAgenticRunResume(c.req.param("id")));
+  app.post("/api/agent/runs/:id/cancel", (c) => handleAgenticRunCancel(c.req.param("id")));
+  app.get("/api/agent/artifacts/:id", (c) => handleAgenticArtifact(c.req.raw, c.req.param("id")));
   app.get("/api/agent/pr", (c) => handlePrGet(c.req.raw));
   app.post("/api/agent/pr/merge", (c) => handlePrMerge(c.req.raw));
   app.get("/api/agent/connectors/session", (c) => handleConnectorSessionGet(c.req.raw));
