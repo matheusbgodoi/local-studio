@@ -7,6 +7,7 @@ import type {
   UsageStats,
   VRAMCalculation,
 } from "../types";
+import type { OpenAIModelsResponse } from "@shared/agent/models";
 import { encodePathSegments, type ApiCore, type RequestOptions } from "./core";
 
 const MB = 1024 * 1024;
@@ -79,9 +80,8 @@ export function createSystemApi(core: ApiCore) {
         retries: 0,
       }),
 
-    getOpenAIModels: (): Promise<{
-      data: Array<{ id: string; root?: string; max_model_len?: number }>;
-    }> => core.request("/v1/models"),
+    getOpenAIModels: (options?: RequestOptions): Promise<OpenAIModelsResponse> =>
+      core.request("/v1/models", options),
 
     tokenizeChatCompletions: (data: {
       model: string;

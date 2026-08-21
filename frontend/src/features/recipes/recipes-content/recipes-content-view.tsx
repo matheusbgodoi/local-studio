@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { Compass, Download, HardDrive, Sparkles } from "@/ui/icon-registry";
+import { Compass, Cpu, Download, HardDrive, Sparkles } from "@/ui/icon-registry";
 import type { ModelDownload, ModelInfo, RecipeWithStatus, RuntimeTarget } from "@/lib/types";
 import type { RecipeEditor } from "@/features/recipes/recipe-editor";
 import { RefreshButton, TabbedPage, Tabs } from "@/ui";
@@ -13,6 +13,7 @@ import { RecipeModal } from "../recipe-modal/recipe-modal";
 import { ExploreTab } from "./explore-tab";
 import { DownloadsTab } from "./downloads-tab";
 import { PicksTab } from "./picks-tab";
+import { LocalModelsTab } from "./local-models-tab";
 
 type Props = {
   embedded?: boolean;
@@ -20,6 +21,7 @@ type Props = {
   setTab: (tab: RecipesContentTab) => void;
   loading: boolean;
   refreshing: boolean;
+  recipesError: string | null;
   filter: string;
   setFilter: (value: string) => void;
   modalOpen: boolean;
@@ -47,6 +49,7 @@ type Props = {
 };
 
 const MODEL_TABS: Array<{ id: RecipesContentTab; label: string; icon: ReactNode }> = [
+  { id: "local", label: "Local", icon: <Cpu className="h-3.5 w-3.5" /> },
   { id: "picks", label: "Picks", icon: <Sparkles className="h-3.5 w-3.5" /> },
   { id: "get", label: "Get", icon: <Compass className="h-3.5 w-3.5" /> },
   { id: "serves", label: "Serves", icon: <HardDrive className="h-3.5 w-3.5" /> },
@@ -54,6 +57,11 @@ const MODEL_TABS: Array<{ id: RecipesContentTab; label: string; icon: ReactNode 
 ];
 
 const TAB_HEADINGS: Record<RecipesContentTab, { title: string; description: string }> = {
+  local: {
+    title: "Local models",
+    description:
+      "The models this backend is serving right now, the GPUs behind them, and which one is resident.",
+  },
   picks: {
     title: "Picks",
     description: "Curated model catalog grouped by hardware tier, with per-variant downloads.",
@@ -79,6 +87,7 @@ export function RecipesContentView(props: Props) {
     setTab,
     loading,
     refreshing,
+    recipesError,
     filter,
     setFilter,
     modalOpen,
@@ -112,9 +121,12 @@ export function RecipesContentView(props: Props) {
       </h2>
       <p className="mt-1 text-[length:var(--fs-sm)] text-(--ui-muted)">{heading.description}</p>
       <div className="mt-6">
-        {tab === "serves" ? (
+        {tab === "local" ? (
+          <LocalModelsTab />
+        ) : tab === "serves" ? (
           <RecipesTab
             loading={loading}
+            loadError={recipesError}
             filter={filter}
             setFilter={setFilter}
             recipes={recipes}
@@ -137,18 +149,33 @@ export function RecipesContentView(props: Props) {
     </section>
   );
 
+  // THE HEADER REFRESH DOES NOT BELONG ON EVERY TAB.
+  //
+  // `onRefresh` is `loadRecipes`: it re-fetches /recipes, /models and /runtime-targets. On the
+  // Local tab none of those are on screen — that tab reads /v1/models and the realtime status
+  // store — so pressing it spun the header, re-requested routes this backend answers 404 for,
+  // and left the served-model list beneath it untouched. Making Local the default put the
+  // wrong Refresh in the page header.
+  //
+  // Local keeps the one it already has, sitting directly above the list it refreshes. The
+  // alternative — driving the tab's refresh from up here — would mean calling useLocalModels()
+  // in this component, and that fetches /v1/models on every tab instead of only the one that
+  // shows it.
+  const showHeaderRefresh = tab !== "local";
   return (
     <>
       {embedded ? (
         <div className="space-y-6">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-(--ui-separator) pb-3">
             <Tabs variant="pill" items={MODEL_TABS} activeTab={tab} onSelectTab={setTab} />
-            <RefreshButton
-              onRefresh={onRefresh}
-              loading={refreshing || loading}
-              label="Refresh models"
-              className="h-8 w-8"
-            />
+            {showHeaderRefresh ? (
+              <RefreshButton
+                onRefresh={onRefresh}
+                loading={refreshing || loading}
+                label="Refresh models"
+                className="h-8 w-8"
+              />
+            ) : null}
           </div>
           {content}
         </div>
@@ -156,18 +183,20 @@ export function RecipesContentView(props: Props) {
         <TabbedPage
           eyebrow="Model library"
           title="Models"
-          description="Manage model profiles, downloads, and the model marketplace available to Local Studio."
+          description="The models this backend serves, plus the catalog, downloads, and Serves that depend on a controller."
           width="md"
           tabs={MODEL_TABS}
           activeTab={tab}
           onSelectTab={setTab}
           actions={
-            <RefreshButton
-              onRefresh={onRefresh}
-              loading={refreshing || loading}
-              label="Refresh models"
-              className="h-8 w-8"
-            />
+            showHeaderRefresh ? (
+              <RefreshButton
+                onRefresh={onRefresh}
+                loading={refreshing || loading}
+                label="Refresh models"
+                className="h-8 w-8"
+              />
+            ) : null
           }
         >
           {content}

@@ -56,6 +56,7 @@ export function RecipesContent({ embedded = false }: { embedded?: boolean }) {
       setTab={selectTab}
       loading={model.loading}
       refreshing={model.refreshing}
+      recipesError={model.recipesError}
       filter={model.filter}
       setFilter={model.setFilter}
       modalOpen={model.modalOpen}

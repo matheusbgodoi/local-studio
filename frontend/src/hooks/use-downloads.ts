@@ -4,6 +4,7 @@ import { effectInterval } from "@/lib/effect-timers";
 
 import { useCallback, useMemo, useState } from "react";
 import api from "@/lib/api/client";
+import { isAbsentRouteStatus } from "@/lib/api/http-error-message";
 import type { ModelDownload } from "@/lib/types";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 
@@ -21,6 +22,7 @@ export function useDownloads(pollIntervalMs = 2500) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [startingModelIds, setStartingModelIds] = useState<Set<string>>(new Set());
+  const [unsupported, setUnsupported] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -28,6 +30,7 @@ export function useDownloads(pollIntervalMs = 2500) {
       setDownloads(data.downloads || []);
       setError(null);
     } catch (err) {
+      if (isAbsentRouteStatus((err as Error & { status?: number }).status)) setUnsupported(true);
       setError(err instanceof Error ? err.message : "Failed to load downloads");
     } finally {
       setLoading(false);
@@ -40,11 +43,12 @@ export function useDownloads(pollIntervalMs = 2500) {
   const hasActive = downloads.some((d) => d.status === "downloading" || d.status === "paused");
 
   useMountSubscription(() => {
+    if (unsupported) return;
     void refresh();
     if (pollIntervalMs <= 0) return;
     const timer = effectInterval(refresh, hasActive ? pollIntervalMs : 15_000);
     return () => timer.cancel();
-  }, [pollIntervalMs, refresh, hasActive]);
+  }, [pollIntervalMs, refresh, hasActive, unsupported]);
 
   const startDownload = useCallback(
     async (params: StartDownloadParams) => {
@@ -112,6 +116,7 @@ export function useDownloads(pollIntervalMs = 2500) {
     startingModelIds,
     loading,
     error,
+    unsupported,
     refresh,
     startDownload,
     pauseDownload,

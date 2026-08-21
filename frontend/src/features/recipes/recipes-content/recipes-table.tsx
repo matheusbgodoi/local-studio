@@ -15,6 +15,7 @@ type Props = {
   launching: boolean;
   runningRecipeId: string | null;
   loading: boolean;
+  loadError: string | null;
   filter: string;
   onTogglePin: (recipeId: string) => void;
   onToggleMenu: (recipeId: string) => void;
@@ -53,6 +54,7 @@ export function RecipesTable({
   launching,
   runningRecipeId,
   loading,
+  loadError,
   filter,
   onTogglePin,
   onToggleMenu,
@@ -75,8 +77,16 @@ export function RecipesTable({
       title="Saved Serves"
       description="Launch-ready model, runtime, and configuration combinations."
       actions={
-        <ModelStatus tone={recipes.length ? "good" : loading ? "info" : "default"}>
-          {recipes.length ? `${recipes.length} rows` : loading ? "syncing" : "defaults"}
+        <ModelStatus
+          tone={recipes.length ? "good" : loadError ? "danger" : loading ? "info" : "default"}
+        >
+          {recipes.length
+            ? `${recipes.length} rows`
+            : loadError
+              ? "unreachable"
+              : loading
+                ? "syncing"
+                : "defaults"}
         </ModelStatus>
       }
     >
@@ -100,6 +110,15 @@ export function RecipesTable({
         />
       ) : null}
 
+      {loadError && recipes.length === 0 ? (
+        <ModelRow
+          label="Serves could not be read from this backend"
+          description="Nothing is listed because the request failed, not because there are no Serves. Templates stay hidden until the source answers."
+          value={<ModelValue dim>{loadError}</ModelValue>}
+          status={<ModelStatus tone="danger">unreachable</ModelStatus>}
+        />
+      ) : null}
+
       {recipes.length
         ? recipes.map((recipe) => (
             <RecipeRow
@@ -118,25 +137,27 @@ export function RecipesTable({
               onAttachAgents={setAttachRecipe}
             />
           ))
-        : TEMPLATE_ROWS.map((row) => (
-            <ModelRow
-              key={row.label}
-              label={row.label}
-              description={
-                emptyBecauseSearch
-                  ? `No exact match for "${filter.trim()}". ${row.description}`
-                  : row.description
-              }
-              value={<ModelValue mono>{row.value}</ModelValue>}
-              status={<ModelStatus>{row.status}</ModelStatus>}
-              actions={
-                <ModelButton onClick={onNewRecipe}>
-                  <Plus className="h-3 w-3" />
-                  Use
-                </ModelButton>
-              }
-            />
-          ))}
+        : loadError
+          ? null
+          : TEMPLATE_ROWS.map((row) => (
+              <ModelRow
+                key={row.label}
+                label={row.label}
+                description={
+                  emptyBecauseSearch
+                    ? `No exact match for "${filter.trim()}". ${row.description}`
+                    : row.description
+                }
+                value={<ModelValue mono>{row.value}</ModelValue>}
+                status={<ModelStatus>{row.status}</ModelStatus>}
+                actions={
+                  <ModelButton onClick={onNewRecipe}>
+                    <Plus className="h-3 w-3" />
+                    Use
+                  </ModelButton>
+                }
+              />
+            ))}
 
       {attachRecipe ? (
         <AttachLocalAgentsDialog

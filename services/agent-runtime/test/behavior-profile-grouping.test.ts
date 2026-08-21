@@ -139,6 +139,22 @@ describe("the alias row carries its physical model", () => {
   });
 });
 
+describe("tool support is the server's statement, never a guess", () => {
+  test("a row that publishes tools carries it, either way", () => {
+    expect(normalizeOpenAIModel({ id: "alias-a", metadata: { tools: true } }).tools).toBe(true);
+    expect(normalizeOpenAIModel({ id: "alias-b", metadata: { tools: false } }).tools).toBe(false);
+  });
+
+  test("a row that says nothing carries nothing - no name is read for a capability", () => {
+    expect(normalizeOpenAIModel({ id: "alias-c", metadata: {} }).tools).toBeUndefined();
+    expect(normalizeOpenAIModel({ id: "alias-tools-agent", metadata: {} }).tools).toBeUndefined();
+  });
+
+  test("llama-swap's meta spelling is read too", () => {
+    expect(normalizeOpenAIModel({ id: "alias-d", meta: { tools: true } }).tools).toBe(true);
+  });
+});
+
 describe("groupByPhysicalModel", () => {
   const groups = groupByPhysicalModel(normalizeOpenAIModels(LIVE_MODELS));
 

@@ -18,6 +18,7 @@ import { RecipesTable } from "./recipes-table";
 
 type Props = {
   loading: boolean;
+  loadError: string | null;
   filter: string;
   setFilter: (value: string) => void;
   recipes: RecipeWithStatus[];
@@ -65,6 +66,7 @@ const activeDetailsFor = (
 
 export function RecipesTab({
   loading,
+  loadError,
   filter,
   setFilter,
   recipes,
@@ -78,7 +80,11 @@ export function RecipesTab({
 }: Props) {
   const activeRecipe = activeRecipeFor(recipes, runningRecipeId);
   const activeTitle = runningRecipeName ?? activeRecipe?.name ?? "No active Serve";
-  const activeSubtitle = activeRecipe?.model_path ?? "This controller is ready for a Serve.";
+  const activeSubtitle =
+    activeRecipe?.model_path ??
+    (loadError
+      ? "This backend did not answer the Serves request."
+      : "This controller is ready for a Serve.");
   const activeDetails = activeDetailsFor(activeRecipe, loading, sortedRecipes.length);
 
   return (
@@ -87,8 +93,16 @@ export function RecipesTab({
         title="Serves"
         description="Each Serve binds model weights, a real runtime, and launch configuration."
         actions={
-          <ModelStatus tone={runningRecipeId ? "good" : loading ? "info" : "default"}>
-            {runningRecipeId ? "running" : loading ? "syncing" : "ready"}
+          <ModelStatus
+            tone={runningRecipeId ? "good" : loadError ? "danger" : loading ? "info" : "default"}
+          >
+            {runningRecipeId
+              ? "running"
+              : loadError
+                ? "unreachable"
+                : loading
+                  ? "syncing"
+                  : "ready"}
           </ModelStatus>
         }
       >
@@ -142,6 +156,7 @@ export function RecipesTab({
         {...table}
         recipes={sortedRecipes}
         loading={loading}
+        loadError={loadError}
         filter={filter}
         onNewRecipe={onNewRecipe}
       />

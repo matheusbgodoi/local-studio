@@ -15,10 +15,12 @@ import type { RecipesTableProps } from "./types";
 import { useRecipesDerived } from "./use-recipes-derived";
 import { isRecipeActive } from "./launch-reconciliation";
 
-export type RecipesContentTab = "picks" | "get" | "serves" | "downloads";
+export type RecipesContentTab = "local" | "picks" | "get" | "serves" | "downloads";
 
 const requestedTab = (value: string | null): RecipesContentTab =>
-  value === "get" || value === "serves" || value === "downloads" ? value : "picks";
+  value === "picks" || value === "get" || value === "serves" || value === "downloads"
+    ? value
+    : "local";
 
 export function useRecipesContentModel() {
   const searchParams = useSearchParams();
@@ -29,6 +31,7 @@ export function useRecipesContentModel() {
   const [loading, setLoading] = useState(cachedRecipes === null);
   const [refreshing, setRefreshing] = useState(false);
   const [recipes, setRecipes] = useState<RecipeWithStatus[]>(() => cachedRecipes ?? []);
+  const [recipesError, setRecipesError] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [pinnedRecipes, setPinnedRecipes] = useState<Set<string>>(new Set());
   const [recipeMenuOpen, setRecipeMenuOpen] = useState<string | null>(null);
@@ -69,13 +72,20 @@ export function useRecipesContentModel() {
 
   const loadRecipes = useCallback(async (): Promise<RecipeWithStatus[]> => {
     try {
-      const [recipesData, modelsData, runtimeData] = await Promise.all([
-        api.getRecipes().catch(() => ({ recipes: [] as RecipeWithStatus[] })),
+      const [recipesResult, modelsData, runtimeData] = await Promise.all([
+        api
+          .getRecipes()
+          .then((data) => ({ recipes: data.recipes, error: null as string | null }))
+          .catch((error: unknown) => ({
+            recipes: [] as RecipeWithStatus[],
+            error: error instanceof Error ? error.message : "Serves could not be loaded",
+          })),
         api.getModels().catch(() => ({ models: [] as ModelInfo[] })),
         api.getRuntimeTargets().catch(() => ({ targets: [] as RuntimeTarget[] })),
       ]);
-      const recipesList = recipesData.recipes || [];
-      writePageCache("recipes:list", recipesList);
+      setRecipesError(recipesResult.error);
+      const recipesList = recipesResult.recipes;
+      if (!recipesResult.error) writePageCache("recipes:list", recipesList);
       writePageCache("recipes:models", modelsData.models || []);
       setRecipes(recipesList);
       const running = recipesList.find((r) => r.status === "running")?.id || null;
@@ -262,6 +272,7 @@ export function useRecipesContentModel() {
     loading,
     refreshing,
     recipes,
+    recipesError,
     filter,
     setFilter,
     togglePin,

@@ -3,11 +3,12 @@ const MAX_DETAIL_CHARS = 240;
 
 /** A status that means "this route is not here", as opposed to "this route failed".
  *
- * Not exported: nothing outside this module needs it yet, and exporting ahead of a consumer is
- * what `knip` exists to catch. It is a function rather than two inlined `.has()` calls so the
- * two places that ask the question cannot drift apart — the first version of this change did
- * inline both, which left this helper dead and a comment claiming a caller it did not have. */
-function isAbsentRouteStatus(status: number | undefined): boolean {
+ * A function rather than an inlined `.has()` at each site, so the places that ask the question
+ * cannot drift apart. Exported now that `use-downloads` asks it too — it latches `unsupported`
+ * and stops re-arming its poll when the route will never exist, which is the same question this
+ * module answers for retries and for error text. Three copies of that status set would be three
+ * chances to disagree. */
+export function isAbsentRouteStatus(status: number | undefined): boolean {
   return status !== undefined && ABSENT_ROUTE_STATUSES.has(status);
 }
 

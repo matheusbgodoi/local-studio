@@ -63,7 +63,17 @@ export interface AgentModel {
    *  there and true here. */
   nativeReasoning?: boolean;
   thinkingLevels?: AgentThinkingLevel[];
+  /** The server's statement that this row accepts tool calls. Wire-only:
+   *  absent when the controller does not publish it, never guessed from a name. */
+  tools?: boolean;
+  /** Inferred when the wire is silent — safe for deciding whether to offer an attachment,
+   *  never for a capability chip. See {@link visionDeclared}. */
   vision: boolean;
+  /** Vision as the BACKEND stated it, or undefined. Never inferred from the model name. */
+  visionDeclared?: boolean;
+  /** The context window the row declared, or undefined. `contextWindow` carries a fallback;
+   *  this does not. */
+  contextWindowDeclared?: number;
   active: boolean;
 }
 
@@ -211,21 +221,41 @@ function firstString(values: unknown[]): string | undefined {
   return undefined;
 }
 
+/** The context window the row ACTUALLY DECLARED, or undefined. No fallback.
+ *
+ * Split out from resolveContextWindow so that "the backend told us" and "we had to guess" stop
+ * being the same value. A consumer that must not display a guess — a page whose whole claim is
+ * that it shows only what the wire carried — asks this one.
+ *
+ * It is exported rather than re-derived at the call site because a second implementation of
+ * this predicate disagreed with this one in both directions: a `typeof value === "number"`
+ * check called `{context_window: 0}` declared, so the card showed the 128,000 fallback as if
+ * the server had said it, and it called `{max_model_len: "32768"}` undeclared, so a context the
+ * resolver honours was silently dropped. `0` and `-1` are the ordinary encodings for
+ * "unknown"/"unlimited", which is exactly the case that must not produce a plausible number. */
+export function declaredContextWindow(
+  model: OpenAIModelListItem,
+  metadata: Record<string, unknown> = modelExtras(model),
+): number | undefined {
+  for (const value of [
+    model.contextWindow,
+    model.context_window,
+    model.max_model_len,
+    metadata.contextWindow,
+    metadata.context_window,
+    metadata.max_model_len,
+  ]) {
+    const parsed = numberFromUnknown(value);
+    if (parsed) return parsed;
+  }
+  return undefined;
+}
+
 function resolveContextWindow(
   model: OpenAIModelListItem,
   metadata: Record<string, unknown>,
 ): number {
-  return firstNumber(
-    [
-      model.contextWindow,
-      model.context_window,
-      model.max_model_len,
-      metadata.contextWindow,
-      metadata.context_window,
-      metadata.max_model_len,
-    ],
-    128_000,
-  );
+  return declaredContextWindow(model, metadata) ?? 128_000;
 }
 
 function resolveMaxTokens(
@@ -302,11 +332,22 @@ export function normalizeOpenAIModel(model: OpenAIModelListItem): AgentModel {
     maxTokens,
     reasoning: resolveReasoning(model, metadata, id),
     nativeReasoning: resolveExtraBoolean(model, metadata, "nativeReasoning"),
+    tools: resolveExtraBoolean(model, metadata, "tools"),
+    // TWO VISION ANSWERS, AND THEY ANSWER DIFFERENT QUESTIONS.
+    //
+    // `vision` is "should this client offer an image attachment", and inferring it from the
+    // model name is a reasonable last resort there: guessing wrong hides a button, or shows
+    // one the server rejects. `visionDeclared` is "did the backend SAY so", and it is the only
+    // one a capability chip may be drawn from. resolveModelVision falls back to
+    // inferModelVision, which substring-matches the alias against a 44-entry name table — so
+    // an alias containing "llama" or "gemma" earns a vision chip from its spelling alone.
     vision: resolveModelVision({
       identifiers: [id],
       metadata,
       modalities: [model.input, model.inputs, model.modalities],
     }),
+    visionDeclared: resolveExtraBoolean(model, metadata, "vision"),
+    contextWindowDeclared: declaredContextWindow(model, metadata),
     active: explicitActive === true,
   };
 }
