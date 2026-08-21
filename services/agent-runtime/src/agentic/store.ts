@@ -28,6 +28,10 @@ export function createAgenticStore(dataDir: string, now: () => Date = () => new 
     now: context.ms,
     appendEvent: context.appendEvent,
     close: (): void => database.close(),
+    tableNames: (): string[] =>
+      (context.all("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name") as {
+        name?: unknown;
+      }[]).map((row) => String(row.name ?? "")),
     ...createRunStore(context),
     ...createAgentStore(context),
     ...createOperationStore(context, artifactsRoot),
