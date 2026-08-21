@@ -68,12 +68,14 @@ export function applyEvidence(
     return { ...criterion, satisfied: true, evidence };
   });
   const outstanding = next.filter((criterion) => !criterion.satisfied).map((criterion) => criterion.id);
-  return {
-    acceptance: next,
-    satisfied: next.length > 0 && outstanding.length === 0,
-    newlySatisfied,
-    outstanding,
-  };
+  //
+  // A task that declares no criteria has nothing to prove, so the claim is the
+  // gate. Requiring evidence that was never asked for made such a task
+  // impossible to finish: it could not succeed, it drew no rejection either,
+  // and the stall detector eventually failed the whole Run over it.
+  //
+  const satisfied = next.length === 0 ? report.claimedComplete : outstanding.length === 0;
+  return { acceptance: next, satisfied, newlySatisfied, outstanding };
 }
 
 //

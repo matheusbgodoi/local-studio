@@ -35,6 +35,8 @@ export function createPiAgenticSession(input: PiAgenticSessionInput): AgenticInf
   let previousTotals: SessionUsageTotals = emptyUsageTotals();
   let lastUsage: AgenticTurnUsage = { input: 0, output: 0, cache: 0 };
   let started: Promise<void> | null = null;
+  let baselineSeeded = false;
+  let turns = 0;
 
   //
   // The scheduler only knows how to ask for a turn, so starting the underlying
@@ -57,6 +59,23 @@ export function createPiAgenticSession(input: PiAgenticSessionInput): AgenticInf
     return findSessionFile(status.cwd, status.piSessionId);
   };
 
+  //
+  // A resumed Run reads a rollout that already holds every earlier turn.
+  // Without seeding the baseline first, the next turn's delta would be the
+  // whole lifetime and the cumulative counters would double.
+  //
+  const seedBaseline = async (): Promise<void> => {
+    if (baselineSeeded) return;
+    baselineSeeded = true;
+    const filepath = rolloutPath();
+    if (!filepath) return;
+    try {
+      previousTotals = await readSessionUsageTotals(filepath);
+    } catch {
+      previousTotals = emptyUsageTotals();
+    }
+  };
+
   const captureUsage = async (): Promise<void> => {
     const filepath = rolloutPath();
     if (!filepath) return;
@@ -74,6 +93,7 @@ export function createPiAgenticSession(input: PiAgenticSessionInput): AgenticInf
   };
 
   return {
+    turnId: (): number => turns,
     readContext: async (): Promise<AgenticContextReading> => {
       await ensureStarted();
       const usage = session.status.contextUsage;
@@ -87,6 +107,8 @@ export function createPiAgenticSession(input: PiAgenticSessionInput): AgenticInf
     },
     prompt: async (text: string): Promise<void> => {
       await ensureStarted();
+      await seedBaseline();
+      turns += 1;
       await session.prompt(text, () => undefined, { source: "rpc" });
       await captureUsage();
     },

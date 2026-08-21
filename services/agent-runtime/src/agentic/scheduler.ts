@@ -18,7 +18,7 @@ import {
   DEFAULT_CONTEXT_BUDGET_POLICY,
 } from "./context-budget";
 import type { AgenticCapability } from "./capability";
-import type { AgenticRun, AgenticTask } from "./contract";
+import type { AgenticRun, AgenticRunStatus, AgenticTask } from "./contract";
 import { resolveReadiness, selectNextTask, validatePlan, type TaskNode } from "./dag";
 import { runCompaction, type AgenticInferenceSession } from "./scheduler-session";
 import {
@@ -34,6 +34,8 @@ import { applyEvidence, acceptanceRejection, parseTurnReport } from "./turn-repo
 import { buildWorkingSet, renderWorkingSet, workingSetTokens } from "./working-set";
 
 export const MAX_INEFFECTIVE_COMPACTIONS = 2;
+
+export const TERMINAL_RUN_STATUSES: readonly AgenticRunStatus[] = ["COMPLETED", "FAILED", "CANCELLED"];
 
 export type SchedulerStep =
   | { kind: "idle"; reason: string }
@@ -114,7 +116,7 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
   const stallByTask = new Map<string, StallState>();
   const ineffectiveCompactions = new Map<string, number>();
   const sessions = new Map<string, AgenticInferenceSession>();
-  const consumedTurns = new Map<string, string>();
+  const consumedTurns = new Map<string, number>();
 
   //
   // Exactly one session object per Run. The adapter that fronts a real backend
@@ -314,7 +316,16 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
       }
     }
 
+    //
+    // Everything above this point awaited the backend, and a cancel that
+    // landed during one of those awaits has already written the terminal
+    // status. Writing RUNNING now would resurrect the Run into a state with
+    // no loop driving it, and nothing would ever settle it again.
+    //
     const refreshed = store.requireRun(run.id);
+    if (TERMINAL_RUN_STATUSES.includes(refreshed.status)) {
+      return { kind: "idle", reason: `run is ${refreshed.status.toLowerCase()}` };
+    }
     store.updateTask(task.id, {
       status: "RUNNING",
       attemptCount: task.attemptCount + 1,
@@ -347,7 +358,23 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
       summary: compacted ? `resumed ${task.title} automatically after compaction` : task.title,
     });
 
-    await session.prompt(prompt);
+    try {
+      await session.prompt(prompt);
+    } catch (error) {
+      //
+      // A rejected turn is still a settled attempt. Leaving the rows RUNNING
+      // under a Run the driver is about to fail would hide the work from both
+      // the view and the restart reconciliation.
+      //
+      const message = error instanceof Error ? error.message : String(error);
+      for (const open of store.listAttempts(task.id).filter((entry) => entry.status === "RUNNING")) {
+        store.settleAttempt(open.id, { status: "FAILED", outcome: "the turn was rejected", error: message });
+      }
+      store.updateTask(task.id, { status: "PENDING", blocker: message });
+      if (agent) store.updateAgent(agent.id, { status: "INTERRUPTED", currentTaskId: null });
+      store.appendEvent({ runId: refreshed.id, taskId: task.id, type: "TASK_FAILED", summary: message });
+      throw error;
+    }
     return { kind: "resumed", taskId: task.id, compacted };
   };
 
@@ -358,27 +385,31 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
   //
   const advance = async (runId: string, capability: AgenticCapability): Promise<SchedulerStep> => {
     const run = store.requireRun(runId);
-    if (run.status === "COMPLETED" || run.status === "FAILED" || run.status === "CANCELLED") {
+    if (TERMINAL_RUN_STATUSES.includes(run.status)) {
       return { kind: "idle", reason: `run is ${run.status.toLowerCase()}` };
     }
     const session = sessionFor(run);
     const agent = store.listAgents(run.id)[0];
-
-    const usage = session.lastTurnUsage();
-    store.addRunUsage(run.id, usage);
-    if (agent) store.addAgentUsage(agent.id, usage);
 
     const lastError = session.lastError();
     const errors = lastError ? [lastError] : [];
     const finalText = session.lastAssistantText();
     //
     // A step that ends without launching — a replan, for one — leaves the
-    // previous turn's text in place. Reading it again would charge a second
-    // attempt for one piece of work, and could attribute its evidence to
-    // whichever task the revision made current.
+    // previous turn in place. Reading it again would charge a second attempt
+    // for one piece of work, count its tokens twice, and could attribute its
+    // evidence to whichever task the revision made current.
     //
-    const alreadyConsumed = consumedTurns.get(run.id) === finalText;
-    consumedTurns.set(run.id, finalText);
+    const turnId = session.turnId();
+    const alreadyConsumed = consumedTurns.get(run.id) === turnId;
+    consumedTurns.set(run.id, turnId);
+
+    if (!alreadyConsumed) {
+      const usage = session.lastTurnUsage();
+      store.addRunUsage(run.id, usage);
+      if (agent) store.addAgentUsage(agent.id, usage);
+    }
+
     const report = alreadyConsumed
       ? { evidence: [], claimedComplete: false, blockedReason: null, userQuestion: null, errors: [] }
       : parseTurnReport(finalText);
@@ -387,7 +418,12 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     let tasks = store.listTasks(run.id);
     const activeTask = run.activeTaskId ? (store.getTask(run.activeTaskId) ?? null) : null;
 
-    if (activeTask) {
+    //
+    // With no new turn there is nothing to adjudicate. Re-running the
+    // judgement on a turn already read would settle its attempt a second time
+    // and knock a task that is legitimately WAITING_USER back to PENDING.
+    //
+    if (activeTask && !alreadyConsumed) {
       const outcome = applyEvidence(activeTask.acceptance, report);
       store.updateTask(activeTask.id, { acceptance: outcome.acceptance });
       for (const criterionId of outcome.newlySatisfied) {
@@ -521,6 +557,21 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     const nextTaskId = selectNextTask(nodesOf(tasks));
     if (!nextTaskId) {
       const settledRun = store.requireRun(run.id);
+      //
+      // A task genuinely waiting on a human is not a dead end. Failing the Run
+      // over it would throw away work the owner is one answer away from
+      // finishing, and a restart would do it again.
+      //
+      const waiting = tasks.filter((task) => task.status === "WAITING_USER");
+      if (waiting.length > 0) {
+        store.updateRun(settledRun.id, { status: "WAITING_USER", activeTaskId: waiting[0]?.id ?? null });
+        if (agent) store.updateAgent(agent.id, { status: "WAITING" });
+        return {
+          kind: "waiting-user",
+          taskId: waiting[0]?.id ?? "",
+          question: waiting[0]?.blocker ?? "a human decision is required",
+        };
+      }
       const allSucceeded = tasks.every((task) => task.status === "SUCCEEDED");
       const status = allSucceeded ? "COMPLETED" : "FAILED";
       store.updateRun(settledRun.id, {
