@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { type ComponentType, type MouseEvent } from "react";
-import { Activity, Boxes, Clock, ServerCog, TrendingUp } from "@/ui/icon-registry";
+import { Activity, Boxes, Clock, ListChecks, ServerCog, TrendingUp } from "@/ui/icon-registry";
 
 export type IconComponent = ComponentType<{ className?: string; strokeWidth?: number }>;
 
@@ -10,6 +10,7 @@ export type IconComponent = ComponentType<{ className?: string; strokeWidth?: nu
 export const tabs = [
   { href: "/", label: "Status", icon: Activity },
   { href: "/models", label: "Models", icon: Boxes },
+  { href: "/runs", label: "Runs", icon: ListChecks },
   { href: "/agent/automations", label: "Automations", icon: Clock },
   { href: "/configure", label: "Configure", icon: ServerCog },
   { href: "/usage", label: "Usage", icon: TrendingUp },
