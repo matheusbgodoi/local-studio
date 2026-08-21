@@ -2,6 +2,7 @@ import type {
   UsageContextBucket,
   UsageEfficiency,
   UsageEnergy,
+  UsageEnergyRates,
   UsageFilters,
   UsagePeriod,
   UsageSpeculative,
@@ -324,6 +325,63 @@ function normalizeEfficiency(value: unknown): UsageEfficiency | undefined {
   };
 }
 
+function normalizeEnergyRates(value: unknown): UsageEnergyRates | undefined {
+  const rates = record(value);
+  if (Object.keys(rates).length === 0) return undefined;
+
+  // A rate is only a rate if BOTH sides are finite numbers. Half a measurement is not a
+  // measurement, and a model that arrives half-measured belongs with the unmeasured ones
+  // rather than on screen beside a number the reader would assume was checked.
+  const measured = array(rates.by_physical_model).flatMap((entry) => {
+    const input = nullableNum(entry.wh_per_1m_input);
+    const output = nullableNum(entry.wh_per_1m_output);
+    if (input === null || output === null) return [];
+    return [
+      {
+        model: text(entry.model, "unknown"),
+        aliases: strings(entry.aliases),
+        wh_per_1m_input: input,
+        wh_per_1m_output: output,
+        idle_watts: nullableNum(entry.idle_watts),
+        scope: nullableText(entry.scope),
+        energy_source: nullableText(entry.energy_source),
+        significant_figures: nullableNum(entry.significant_figures),
+        measured_at: nullableText(entry.measured_at),
+        measured_on_alias: nullableText(entry.measured_on_alias),
+        context_tokens: nullableNum(entry.context_tokens),
+        method: nullableText(entry.method),
+        sample:
+          Object.keys(record(entry.sample)).length === 0
+            ? null
+            : {
+                requests: nullableNum(record(entry.sample).requests),
+                input_tokens: nullableNum(record(entry.sample).input_tokens),
+                output_tokens: nullableNum(record(entry.sample).output_tokens),
+              },
+        excludes: strings(entry.excludes),
+        // Defaults to "not priced". Assuming a sample priced cached input when it did not
+        // say so would understate the input side by an order of magnitude.
+        cached_input_priced: entry.cached_input_priced === true,
+        notes: strings(entry.notes),
+      },
+    ];
+  });
+
+  // A model dropped for arriving half-measured is still a model with no usable rate, so it
+  // joins the unmeasured list rather than vanishing from the payload entirely.
+  const droppedHalfMeasured = array(rates.by_physical_model)
+    .map((entry) => text(entry.model, "unknown"))
+    .filter((model) => !measured.some((rate) => rate.model === model));
+
+  return {
+    by_physical_model: measured,
+    unmeasured_physical_models: [
+      ...new Set([...strings(rates.unmeasured_physical_models), ...droppedHalfMeasured]),
+    ].sort(),
+    measured: measured.length > 0,
+  };
+}
+
 export function normalizeUsageStats(input: UsageStats | null | undefined): UsageStats {
   const s = record(input);
   const totals = record(s.totals);
@@ -346,6 +404,7 @@ export function normalizeUsageStats(input: UsageStats | null | undefined): Usage
     tokens: normalizeTokens(s.tokens),
     energy: normalizeEnergy(s.energy),
     efficiency: normalizeEfficiency(s.efficiency),
+    energy_rates: normalizeEnergyRates(s.energy_rates),
     telemetry_enabled: s.telemetry_enabled !== false,
     totals: {
       total_tokens: num(totals.total_tokens),

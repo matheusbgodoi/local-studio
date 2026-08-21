@@ -99,16 +99,6 @@ export const startMetricsCollector = (context: AppContext): Effect.Effect<never>
       lifetime_energy_kwh: (lifetimeData["energy_wh"] ?? 0) / 1000,
       lifetime_uptime_hours: (lifetimeData["uptime_seconds"] ?? 0) / 3600,
       current_power_watts: totalPowerWatts,
-      kwh_per_million_input: lifetimeData["prompt_tokens_total"]
-        ? (lifetimeData["energy_wh"] ?? 0) /
-          1000 /
-          ((lifetimeData["prompt_tokens_total"] ?? 1) / 1_000_000)
-        : null,
-      kwh_per_million_output: lifetimeData["completion_tokens_total"]
-        ? (lifetimeData["energy_wh"] ?? 0) /
-          1000 /
-          ((lifetimeData["completion_tokens_total"] ?? 1) / 1_000_000)
-        : null,
     };
 
     const totalVramUsedGb = gpuList.reduce((sum, gpu) => sum + gpu.memory_used_mb / 1024, 0);
