@@ -10,9 +10,8 @@ import { instantLabel } from "@/features/usage/usage-formatters";
 import { UsageTokensTab } from "@/features/usage/usage-tokens-tab";
 import { UsageEnergyTab } from "@/features/usage/usage-energy-tab";
 import { UsageEfficiencyTab } from "@/features/usage/usage-efficiency-tab";
-import { UsageEnergyRatesPanel } from "@/features/usage/usage-energy-rates";
 import { useEnergyPreferences } from "@/features/usage/energy-preferences";
-import type { UsagePeriod } from "@/lib/types";
+import type { UsageFilters, UsagePeriod } from "@/lib/types";
 import { Upload } from "@/ui/icon-registry";
 import {
   ProfileAvatar,
@@ -37,6 +36,39 @@ const PERIODS = [
 ] satisfies Array<{ id: UsagePeriod; label: string }>;
 
 const ALL_MODELS = "all";
+
+/** ONE ROW PER PHYSICAL MODEL, NAMED THE WAY THE CHAT NAMES IT.
+ *
+ * The filter listed `supported_models` raw — the union of what the router serves with every
+ * alias that ever recorded a row. The owner saw six entries while the chat's picker showed
+ * three, by full name. Two different faults produced that gap: qwen-daily and qwen-uncensored
+ * are ONE checkpoint behind two behaviour profiles, and two more were retired aliases
+ * surviving only in their own history.
+ *
+ * Labels come off the wire (the router's displayName), so this file names no model — the same
+ * rule the chat's picker follows.
+ *
+ * History-only aliases are GROUPED rather than hidden: their rows are real measurements, and
+ * dropping them would make a period of genuine traffic unreachable. Grouping answers "um monte
+ * de modelo q nem uso" without deleting the answer to "what did I run last month".
+ *
+ * Lifted out of UsagePage because inlining it pushed that component past the complexity gate. */
+function buildModelOptions(filters: UsageFilters | undefined) {
+  const all = { value: ALL_MODELS, label: "All models" };
+  const models = filters?.models ?? [];
+  if (models.length === 0) {
+    // A host that predates `filters.models` publishes only raw aliases, and a filter with no
+    // options at all would be worse than an ugly one.
+    return [all, ...(filters?.supported_models ?? []).map((a) => ({ value: a, label: a }))];
+  }
+  return [
+    all,
+    ...models.filter((m) => m.served).map((m) => ({ value: m.id, label: m.label })),
+    ...models
+      .filter((m) => !m.served)
+      .map((m) => ({ value: m.id, label: m.label, group: "No longer served" })),
+  ];
+}
 
 export default function UsagePage() {
   const [tab, setTab] = useState<UsageTab>("tokens");
@@ -97,10 +129,7 @@ export default function UsagePage() {
   if (!stats) return null;
 
   const timezone = stats.timezone ?? preferences.timezone;
-  const modelOptions = [
-    { value: ALL_MODELS, label: "All models" },
-    ...(stats.filters?.supported_models ?? []).map((alias) => ({ value: alias, label: alias })),
-  ];
+  const modelOptions = buildModelOptions(stats.filters);
   const tokensSince = instantLabel(stats.collection_started_at, timezone);
   const energySince = instantLabel(stats.energy_collection_started_at, timezone);
 
@@ -186,21 +215,18 @@ export default function UsagePage() {
                 collectionStartedAt={stats.energy_collection_started_at ?? null}
               />
             ) : null}
+            {/* Not gated on stats.efficiency: the bench rates are a measurement, not a
+                reading of this period's traffic, so they are just as true on a rig whose
+                telemetry has nothing to say yet. */}
             {tab === "efficiency" ? (
-              <>
-                {stats.efficiency ? (
-                  <UsageEfficiencyTab
-                    efficiency={stats.efficiency}
-                    tokens={stats.tokens}
-                    filters={stats.filters}
-                    preferences={preferences}
-                  />
-                ) : null}
-                {/* Not gated on stats.efficiency: these rates are a measurement, not a
-                    reading of this period's traffic, so they are just as true on a rig
-                    whose telemetry has nothing to say yet. */}
-                <UsageEnergyRatesPanel rates={stats.energy_rates} preferences={preferences} />
-              </>
+              <UsageEfficiencyTab
+                efficiency={stats.efficiency}
+                tokens={stats.tokens}
+                rates={stats.energy_rates}
+                filters={stats.filters}
+                preferences={preferences}
+                onPreferences={savePreferences}
+              />
             ) : null}
           </>
         ) : (

@@ -269,12 +269,32 @@ export const USAGE_PERIODS = ["today", "7d", "30d", "365d", "all"] as const;
 
 export type UsagePeriod = (typeof USAGE_PERIODS)[number];
 
+/**
+ * One selectable row in the model filter: a PHYSICAL model, named the way the chat names it.
+ *
+ * The host groups on the same key the chat's picker groups on and labels from the same
+ * capability table, so the two lists cannot drift and neither client writes a model name.
+ * Selecting `id` selects every alias in `aliases`, which is why two behaviour profiles on
+ * one set of weights are one row here and were six flat strings before.
+ */
+export interface UsageFilterModel {
+  /** Send this as `?model=`. */
+  id: string;
+  /** The router's `displayName`, falling back to `id` when it no longer declares one. */
+  label: string;
+  aliases: string[];
+  /** False means history only: rows keyed on an alias the router no longer serves. */
+  served: boolean;
+}
+
 export interface UsageFilters {
   period: UsagePeriod;
   model: string;
   supported_periods: UsagePeriod[];
   /** Union of aliases seen in telemetry and aliases the router serves today. */
   supported_models: string[];
+  /** The filter's options, one per physical model. Empty on a host that predates them. */
+  models: UsageFilterModel[];
   /** Local days the selection covers. first_day null means all history. */
   range: { first_day: string | null; last_day: string | null };
   /** Local days the daily series spans, independent of the selected period. */
@@ -383,15 +403,48 @@ export interface UsageTokenModel {
   prefill_tps: number | null;
 }
 
+/**
+ * THE ATTRIBUTABLE SLICE of the gross, and the two buckets that make up the rest.
+ *
+ * Every unsuffixed `energy_kwh` in this payload is and stays the GROSS — the board's whole
+ * draw, which is what the electricity bill is made of. These three say how much of it
+ * inference caused: `inference_kwh` is what resident models drew above their measured idle
+ * floor, `other_gpu_work_kwh` is what the board drew with no model loaded at all, and
+ * `idle_kwh` is the residual. They add up to the gross exactly, which is what lets a screen
+ * show one of them without implying the others do not exist.
+ */
+export interface UsageEnergyAttribution {
+  inference_kwh: number | null;
+  /** Real energy on a real board that belongs to no model. Null under a model filter. */
+  other_gpu_work_kwh: number | null;
+  /** The residual, so the clamp cannot break the identity. Null when a bucket is unknown. */
+  idle_kwh: number | null;
+  /**
+   * Resident models with no measured idle floor. Their energy is in the gross and in no
+   * bucket: named rather than folded in at another model's floor, which is the borrowing
+   * this payload refuses everywhere else.
+   */
+  models_without_floor: string[];
+  inference_is_lower_bound: boolean;
+}
+
 /** GPU board energy only. Never CPU, RAM, PSU loss or the wall. */
 export interface UsageEnergy {
   available: boolean;
+  attribution: UsageEnergyAttribution;
   totals: {
     energy_kwh: number | null;
+    /** The part of `energy_kwh` above the resident models' idle floors. */
+    inference_kwh: number | null;
     measured_seconds: number;
     expected_seconds: number;
     /** Measured over expected. Null when no collector has ever run. */
     coverage_pct: number | null;
+    /**
+     * EVERYTHING FROM HERE DOWN DESCRIBES THE BOARD and stays gross under either reading.
+     * A "marginal average power" is a quantity nobody measured, and coverage answers how
+     * much of the period the sampler watched, which attribution does not change.
+     */
     avg_power_w: number | null;
     peak_power_w: number | null;
     samples: number;
@@ -409,6 +462,7 @@ export type UsageCoverageStatus = "complete" | "partial" | "no-data";
 export interface UsageEnergyDay {
   date: string;
   energy_kwh: number | null;
+  inference_kwh: number | null;
   measured_seconds: number;
   expected_seconds: number;
   coverage_pct: number | null;
@@ -421,32 +475,54 @@ export interface UsageEnergyModel {
   /** Null is measured energy no resident alias could be attributed to. */
   model: string | null;
   energy_kwh: number;
+  /** Exactly one of these two is a number per row, and which one says what the row is. */
+  inference_kwh: number | null;
+  other_gpu_work_kwh: number | null;
   measured_seconds: number;
   avg_power_w: number | null;
   peak_power_w: number | null;
 }
 
+/**
+ * The same three ratios twice: divided by the gross, and divided by the attributable slice.
+ *
+ * Suffixed rather than switched by a query parameter, so a figure never changes meaning
+ * under a name a client already reads. `*_inference` is null wherever the slice is unknown,
+ * which is a different fact from zero and must render differently.
+ */
+export interface UsageEfficiencyRatios {
+  energy_kwh: number | null;
+  inference_kwh: number | null;
+  tokens_per_kwh: number | null;
+  kwh_per_million_processed: number | null;
+  tokens_per_kwh_inference: number | null;
+  kwh_per_million_processed_inference: number | null;
+}
+
 /** Cost is absent by design: the tariff is a client preference. */
 export interface UsageEfficiency {
-  totals: {
+  totals: UsageEfficiencyRatios & {
     processed_tokens: number;
-    energy_kwh: number | null;
-    tokens_per_kwh: number | null;
-    kwh_per_million_processed: number | null;
     coverage_pct: number | null;
     /** True when the denominator is only a measured fraction of the period. */
     partial: boolean;
+    /** The same condition on the attributable ratio, so the toggle cannot lose it. */
+    partial_inference: boolean;
+    inference_is_lower_bound: boolean;
   };
   daily: UsageEfficiencyDay[];
   by_model: UsageEfficiencyModel[];
+  /**
+   * One row per physical model, which is the row the energy denominator belongs to. Two
+   * behaviour profiles on one set of weights have no energy figure of their own, so
+   * `by_model` above is token detail and this is what a ratio may be built from.
+   */
+  by_physical_model: UsageEfficiencyPhysicalModel[];
 }
 
-export interface UsageEfficiencyDay {
+export interface UsageEfficiencyDay extends UsageEfficiencyRatios {
   date: string;
   processed_tokens: number;
-  energy_kwh: number | null;
-  tokens_per_kwh: number | null;
-  kwh_per_million_processed: number | null;
   coverage_pct: number | null;
 }
 
@@ -456,4 +532,14 @@ export interface UsageEfficiencyModel {
   energy_kwh: number | null;
   tokens_per_kwh: number | null;
   kwh_per_million_processed: number | null;
+}
+
+export interface UsageEfficiencyPhysicalModel extends UsageEfficiencyRatios {
+  model: string;
+  aliases: string[];
+  processed_tokens: number;
+  /** Board draw with these weights resident and serving nothing. Null means unmeasured. */
+  idle_floor_w: number | null;
+  /** "bench" or "observed" — which measurement produced the floor, never an assumption. */
+  idle_floor_source: string | null;
 }

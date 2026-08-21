@@ -15,12 +15,22 @@ export interface EnergyPreferences {
   currency: string;
   pricePerKwh: number | null;
   timezone: string;
+  /**
+   * Price the board's whole draw instead of the part inference caused.
+   *
+   * Named for the OFF state on purpose. A boolean's natural absent value is false, so every
+   * object already in this browser — every user who has ever set a tariff — reads as AI
+   * mode by construction rather than through a rescue clause. `aiMode: true` would need
+   * `!== false`, a double negative that reads as on-by-default by accident.
+   */
+  grossEnergy: boolean;
 }
 
 export const DEFAULT_ENERGY_PREFERENCES: EnergyPreferences = {
   currency: DEFAULT_CURRENCY,
   pricePerKwh: null,
   timezone: DEFAULT_TIMEZONE,
+  grossEnergy: false,
 };
 
 function supported(key: "currency" | "timeZone"): string[] {
@@ -66,6 +76,9 @@ export function readEnergyPreferences(storage: Pick<Storage, "getItem">): Energy
       pricePerKwh: Number.isFinite(rate) && rate > 0 ? rate : null,
       timezone:
         typeof parsed.timezone === "string" && parsed.timezone ? parsed.timezone : DEFAULT_TIMEZONE,
+      // The only route to gross is a value somebody wrote `true`. Anything else — absent,
+      // truthy-but-not-true, corrupted — is AI mode, which is what "tem que ativar" means.
+      grossEnergy: parsed.grossEnergy === true,
     };
   } catch {
     return DEFAULT_ENERGY_PREFERENCES;
