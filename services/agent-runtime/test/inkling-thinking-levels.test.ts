@@ -25,6 +25,7 @@ describe("Inkling thinking levels", () => {
         id: "inkling-small",
         name: "Inkling Small",
         provider: "local-studio",
+        physicalModelId: "inkling-small",
         contextWindow: 262_144,
         maxTokens: 65_536,
         reasoning: true,

@@ -344,8 +344,10 @@ function providerModelToAgentModel(
     : compat?.supportsReasoningEffort === false
       ? ["high" as const]
       : getSupportedThinkingLevels({ ...model, reasoning });
+  const id = `${providerId}/${model.id}`;
   return {
-    id: `${providerId}/${model.id}`,
+    id,
+    physicalModelId: id,
     rawId: model.id,
     name: `${model.name} · ${providerName}`,
     provider: "local-studio",

@@ -49,6 +49,7 @@ function agentModel(overrides: Partial<AgentModel> & { id: string }): AgentModel
   return {
     name: overrides.id,
     provider: "local-studio",
+    physicalModelId: overrides.id,
     contextWindow: 128_000,
     maxTokens: 65_536,
     reasoning: false,
