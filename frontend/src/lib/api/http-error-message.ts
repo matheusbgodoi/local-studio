@@ -1,8 +1,18 @@
 const ABSENT_ROUTE_STATUSES = new Set([404, 405, 501]);
 const MAX_DETAIL_CHARS = 240;
 
+/** A status that means "this route is not here", as opposed to "this route failed".
+ *
+ * Not exported: nothing outside this module needs it yet, and exporting ahead of a consumer is
+ * what `knip` exists to catch. It is a function rather than two inlined `.has()` calls so the
+ * two places that ask the question cannot drift apart — the first version of this change did
+ * inline both, which left this helper dead and a comment claiming a caller it did not have. */
+function isAbsentRouteStatus(status: number | undefined): boolean {
+  return status !== undefined && ABSENT_ROUTE_STATUSES.has(status);
+}
+
 export function isRetryableError(error: unknown, status?: number): boolean {
-  if (status !== undefined && ABSENT_ROUTE_STATUSES.has(status)) return false;
+  if (isAbsentRouteStatus(status)) return false;
   if (status && status >= 500) return true;
   if (status === 429) return true;
   if (status === 408) return true;
@@ -77,13 +87,6 @@ function structuredDetail(body: unknown): string | null {
   return null;
 }
 
-/** Not exported: the only caller in this slice is `isRetryableError`, just below. The Models
- *  page work that also consumes it lives on its own branch and can export it when it lands —
- *  exporting ahead of a consumer is what `knip` exists to catch. */
-function isAbsentRouteStatus(status: number | undefined): boolean {
-  return status !== undefined && ABSENT_ROUTE_STATUSES.has(status);
-}
-
 /** Does this plain-text body actually say anything, or is it the server's stock phrasing?
  *
  * Go's default mux answers "404 page not found"; nginx answers "Not Found". Neither tells the
@@ -116,7 +119,7 @@ export function formatHttpErrorMessage(status: number, body: unknown, endpoint?:
   // The route phrasing is a REPLACEMENT for a body that said nothing, not a preemption of one
   // that did. Checking it first turned "405 — Method Not Allowed: use POST" into a sentence
   // that dropped the instruction.
-  if (endpoint && ABSENT_ROUTE_STATUSES.has(status) && isStockStatusText(text, status)) {
+  if (endpoint && isAbsentRouteStatus(status) && isStockStatusText(text, status)) {
     return `${status} — this backend does not implement ${endpoint}`;
   }
 
