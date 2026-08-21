@@ -188,7 +188,7 @@ const WorkspacePane = memo(function WorkspacePane({
           models={models}
           selectedModel={view.modelId}
           defaultModel={defaultModel}
-          onSelect={(modelId) => handles.selectPaneModel(view.paneId, modelId)}
+          onSelect={(selection) => handles.selectPaneModel(view.paneId, selection)}
           onSetDefault={handles.setDefaultModel}
           loading={modelsLoading}
           {...reasoning}
