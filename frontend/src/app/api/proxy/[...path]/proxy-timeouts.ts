@@ -6,11 +6,18 @@ const MODEL_LIFECYCLE_TIMEOUT_MS = 360_000;
 const SSE_CONNECT_TIMEOUT_MS = 5_000;
 const SPEECH_GENERATION_TIMEOUT_MS = 360_000;
 const VOICE_REFERENCE_TIMEOUT_MS = 120_000;
+// Uploading a recording and waiting for a model to transcribe it. Its siblings above are all
+// listed and this one was not, so it fell through to the 5 s default — enough for a request
+// that only has to be answered, nowhere near enough for one that carries audio and then waits
+// on inference. A dictation of any real length aborted at five seconds and surfaced as a
+// generic failure, which reads as "dictation is broken" rather than "the clip was too long".
+const TRANSCRIPTION_TIMEOUT_MS = 120_000;
 const POST_TIMEOUTS = new Map([
   ["studio/downloads", DOWNLOAD_UPSTREAM_TIMEOUT_MS],
   ["v1/audio/install", SYSTEM_UPSTREAM_TIMEOUT_MS],
   ["v1/audio/install/cancel", SYSTEM_UPSTREAM_TIMEOUT_MS],
   ["v1/audio/speech", SPEECH_GENERATION_TIMEOUT_MS],
+  ["v1/audio/transcriptions", TRANSCRIPTION_TIMEOUT_MS],
   ["v1/audio/voices", VOICE_REFERENCE_TIMEOUT_MS],
   ["v1/audio/runtime/stop", SYSTEM_UPSTREAM_TIMEOUT_MS],
 ]);

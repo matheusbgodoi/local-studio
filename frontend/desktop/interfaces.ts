@@ -90,7 +90,29 @@ export interface KittylitterCopyResult {
   error?: string;
 }
 
+/** On-device dictation. The audio never enters the renderer and never leaves the machine —
+ *  the helper opens the microphone itself and only ever sends back text. */
+export type DictationProbeResult = {
+  available: boolean;
+  locale?: string;
+  localeMatch?: string;
+  assetStatus?: string;
+  reason?: string;
+};
+
+export type DictationBridgeEvent =
+  | { type: "ready"; locale: string }
+  | { type: "partial"; text: string }
+  | { type: "final"; text: string }
+  | { type: "error"; code: string; message: string }
+  | { type: "done" };
+
 export interface DesktopBridge {
+  probeDictation(locale: string): Promise<DictationProbeResult>;
+  startDictation(locale: string): Promise<{ started: boolean; reason?: string }>;
+  stopDictation(mode: "stop" | "cancel"): Promise<{ ok: boolean }>;
+  /** Returns its own unsubscribe. */
+  onDictationEvent(listener: (event: DictationBridgeEvent) => void): () => void;
   getRuntime(): Promise<{
     platform: NodeJS.Platform;
     appVersion: string;

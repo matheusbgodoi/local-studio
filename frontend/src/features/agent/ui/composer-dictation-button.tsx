@@ -1,7 +1,9 @@
 "use client";
 
 import { Mic, Square } from "@/ui/icon-registry";
+import type { TranscriptPhase } from "./use-chat-pane-composer-actions";
 import { useComposerDictation } from "./use-composer-dictation";
+import { useOnDeviceDictation } from "./use-on-device-dictation";
 
 export function ComposerDictationButton({
   disabled,
@@ -12,16 +14,40 @@ export function ComposerDictationButton({
   disabled: boolean;
   inactiveClassName: string;
   idleClassName?: string;
-  onTranscript: (text: string) => void;
+  onTranscript: (text: string, phase?: TranscriptPhase) => void;
 }) {
-  const dictation = useComposerDictation(onTranscript);
+  // TWO ENGINES, AND THE LOCAL ONE WINS WHEN IT IS REALLY THERE.
+  //
+  // On-device transcribes as the user speaks and no audio ever leaves the Mac. The upload path
+  // records in the browser and POSTs the clip to a backend — it works, and it is the only
+  // option off macOS or on a build without the helper, but it cannot show a word until the
+  // user stops, and it is a recording leaving the machine.
+  //
+  // `available` starts as null (not probed yet) and only becomes true after the helper has
+  // answered that the language's model is installed. Anything else falls back, so the button
+  // is never offered by a path that would fail when pressed.
+  const local = useOnDeviceDictation(onTranscript);
+  const upload = useComposerDictation((text: string) => onTranscript(text, "final"));
+  const onDevice = local.available === true;
+  const dictation = onDevice
+    ? {
+        error: local.error,
+        recording: local.recording,
+        transcribing: false,
+        busy: local.recording,
+        toggle: local.toggle,
+      }
+    : upload;
+
   const title = dictation.error
     ? dictation.error
     : dictation.transcribing
       ? "Transcribing…"
       : dictation.recording
         ? "Stop dictation"
-        : "Dictate message";
+        : onDevice
+          ? "Dictate message — on this Mac, no audio leaves it"
+          : "Dictate message";
 
   return (
     <>

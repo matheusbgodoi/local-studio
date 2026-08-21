@@ -35,6 +35,17 @@ files:
   - "!node_modules/@playwright/**"
 
 extraResources:
+  # The on-device dictation helper. A standalone Swift executable rather than a native Node
+  # addon: this repository has no node-gyp, no node-addon-api and no electron-rebuild, and a
+  # helper spawned over stdio needs none of them and does not have to be rebuilt when Electron
+  # moves. Built by desktop/speech/build.sh; see the header of LocalStudioDictation.swift.
+  #
+  # It is `optional` because it only exists after that script has run and only makes sense on
+  # macOS 26+. A build without it produces an app whose dictation button is simply absent,
+  # which is the correct degradation — not a button that fails when pressed.
+  - from: desktop/speech/LocalStudioDictation
+    to: speech/LocalStudioDictation
+    optional: true
   - from: desktop/resources/app-update.yml
     to: app-update.yml
   - from: ../services/agent-runtime/dist/standalone.mjs
@@ -161,6 +172,11 @@ mac:
   entitlementsInherit: desktop/resources/entitlements.mac.plist
   extendInfo:
     NSMicrophoneUsageDescription: Record your own voice to create a private, local voice profile.
+    # WITHOUT THIS KEY A NATIVE SPEECH PATH HARD-CRASHES ON FIRST AUTHORIZATION. macOS kills the
+    # process outright rather than returning a denial, so the symptom is the app vanishing, not
+    # a permission prompt. It was absent while the dictation helper was being written, which is
+    # precisely the order in which that bug reaches a user.
+    NSSpeechRecognitionUsageDescription: Transcribe your speech into the composer. Everything stays on this Mac — no audio ever leaves the machine.
 
 dmg:
   # Nothing to sign it WITH, now that no identity is named. `true` here asked electron-builder
