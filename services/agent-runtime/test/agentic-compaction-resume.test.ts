@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 // Relative on purpose: bun resolves no `@/` alias from this package.
+import { DEFAULT_CONTEXT_BUDGET_POLICY } from "../src/agentic/context-budget";
+import { createAgenticScheduler } from "../src/agentic/scheduler";
 import { createHarness, criterion, driveToSettled, task } from "./support/agentic-harness";
 
 //
@@ -13,7 +15,7 @@ import { createHarness, criterion, driveToSettled, task } from "./support/agenti
 // replan rather than spin (that rule is pinned in agentic-stall-replan).
 //
 const CRITERIA = Array.from({ length: 12 }, (_, index) => criterion(`c${index + 1}`));
-const GROWTH = { contextGrowth: 900, outputTokens: 200 };
+const GROWTH = { contextGrowth: 1_800, outputTokens: 200 };
 
 const longTaskBackend = () => ({
   contextWindow: 9_000,
@@ -161,6 +163,50 @@ describe("context pressure checkpoints, compacts and resumes the same task by it
     }
   });
 
+  //
+  // Found by the first real-Qwen run: with a narrowed budget the very first
+  // launch tried to compact a session holding nothing but its system prompt,
+  // and the backend refused. The usable limit already excludes the output
+  // reserve, so adding it back as "the next operation" double-counted it; and
+  // compaction can only remove what is NOT the working set, so a session that
+  // is already at or below its working set has nothing to gain from one.
+  //
+  test("a fresh session is never compacted just because the budget is narrow", async () => {
+    const harness = createHarness({
+      model: { contextWindow: 176_128, maxTokens: 32_768 },
+      backend: { ...longTaskBackend(), contextWindow: 176_128, baseTokens: 400 },
+      budgetPolicy: {
+        ...DEFAULT_CONTEXT_BUDGET_POLICY,
+        usableContextOverride: 14_000,
+      },
+    });
+    try {
+      const { run } = await startLongTask(harness);
+      await harness.service.onTurnSettled(run.id);
+      expect(harness.store.listCheckpoints(run.id).length).toBe(0);
+      expect(harness.store.requireRun(run.id).status).toBe("RUNNING");
+      expect(harness.backend.promptsSent.length).toBeGreaterThan(0);
+    } finally {
+      harness.dispose();
+    }
+  });
+
+  test("a narrowed budget still forces repeated compactions once the context has grown", async () => {
+    const harness = createHarness({
+      model: { contextWindow: 176_128, maxTokens: 32_768 },
+      backend: { ...longTaskBackend(), contextWindow: 176_128, baseTokens: 400 },
+      budgetPolicy: { ...DEFAULT_CONTEXT_BUDGET_POLICY, usableContextOverride: 6_000 },
+    });
+    try {
+      const { run } = await startLongTask(harness);
+      await driveToSettled(harness, run.id, 30);
+      expect(harness.store.listCheckpoints(run.id).length).toBeGreaterThanOrEqual(3);
+      expect(harness.store.requireRun(run.id).status).toBe("COMPLETED");
+    } finally {
+      harness.dispose();
+    }
+  });
+
   test("a window wide enough for the whole run compacts nothing and still finishes", async () => {
     const harness = createHarness({
       model: { contextWindow: 262_144, maxTokens: 32_768 },
@@ -178,6 +224,34 @@ describe("context pressure checkpoints, compacts and resumes the same task by it
 });
 
 describe("a run finishes on evidence, and only on evidence", () => {
+  //
+  // Found by the first real-Qwen run, which reported zero tokens for a run
+  // that had plainly spent them. The adapter fronting a real backend derives a
+  // turn's spend as a delta against what it saw last, so asking the factory
+  // again on every step handed back an object with no memory.
+  //
+  test("the session is created once per run, because the adapter carries turn state", async () => {
+    let created = 0;
+    const harness = createHarness(smallWindow());
+    try {
+      const store = harness.store;
+      const scheduler = createAgenticScheduler({
+        store,
+        session: () => {
+          created += 1;
+          return harness.backend.session;
+        },
+      });
+      const { run } = await startLongTask(harness);
+      for (let turn = 0; turn < 5; turn += 1) {
+        await scheduler.advance(run.id, harness.capability);
+      }
+      expect(created).toBe(1);
+    } finally {
+      harness.dispose();
+    }
+  });
+
   test("the word complete without the evidence is rejected and the task stays open", async () => {
     const harness = createHarness({
       model: { contextWindow: 40_000, maxTokens: 4_000 },

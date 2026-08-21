@@ -113,6 +113,21 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
   const replan = options.replan ?? defaultReplan;
   const stallByTask = new Map<string, StallState>();
   const ineffectiveCompactions = new Map<string, number>();
+  const sessions = new Map<string, AgenticInferenceSession>();
+
+  //
+  // Exactly one session object per Run. The adapter that fronts a real backend
+  // is stateful — it derives a turn's spend as a delta against what it saw
+  // last — so asking the factory again on every step would hand back an object
+  // with no memory, and every turn would report zero tokens.
+  //
+  const sessionFor = (run: AgenticRun): AgenticInferenceSession => {
+    const existing = sessions.get(run.id);
+    if (existing) return existing;
+    const created = options.session(run);
+    sessions.set(run.id, created);
+    return created;
+  };
 
   const nodesOf = (tasks: AgenticTask[]): TaskNode[] =>
     tasks.map((task) => ({ id: task.id, status: task.status, dependencies: task.dependencies }));
@@ -212,14 +227,35 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     const workingSet = currentWorkingSet(run, task, tail, errors);
     let prompt = renderWorkingSet(workingSet);
     const reading = await session.readContext();
+    const required = workingSetTokens(workingSet);
+    //
+    // The usable limit already has the output reserve subtracted out of it, so
+    // the expected next operation is the prompt alone. Adding the reserve back
+    // here counted it twice and made a narrow budget look overflowed before
+    // the session held anything at all.
+    //
     const decision = preflightContext({
       budget,
       activeTokens: reading.tokens,
-      expectedNextOperationTokens: workingSetTokens(workingSet) + budget.outputReserve,
+      expectedNextOperationTokens: required,
     });
 
     let compacted = false;
-    if (decision.action !== "proceed") {
+    //
+    // Compaction can only remove what is NOT the working set. A session
+    // already at or below what the task needs has nothing to gain from one,
+    // and asking the backend to compact it is how a fresh Run under a narrow
+    // budget ended up refused before its first turn.
+    //
+    if (decision.action !== "proceed" && reading.tokens <= required) {
+      store.appendEvent({
+        runId: run.id,
+        taskId: task.id,
+        type: "BUDGET_EXCEEDED",
+        summary: "the working set itself exceeds the usable budget; proceeding without compacting",
+        detail: { activeTokens: reading.tokens, requiredTokens: required, usableLimit: budget.usableLimit },
+      });
+    } else if (decision.action !== "proceed") {
       const result = await compactAndRebuild(
         run,
         task,
@@ -288,7 +324,7 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     if (run.status === "COMPLETED" || run.status === "FAILED" || run.status === "CANCELLED") {
       return { kind: "idle", reason: `run is ${run.status.toLowerCase()}` };
     }
-    const session = options.session(run);
+    const session = sessionFor(run);
     const agent = store.listAgents(run.id)[0];
 
     const usage = session.lastTurnUsage();
@@ -466,6 +502,7 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     applyReadiness,
     launch,
     budgetFor,
+    sessionFor,
   };
 }
 

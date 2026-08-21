@@ -121,7 +121,7 @@ export function agenticRuntime() {
       const capability = state.capabilities.get(runId) ?? (await resolveCapability(run.modelId));
       const observed = withRuntimeContextWindow(
         capability,
-        (await sessionFor(run).readContext()).contextWindow,
+        (await state.service.scheduler.sessionFor(run).readContext()).contextWindow,
       );
       state.capabilities.set(runId, observed);
       if (observed.contextWindow !== run.contextWindow) {
