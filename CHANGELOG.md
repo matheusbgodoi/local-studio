@@ -7,6 +7,50 @@ and is not repeated here.
 Versioning is `<upstream base>-local.<n>` — see
 [`docs/upstream-updates.md`](docs/upstream-updates.md).
 
+## v2.1.0-local.11 — 2026-08-21
+
+Eleven states the durable runtime could reach and never leave, found by an
+adversarial review of the previous build and each pinned by a test. Base:
+upstream **2.1.0**. Source only; no binary is published.
+
+### Runs that could not finish, and Runs that would not stop
+
+- **A task that declared no acceptance criteria could not finish.** It could not
+  succeed, it drew no rejection either — so the working set never told the model
+  what was missing — and the stall detector eventually failed the whole Run over
+  it. The claim is now the gate when there is nothing to prove.
+- **Cancelling during a step resurrected the Run.** A launch awaits the backend
+  before it writes; a cancel landing in that window was overwritten back to
+  `RUNNING`, leaving a live-looking Run with no loop driving it.
+- **A Run that stopped to ask a question came back from a restart as `PAUSED`**,
+  and the next resume found nothing runnable and failed a Run that was only ever
+  waiting. It returns as `WAITING_USER` now, pointing at the task that asked.
+- **A step that ends without prompting re-read the previous turn** — charging a
+  second attempt, counting its tokens twice, and knocking a waiting task back to
+  pending. A turn is now identified by which turn it was rather than by what it
+  said, so a model repeating itself word for word still gets read.
+- **A rejected turn** left its attempt and task `RUNNING` under a Run about to
+  fail, hiding the work from the view and from restart reconciliation.
+- **A resumed Run double-counted its whole lifetime spend**, because the usage
+  baseline started empty against a rollout that already held every earlier turn.
+
+### Boundaries
+
+- **The create-run endpoint accepted any working directory.** Every sibling
+  route confines it to `WORKSPACE_ROOTS`, and a Run drives tools with full
+  access, so this was the last place that should have been the exception.
+- **An acceptance `kind` was cast from arbitrary input** into a type the
+  owner-facing schema accepts only five values for, so one bad request could
+  permanently break snapshot decoding for that Run.
+
+### Smaller
+
+- A fractional context override floored to a usable budget of zero.
+- The window moving mid-run left the stored usable limit behind.
+- The fallback capability named an output size instead of deriving one from the
+  window it was given.
+- A snapshot that failed to load left a spinner with no explanation.
+
 ## v2.1.0-local.10 — 2026-08-21
 
 Durable agentic runtime. Base: upstream **2.1.0**. Source only; no binary is
