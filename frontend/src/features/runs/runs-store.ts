@@ -75,6 +75,16 @@ export async function refreshSnapshot(runId: string): Promise<void> {
   }
 }
 
+//
+// The chat panel follows whichever Run its conversation is driving. Selecting
+// it here is what makes the store load and keep refreshing that snapshot; it is
+// idempotent so a render can call it freely.
+//
+export function watchSessionRun(runId: string): void {
+  if (state.selectedId === runId) return;
+  selectRun(runId);
+}
+
 export function selectRun(runId: string): void {
   publish({ selectedId: runId, snapshot: null });
   void refreshSnapshot(runId);
