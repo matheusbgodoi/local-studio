@@ -20,7 +20,6 @@ import {
 import type { AgenticCapability } from "./capability";
 import type { AgenticAgent, AgenticRun, AgenticRunStatus, AgenticTask } from "./contract";
 import { resolveReadiness, selectNextTask, validatePlan, type TaskNode } from "./dag";
-import { sharedInferenceGate } from "./inference-gate";
 import { runCompaction, type AgenticInferenceSession } from "./scheduler-session";
 import {
   DEFAULT_STALL_POLICY,
@@ -57,11 +56,13 @@ export type ReplanInput = {
 export type InferenceGate = <T>(task: () => Promise<T>) => Promise<T>;
 
 //
-// A Run's turns are background work: the owner's own message goes first.
+// The real serialisation happens inside the runtime's own prompt path, where
+// every caller funnels through one gate. Gating again here would have the inner
+// wait for a slot the outer already holds, so the scheduler's default is a
+// pass-through and the option exists for tests that drive a fake backend.
 //
 export function createSerialGate(): InferenceGate {
-  const shared = sharedInferenceGate();
-  return <T>(task: () => Promise<T>): Promise<T> => shared.run("background", task);
+  return <T>(task: () => Promise<T>): Promise<T> => task();
 }
 
 export type AgenticSchedulerOptions = {
@@ -453,9 +454,15 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     // for one piece of work, count its tokens twice, and could attribute its
     // evidence to whichever task the revision made current.
     //
+    //
+    // Keyed by agent: turnId() counts an agent's own turns, so keying by Run
+    // made a second agent's first turn look like one already read, and its work
+    // was discarded and repeated.
+    //
+    const turnKey = `${run.id}#${agent?.id ?? "-"}`;
     const turnId = session.turnId();
-    const alreadyConsumed = consumedTurns.get(run.id) === turnId;
-    consumedTurns.set(run.id, turnId);
+    const alreadyConsumed = consumedTurns.get(turnKey) === turnId;
+    consumedTurns.set(turnKey, turnId);
 
     if (!alreadyConsumed) {
       const usage = session.lastTurnUsage();
@@ -473,7 +480,7 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     const report = alreadyConsumed
       ? { evidence: [], claimedComplete: false, blockedReason: null, userQuestion: null, errors: [] }
       : signals.length > 0
-        ? reportFromSignals(signals)
+        ? reportFromSignals(signals, run.activeTaskId)
         : parseTurnReport(finalText);
     const tail: string[] = [];
 
@@ -672,7 +679,10 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
 // so everything downstream adjudicates identically whichever way the turn
 // chose to report.
 //
-export function reportFromSignals(signals: readonly AgenticTurnSignal[]): TurnReport {
+export function reportFromSignals(
+  signals: readonly AgenticTurnSignal[],
+  activeTaskId: string | null,
+): TurnReport {
   const report: TurnReport = {
     evidence: [],
     claimedComplete: false,
@@ -681,6 +691,12 @@ export function reportFromSignals(signals: readonly AgenticTurnSignal[]): TurnRe
     errors: [],
   };
   for (const signal of signals) {
+    //
+    // A report the model filed against another task settles that task, not
+    // whichever one happens to be active. Without this, naming a sibling id
+    // could halt the Run on a question the active task never asked.
+    //
+    if (signal.taskId && activeTaskId && signal.taskId !== activeTaskId) continue;
     if (signal.kind === "evidence" && signal.detail.criterion) {
       report.evidence.push({
         criterionId: signal.detail.criterion,

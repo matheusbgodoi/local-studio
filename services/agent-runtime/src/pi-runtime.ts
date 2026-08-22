@@ -28,6 +28,7 @@ import { getProviderHub } from "./provider-hub";
 import { attachGoalDriver } from "./goal-driver";
 import { createGoalPromptExtension } from "./goal-prompt";
 import { createAgenticControlExtension } from "./agentic/control-tools";
+import { sharedInferenceGate } from "./agentic/inference-gate";
 import { findRuntimeSessionForLookup, piStatusFromEvents } from "./pi-runtime-state";
 import { configuredPiSessionDir, findSessionFile } from "./sessions-store";
 import { getGlobalSingleton } from "./instances";
@@ -681,8 +682,16 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     this.on("loggedEvent", listener);
     this.activePromptCount += 1;
     this.lastError = null;
+    //
+    // Every turn in this process funnels through here — chat, subagents,
+    // automations, the goal driver, the phone bridge and a Run's own steps — so
+    // this is the one place that can make "one card decodes one thing at a
+    // time" true rather than true of some callers. The count is incremented
+    // first, so a turn waiting for the card still reports as running.
+    //
+    const priority = options.source === "rpc" ? "background" : "interactive";
     return Effect.tryPromise({
-      try: () => this.promptSession(message, options),
+      try: () => sharedInferenceGate().run(priority, () => this.promptSession(message, options)),
       catch: (error) => error,
     }).pipe(
       Effect.catch((error) =>
@@ -798,7 +807,11 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
       return Effect.fail(new Error("Cannot compact while the agent is running."));
     }
     return Effect.tryPromise({
-      try: () => this.requireSession().compact(customInstructions),
+      // Summarisation is a decode too, and it is never the owner waiting.
+      try: () =>
+        sharedInferenceGate().run("background", () =>
+          Promise.resolve(this.requireSession().compact(customInstructions)),
+        ),
       catch: (error) => error,
     });
   }
