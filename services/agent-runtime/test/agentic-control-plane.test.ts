@@ -192,6 +192,141 @@ describe("committing a validated plan is the runtime's, not the model's", () => 
   });
 });
 
+//
+// Both of these were found by an adversarial review of the revision path, and
+// both would have cost the owner real work: the first makes a model re-prove
+// what it already proved (which the stall detector then reads as no progress),
+// and the second leaves the scheduler working on a task the plan no longer has.
+//
+describe("a revision changes the plan without discarding what was already true", () => {
+  const twoTasks = () =>
+    validateProposal({
+      goal: "g",
+      tasks: [
+        { title: "Keep", acceptance: ["alpha", "beta"] },
+        { title: "Drop", acceptance: ["gamma"] },
+      ],
+    });
+
+  test("evidence earned against a criterion survives a revision that keeps it", () => {
+    const harness = createHarness();
+    try {
+      const committed = createRunFromPlan(harness.store, {
+        plan: ok(twoTasks()),
+        capability: harness.capability,
+        sessionId: "s",
+        piSessionId: null,
+        cwd: "/tmp/p",
+      });
+      const keep = committed.tasks[0];
+      reportProgressForTask(harness.store, {
+        runId: committed.run.id,
+        taskId: keep?.id as string,
+        report: ok(validateProgress({ evidence: [{ criterion: "t1c1", evidence: "alpha proven" }] })),
+        turnId: 1,
+      });
+
+      revisePlanForRun(harness.store, {
+        runId: committed.run.id,
+        reason: "drop one",
+        plan: ok(validateProposal({ goal: "g", tasks: [{ title: "Keep", acceptance: ["alpha", "beta"] }] })),
+        capability: harness.capability,
+      });
+
+      const after = harness.store.requireTask(keep?.id as string);
+      const alpha = after.acceptance.find((criterion) => criterion.description === "alpha");
+      expect(alpha?.satisfied).toBe(true);
+      expect(alpha?.evidence).toBe("alpha proven");
+      expect(after.acceptance.find((criterion) => criterion.description === "beta")?.satisfied).toBe(false);
+    } finally {
+      harness.dispose();
+    }
+  });
+
+  test("a criterion the revision rewrote starts unproven, because it is a different claim", () => {
+    const harness = createHarness();
+    try {
+      const committed = createRunFromPlan(harness.store, {
+        plan: ok(twoTasks()),
+        capability: harness.capability,
+        sessionId: "s",
+        piSessionId: null,
+        cwd: "/tmp/p",
+      });
+      const keep = committed.tasks[0];
+      reportProgressForTask(harness.store, {
+        runId: committed.run.id,
+        taskId: keep?.id as string,
+        report: ok(validateProgress({ evidence: [{ criterion: "t1c1", evidence: "alpha proven" }] })),
+        turnId: 1,
+      });
+      revisePlanForRun(harness.store, {
+        runId: committed.run.id,
+        reason: "the bar moved",
+        plan: ok(
+          validateProposal({ goal: "g", tasks: [{ title: "Keep", acceptance: ["alpha, and twice over"] }] }),
+        ),
+        capability: harness.capability,
+      });
+      const after = harness.store.requireTask(keep?.id as string);
+      expect(after.acceptance.length).toBe(1);
+      expect(after.acceptance[0]?.satisfied).toBe(false);
+    } finally {
+      harness.dispose();
+    }
+  });
+
+  test("a task the revision dropped stops being work, and says why", () => {
+    const harness = createHarness();
+    try {
+      const committed = createRunFromPlan(harness.store, {
+        plan: ok(twoTasks()),
+        capability: harness.capability,
+        sessionId: "s",
+        piSessionId: null,
+        cwd: "/tmp/p",
+      });
+      const dropped = committed.tasks[1];
+      revisePlanForRun(harness.store, {
+        runId: committed.run.id,
+        reason: "that turned out to be unnecessary",
+        plan: ok(validateProposal({ goal: "g", tasks: [{ title: "Keep", acceptance: ["alpha", "beta"] }] })),
+        capability: harness.capability,
+      });
+
+      const after = harness.store.requireTask(dropped?.id as string);
+      expect(after.status).toBe("CANCELLED");
+      expect(after.blocker).toContain("revision");
+    } finally {
+      harness.dispose();
+    }
+  });
+
+  test("work already finished is not cancelled just because the plan moved on", () => {
+    const harness = createHarness();
+    try {
+      const committed = createRunFromPlan(harness.store, {
+        plan: ok(twoTasks()),
+        capability: harness.capability,
+        sessionId: "s",
+        piSessionId: null,
+        cwd: "/tmp/p",
+      });
+      const dropped = committed.tasks[1];
+      harness.store.updateTask(dropped?.id as string, { status: "SUCCEEDED", resultSummary: "done anyway" });
+      revisePlanForRun(harness.store, {
+        runId: committed.run.id,
+        reason: "no longer needed",
+        plan: ok(validateProposal({ goal: "g", tasks: [{ title: "Keep", acceptance: ["alpha", "beta"] }] })),
+        capability: harness.capability,
+      });
+      expect(harness.store.requireTask(dropped?.id as string).status).toBe("SUCCEEDED");
+    } finally {
+      harness.dispose();
+    }
+  });
+});
+
 describe("a progress report is evidence the runtime checks, not a status the model sets", () => {
   const setup = (harness: ReturnType<typeof createHarness>) =>
     createRunFromPlan(harness.store, {
