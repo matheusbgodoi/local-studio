@@ -182,7 +182,15 @@ action.
 
 Every compaction records: tokens before, tokens after, target, usable limit,
 reason, duration, run and task id, and the working set itself. The run's
-compaction count is cumulative.
+compaction count is cumulative, and it counts compactions **performed** — a
+refusal leaves it, and the agent's, where they were.
+
+**MEASURED.** A backend reports no context usage until the next turn produces
+some, so `tokensAfter` is often absent rather than zero immediately after a
+compaction. It is stored as measured-or-zero and the working-set estimate is
+stored beside it as `targetTokens`; the timeline marks an estimate with a
+tilde. Publishing the absent reading as zero would have been a measurement
+nobody took.
 
 **POLICY — loop guard.** A compaction that creates no headroom twice fails the
 run with a diagnostic rather than compacting in a circle.
@@ -327,7 +335,29 @@ observe the third.
 
 ---
 
-## 13. The end-to-end override
+## 13. What the card found
+
+**MEASURED.** Running this against the resident Qwen found four defects the
+offline battery could not, each now pinned by a test: the usable limit already
+excludes the output reserve and the preflight was adding it back; the session
+adapter was rebuilt on every step, so every turn reported zero tokens; a
+backend refusing to compact a session it considers too short ended a healthy
+run; and a step that ended without prompting read the previous turn again.
+
+**MEASURED.** An adversarial review of the result raised sixteen candidates and
+confirmed eleven, including a task with no acceptance criteria that could never
+finish, a cancel overwritten back to `RUNNING` mid-step, a restart that failed a
+run which was only waiting on the owner, and a create-run endpoint that did not
+confine its working directory to `WORKSPACE_ROOTS`. All are fixed and pinned in
+`agentic-review-findings.test.ts`.
+
+**EVIDENCE.** Final verification on the shipped build: a fourteen-task chain
+against `qwen-daily` (window 176128 read live, scheduler budget narrowed to
+30000), **7 checkpoint → compact → automatic resume cycles**, every task
+succeeded, 312085 input / 37917 output cumulative, one plan revision never
+needed, profile `qwen-daily`/`standard` unchanged, and no manual "continue".
+
+## 14. The end-to-end override
 
 `LOCAL_STUDIO_AGENTIC_USABLE_CONTEXT` narrows the **scheduler's** usable
 context for a long run against the real card, so several genuine
