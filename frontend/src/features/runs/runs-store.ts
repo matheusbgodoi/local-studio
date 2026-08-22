@@ -34,6 +34,7 @@ let state: RunsSnapshotState = {
 const listeners = new Set<() => void>();
 let timer: ReturnType<typeof setInterval> | null = null;
 let subscribers = 0;
+let watching: string | null = null;
 
 function publish(next: Partial<RunsSnapshotState>): void {
   state = { ...state, ...next };
@@ -81,8 +82,18 @@ export async function refreshSnapshot(runId: string): Promise<void> {
 // idempotent so a render can call it freely.
 //
 export function watchSessionRun(runId: string): void {
-  if (state.selectedId === runId) return;
-  selectRun(runId);
+  if (state.selectedId === runId || watching === runId) return;
+  //
+  // Deferred out of the render pass that asked for it. Selecting synchronously
+  // publishes, every subscriber re-renders, and two panes would fight over the
+  // selection for as long as both are open.
+  //
+  watching = runId;
+  queueMicrotask(() => {
+    watching = null;
+    if (state.selectedId === runId) return;
+    selectRun(runId);
+  });
 }
 
 export function selectRun(runId: string): void {
