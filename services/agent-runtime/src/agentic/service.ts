@@ -17,6 +17,9 @@ import {
 import type { AgenticAgent, AgenticRun, AgenticRunSnapshot } from "./contract";
 import { createPiAgenticSession } from "./pi-session-adapter";
 import { createAgenticRunService, type StartRunInput } from "./run-service";
+import { setAgenticControlHost } from "./control-host";
+import { validateProposal, type ProgressReport, type ValidatedPlan } from "./control-plane";
+import { createRunFromPlan, reportProgressForTask, revisePlanForRun } from "./control-service";
 import { createAgenticStore, type AgenticStore } from "./store";
 import { resolveDataDir } from "../data-dir";
 import { getGlobalSingleton } from "../instances";
@@ -83,25 +86,7 @@ function createRuntime(): RuntimeState {
   const capabilityFor = (run: AgenticRun): AgenticCapability => {
     const cached = capabilities.get(run.id);
     if (cached) return cached;
-    const fallback: AgenticCapability = {
-      modelId: run.modelId,
-      physicalModelId: run.physicalModelId,
-      behaviorProfile: run.behaviorProfile,
-      behaviorProfileLabel: null,
-      contextWindow: run.contextWindow,
-      //
-      // Derived from the window rather than named: this fallback exists for a
-      // Run whose model has left the catalogue, and it must not smuggle one
-      // checkpoint's output size into the budget of another. Tools stay true
-      // because reserving room for a result nobody asked for is the safe
-      // direction.
-      //
-      maxOutputTokens: Math.max(512, Math.floor(run.contextWindow * FALLBACK_OUTPUT_SHARE)),
-      reasoning: false,
-      tools: true,
-      vision: false,
-      contextWindowDeclared: true,
-    };
+    const fallback = capabilityFromRun(run);
     capabilities.set(run.id, fallback);
     return fallback;
   };
@@ -119,6 +104,27 @@ function createRuntime(): RuntimeState {
 }
 
 const FALLBACK_OUTPUT_SHARE = 0.2;
+
+//
+// For a Run whose model has left the catalogue. Derived from the window the
+// Run recorded rather than naming an output size, so one checkpoint's limits
+// never leak into another's budget. Tools stay true because reserving room for
+// a result nobody asked for is the safe direction.
+//
+export function capabilityFromRun(run: AgenticRun): AgenticCapability {
+  return {
+    modelId: run.modelId,
+    physicalModelId: run.physicalModelId,
+    behaviorProfile: run.behaviorProfile,
+    behaviorProfileLabel: null,
+    contextWindow: run.contextWindow,
+    maxOutputTokens: Math.max(512, Math.floor(run.contextWindow * FALLBACK_OUTPUT_SHARE)),
+    reasoning: false,
+    tools: true,
+    vision: false,
+    contextWindowDeclared: true,
+  };
+}
 const TERMINAL = new Set(["COMPLETED", "FAILED", "CANCELLED", "WAITING_USER"]);
 const MAX_LOOP_STEPS = 10_000;
 
@@ -199,10 +205,71 @@ export function agenticRuntime() {
     state.loops.set(runId, loop);
   };
 
+  //
+  // A Run belongs to the chat session that started it. An agent's runtime
+  // session is that id with the agent appended, so a tool called from either
+  // finds the same Run.
+  //
+  const chatSessionOf = (sessionId: string): string => sessionId.split("#")[0] ?? sessionId;
+
+  const activeRunForSession = (sessionId: string): AgenticRun | null => {
+    const chat = chatSessionOf(sessionId);
+    return state.store.listUnfinishedRuns().find((run) => run.sessionId === chat) ?? null;
+  };
+
+  //
+  // Publish the runtime for the control tools. They cannot import it directly
+  // without closing a module cycle, so it is pushed here once and pulled out
+  // when a tool handler runs.
+  //
+  setAgenticControlHost({
+    store: state.store,
+    activeRunForSession,
+    capabilityForRun: (run) => state.capabilities.get(run.id) ?? capabilityFromRun(run),
+    startRun: async (input) => {
+      const capability = await resolveCapability(input.modelId);
+      const committed = createRunFromPlan(state.store, {
+        plan: input.plan,
+        capability,
+        sessionId: input.sessionId,
+        piSessionId: input.piSessionId,
+        cwd: input.cwd,
+        budgetPolicy: agenticBudgetPolicy(),
+      });
+      state.capabilities.set(committed.run.id, capability);
+      startLoop(committed.run.id);
+      return {
+        run: committed.run,
+        tasks: committed.tasks,
+        agentNames: committed.agents.map((agent) => agent.name),
+      };
+    },
+    revisePlan: (input) => {
+      const run = state.store.requireRun(input.runId);
+      const capability = state.capabilities.get(run.id) ?? capabilityFromRun(run);
+      const committed = revisePlanForRun(state.store, {
+        runId: input.runId,
+        reason: input.reason,
+        plan: input.plan,
+        capability,
+      });
+      return {
+        run: committed.run,
+        tasks: committed.tasks,
+        agentNames: committed.agents.map((agent) => agent.name),
+      };
+    },
+    reportProgress: (input) =>
+      reportProgressForTask(state.store, { ...input, turnId: state.store.now() }),
+    readArtifact: (artifactId, offset, length) =>
+      state.store.readArtifactSlice(artifactId, offset, length),
+  });
+
   return {
     store: state.store,
     service: state.service,
     resolveCapability,
+    activeRunForSession,
     listRuns: (): AgenticRun[] => state.store.listRuns(),
     snapshot: (runId: string): AgenticRunSnapshot => state.service.snapshot(runId),
     startRun: async (input: Omit<StartRunInput, "capability"> & { modelId: string }) => {
