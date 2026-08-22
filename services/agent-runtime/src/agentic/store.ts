@@ -10,6 +10,7 @@ import { createAgentStore } from "./store-agents";
 import { createStoreContext } from "./store-context";
 import { createOperationStore } from "./store-operations";
 import { createRunStore } from "./store-runs";
+import { createSignalStore } from "./store-signals";
 import { openAgenticDatabase } from "./schema";
 
 export const AGENTIC_ARTIFACTS_DIRNAME = "agentic-artifacts";
@@ -35,6 +36,7 @@ export function createAgenticStore(dataDir: string, now: () => Date = () => new 
     ...createRunStore(context),
     ...createAgentStore(context),
     ...createOperationStore(context, artifactsRoot),
+    ...createSignalStore(context),
   };
 }
 
@@ -42,3 +44,4 @@ export type AgenticStore = ReturnType<typeof createAgenticStore>;
 export type { CreateRunInput, TaskSeed } from "./store-runs";
 export type { CreateAgentInput } from "./store-agents";
 export type { OperationReservation, ReserveOperationInput } from "./store-operations";
+export type { AgenticSignalKind, AgenticTurnSignal, RecordSignalInput } from "./store-signals";
