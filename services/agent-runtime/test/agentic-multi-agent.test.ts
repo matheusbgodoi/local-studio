@@ -7,7 +7,7 @@ import { resolveAgenticCapability } from "../src/agentic/capability";
 import { validateProposal, type ValidatedPlan } from "../src/agentic/control-plane";
 import { createRunFromPlan } from "../src/agentic/control-service";
 import { createAgenticRunService } from "../src/agentic/run-service";
-import { createSerialGate } from "../src/agentic/scheduler";
+import { createPriorityInferenceGate } from "../src/agentic/inference-gate";
 import { createAgenticStore } from "../src/agentic/store";
 import { createFakeBackend, fakeAgentModel } from "./support/agentic-backend";
 
@@ -36,37 +36,6 @@ const planFor = (): ValidatedPlan => {
   return validated;
 };
 
-describe("the inference gate lets exactly one decode at a time", () => {
-  test("overlapping calls run one after another, in order", async () => {
-    const gate = createSerialGate();
-    const order: string[] = [];
-    let live = 0;
-    let peak = 0;
-
-    const job = (name: string, ms: number) =>
-      gate(async () => {
-        live += 1;
-        peak = Math.max(peak, live);
-        await new Promise((resolve) => setTimeout(resolve, ms));
-        order.push(name);
-        live -= 1;
-      });
-
-    await Promise.all([job("first", 20), job("second", 1), job("third", 1)]);
-    expect(peak).toBe(1);
-    expect(order).toEqual(["first", "second", "third"]);
-  });
-
-  test("one failure does not wedge the queue", async () => {
-    const gate = createSerialGate();
-    const failed = gate(async () => {
-      throw new Error("boom");
-    });
-    await expect(failed).rejects.toThrow("boom");
-    expect(await gate(async () => "still working")).toBe("still working");
-  });
-});
-
 describe("two agents on one run keep their own working context", () => {
   test("compacting one leaves the other's context, spend and checkpoints alone", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "agentic-multi-"));
@@ -86,13 +55,13 @@ describe("two agents on one run keep their own working context", () => {
 
       let peakConcurrency = 0;
       let live = 0;
-      const serial = createSerialGate();
+      const shared = createPriorityInferenceGate();
 
       const service = createAgenticRunService({
         store,
         capabilityFor: () => capability,
         inferenceGate: async (task) =>
-          serial(async () => {
+          shared.run("background", async () => {
             live += 1;
             peakConcurrency = Math.max(peakConcurrency, live);
             try {

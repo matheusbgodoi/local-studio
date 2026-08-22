@@ -216,6 +216,46 @@ describe("the model can rewrite its own plan", () => {
   });
 });
 
+//
+// Raised by an adversarial review of the control plane and confirmed against
+// the code before being fixed.
+//
+describe("the review's findings, pinned", () => {
+  test("a report against a task still waiting on its dependencies is refused", async () => {
+    const { harness, fake } = boot();
+    await fake.callTool("plan_agentic_run", plan);
+    const runId = harness.store.listRuns()[0]?.id as string;
+    const blocked = harness.store.listTasks(runId)[1];
+    harness.store.updateTask(blocked?.id as string, { status: "BLOCKED" });
+
+    const reply = await fake.callTool("report_task_progress", {
+      taskId: blocked?.id,
+      evidence: [{ criterion: "t2c1", evidence: "not really" }],
+    });
+    expect(reply).toContain("blocked on its dependencies");
+    expect(harness.store.requireTask(blocked?.id as string).acceptance[0]?.satisfied).toBe(false);
+  });
+
+  test("reading a large artifact is not itself externalised into a new one", async () => {
+    const { harness, fake } = boot();
+    await fake.callTool("plan_agentic_run", plan);
+    const runId = harness.store.listRuns()[0]?.id as string;
+    const artifact = harness.store.recordArtifact({
+      runId,
+      taskId: null,
+      kind: "log",
+      label: "big.log",
+      mediaType: "text/plain",
+      provenance: "bash",
+      content: "z".repeat(50_000),
+    });
+    const before = harness.store.listArtifacts(runId).length;
+    const slice = await fake.callTool("read_agentic_artifact", { artifactId: artifact.id, length: 20_000 });
+    expect(slice.length).toBe(20_000);
+    expect(harness.store.listArtifacts(runId).length).toBe(before);
+  });
+});
+
 describe("a stored artifact is readable by the model that was given its id", () => {
   test("a slice comes back, and an unknown id says so", async () => {
     const { harness, fake } = boot();
