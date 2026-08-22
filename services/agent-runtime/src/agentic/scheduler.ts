@@ -18,7 +18,7 @@ import {
   DEFAULT_CONTEXT_BUDGET_POLICY,
 } from "./context-budget";
 import type { AgenticCapability } from "./capability";
-import type { AgenticRun, AgenticRunStatus, AgenticTask } from "./contract";
+import type { AgenticAgent, AgenticRun, AgenticRunStatus, AgenticTask } from "./contract";
 import { resolveReadiness, selectNextTask, validatePlan, type TaskNode } from "./dag";
 import { runCompaction, type AgenticInferenceSession } from "./scheduler-session";
 import {
@@ -30,7 +30,8 @@ import {
   type StallState,
 } from "./stall";
 import type { AgenticStore, TaskSeed } from "./store";
-import { applyEvidence, acceptanceRejection, parseTurnReport } from "./turn-report";
+import { applyEvidence, acceptanceRejection, parseTurnReport, type TurnReport } from "./turn-report";
+import type { AgenticTurnSignal } from "./store-signals";
 import { buildWorkingSet, renderWorkingSet, workingSetTokens } from "./working-set";
 
 export const MAX_INEFFECTIVE_COMPACTIONS = 2;
@@ -52,9 +53,24 @@ export type ReplanInput = {
   reason: string;
 };
 
+export type InferenceGate = <T>(task: () => Promise<T>) => Promise<T>;
+
+export function createSerialGate(): InferenceGate {
+  let tail: Promise<unknown> = Promise.resolve();
+  return <T>(task: () => Promise<T>): Promise<T> => {
+    const next = tail.then(task, task);
+    tail = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  };
+}
+
 export type AgenticSchedulerOptions = {
   store: AgenticStore;
-  session: (run: AgenticRun) => AgenticInferenceSession;
+  session: (run: AgenticRun, agent: AgenticAgent | null) => AgenticInferenceSession;
+  inferenceGate?: InferenceGate;
   budgetPolicy?: ContextBudgetPolicy;
   stallPolicy?: StallPolicy;
   replan?: (input: ReplanInput) => TaskSeed[];
@@ -124,12 +140,40 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
   // last — so asking the factory again on every step would hand back an object
   // with no memory, and every turn would report zero tokens.
   //
-  const sessionFor = (run: AgenticRun): AgenticInferenceSession => {
-    const existing = sessions.get(run.id);
+  //
+  // One session object per LOGICAL AGENT. Two agents on one Run hold genuinely
+  // independent working contexts, so compacting one must not touch the other;
+  // and the adapter that fronts a real backend is stateful, deriving a turn's
+  // spend as a delta against what it saw last.
+  //
+  const sessionFor = (run: AgenticRun, agent: AgenticAgent | null): AgenticInferenceSession => {
+    const key = agent ? `${run.id}#${agent.id}` : run.id;
+    const existing = sessions.get(key);
     if (existing) return existing;
-    const created = options.session(run);
-    sessions.set(run.id, created);
+    const created = options.session(run, agent);
+    sessions.set(key, created);
     return created;
+  };
+
+  //
+  // One local card decodes one thing at a time. Tools, builds and waits may
+  // overlap freely; inference may not, and the gate is what makes that true
+  // rather than merely intended.
+  //
+  const gate = options.inferenceGate ?? createSerialGate();
+
+  //
+  // The agent a task belongs to, falling back to the Run's first agent. The
+  // assignment is made when a plan is committed, so routing a turn to the
+  // right working context is a lookup rather than a guess.
+  //
+  const agentForTask = (runId: string, task: AgenticTask | null): AgenticAgent | null => {
+    const agents = store.listAgents(runId);
+    if (task?.agentId) {
+      const owner = agents.find((entry) => entry.id === task.agentId);
+      if (owner) return owner;
+    }
+    return agents[0] ?? null;
   };
 
   const nodesOf = (tasks: AgenticTask[]): TaskNode[] =>
@@ -251,11 +295,12 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
   const launch = async (
     run: AgenticRun,
     task: AgenticTask,
-    session: AgenticInferenceSession,
     capability: AgenticCapability,
     tail: string[],
     errors: string[],
   ): Promise<SchedulerStep> => {
+    const agent = agentForTask(run.id, task);
+    const session = sessionFor(run, agent);
     const budget = budgetFor(run, capability);
     const workingSet = currentWorkingSet(run, task, tail, errors);
     let prompt = renderWorkingSet(workingSet);
@@ -335,7 +380,6 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     });
     store.updateRun(refreshed.id, { status: "RUNNING", activeTaskId: task.id });
 
-    const agent = store.listAgents(refreshed.id)[0];
     if (agent) {
       store.startAttempt({
         runId: refreshed.id,
@@ -366,7 +410,7 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     });
 
     try {
-      await session.prompt(prompt);
+      await gate(() => session.prompt(prompt));
     } catch (error) {
       //
       // A rejected turn is still a settled attempt. Leaving the rows RUNNING
@@ -395,8 +439,13 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     if (TERMINAL_RUN_STATUSES.includes(run.status)) {
       return { kind: "idle", reason: `run is ${run.status.toLowerCase()}` };
     }
-    const session = sessionFor(run);
-    const agent = store.listAgents(run.id)[0];
+    //
+    // Adjudicate against the working context that just ran: the agent that
+    // owns the active task, not whichever agent happens to be first.
+    //
+    const settledTask = run.activeTaskId ? store.getTask(run.activeTaskId) : null;
+    const agent = agentForTask(run.id, settledTask);
+    const session = sessionFor(run, agent);
 
     const lastError = session.lastError();
     const errors = lastError ? [lastError] : [];
@@ -417,12 +466,22 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
       if (agent) store.addAgentUsage(agent.id, usage);
     }
 
+    //
+    // Structured signals are the protocol. A turn that called the reporting
+    // tool has already had its evidence validated and committed by the control
+    // plane; parsing prose is only the fallback for a turn that reported in
+    // words, and it can no longer be the thing a state transition depends on.
+    //
+    const signals = alreadyConsumed ? [] : store.takePendingSignals(run.id);
     const report = alreadyConsumed
       ? { evidence: [], claimedComplete: false, blockedReason: null, userQuestion: null, errors: [] }
-      : parseTurnReport(finalText);
+      : signals.length > 0
+        ? reportFromSignals(signals)
+        : parseTurnReport(finalText);
     const tail: string[] = [];
 
     let tasks = store.listTasks(run.id);
+    // Re-read: the reporting tool wrote to this row during the turn.
     const activeTask = run.activeTaskId ? (store.getTask(run.activeTaskId) ?? null) : null;
 
     //
@@ -599,7 +658,7 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     }
 
     const nextTask = store.requireTask(nextTaskId);
-    return launch(store.requireRun(run.id), nextTask, session, capability, tail, errors);
+    return launch(store.requireRun(run.id), nextTask, capability, tail, errors);
   };
 
   return {
@@ -609,6 +668,36 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     budgetFor,
     sessionFor,
   };
+}
+
+//
+// One turn's signals collapse into the same shape the prose parser produces,
+// so everything downstream adjudicates identically whichever way the turn
+// chose to report.
+//
+export function reportFromSignals(signals: readonly AgenticTurnSignal[]): TurnReport {
+  const report: TurnReport = {
+    evidence: [],
+    claimedComplete: false,
+    blockedReason: null,
+    userQuestion: null,
+    errors: [],
+  };
+  for (const signal of signals) {
+    if (signal.kind === "evidence" && signal.detail.criterion) {
+      report.evidence.push({
+        criterionId: signal.detail.criterion,
+        evidence: signal.detail.evidence ?? "",
+      });
+      continue;
+    }
+    if (signal.kind === "complete") report.claimedComplete = true;
+    if (signal.kind === "blocked") report.blockedReason = signal.detail.reason ?? "no reason given";
+    if (signal.kind === "needs_user") {
+      report.userQuestion = signal.detail.question ?? "a decision is required";
+    }
+  }
+  return report;
 }
 
 const firstLine = (text: string): string => {

@@ -8,7 +8,7 @@
 
 import type { AgenticCapability } from "./capability";
 import { computeContextBudget, type ContextBudgetPolicy } from "./context-budget";
-import type { AgenticRun, AgenticRunSnapshot } from "./contract";
+import type { AgenticAgent, AgenticRun, AgenticRunSnapshot } from "./contract";
 import { validatePlan } from "./dag";
 import { reconcileAllRuns, type RunRecovery } from "./recovery";
 import { createAgenticScheduler, seedNodes, type SchedulerStep } from "./scheduler";
@@ -28,7 +28,7 @@ export type StartRunInput = {
 
 export type AgenticRunServiceOptions = {
   store: AgenticStore;
-  session: (run: AgenticRun) => AgenticInferenceSession;
+  session: (run: AgenticRun, agent: AgenticAgent | null) => AgenticInferenceSession;
   capabilityFor: (run: AgenticRun) => AgenticCapability;
   budgetPolicy?: ContextBudgetPolicy;
 };

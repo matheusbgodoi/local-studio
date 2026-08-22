@@ -14,7 +14,7 @@ import {
   DEFAULT_CONTEXT_BUDGET_POLICY,
   type ContextBudgetPolicy,
 } from "./context-budget";
-import type { AgenticRun, AgenticRunSnapshot } from "./contract";
+import type { AgenticAgent, AgenticRun, AgenticRunSnapshot } from "./contract";
 import { createPiAgenticSession } from "./pi-session-adapter";
 import { createAgenticRunService, type StartRunInput } from "./run-service";
 import { createAgenticStore, type AgenticStore } from "./store";
@@ -52,15 +52,27 @@ type RuntimeState = {
   capabilities: Map<string, AgenticCapability>;
 };
 
-const piSessionFor = (run: AgenticRun) =>
-  piRuntimeManager.getSessionForLookup(run.sessionId, run.piSessionId).session;
+//
+// A logical agent gets its own runtime session, so its working context, its
+// compaction history and its checkpoints are genuinely its own. The Run's own
+// session id is reserved for the conversation the owner started, which is what
+// keeps the chat that launched a Run readable afterwards.
+//
+const runtimeSessionKey = (run: AgenticRun, agent: AgenticAgent | null): string =>
+  agent ? `${run.sessionId}#${agent.id}` : run.sessionId;
 
-const sessionFor = (run: AgenticRun) =>
+const piSessionFor = (run: AgenticRun, agent: AgenticAgent | null) =>
+  piRuntimeManager.getSessionForLookup(
+    runtimeSessionKey(run, agent),
+    agent ? agent.piSessionId : run.piSessionId,
+  ).session;
+
+const sessionFor = (run: AgenticRun, agent: AgenticAgent | null) =>
   createPiAgenticSession({
-    session: piSessionFor(run),
+    session: piSessionFor(run, agent),
     modelId: run.modelId,
     cwd: run.cwd,
-    piSessionId: run.piSessionId,
+    piSessionId: agent ? agent.piSessionId : run.piSessionId,
     fallbackContextWindow: run.contextWindow,
   });
 
@@ -131,9 +143,10 @@ export function agenticRuntime() {
       const run = state.store.requireRun(runId);
       if (TERMINAL.has(run.status)) return;
       const capability = state.capabilities.get(runId) ?? (await resolveCapability(run.modelId));
+      const primaryAgent = state.store.listAgents(runId)[0] ?? null;
       const observed = withRuntimeContextWindow(
         capability,
-        (await state.service.scheduler.sessionFor(run).readContext()).contextWindow,
+        (await state.service.scheduler.sessionFor(run, primaryAgent).readContext()).contextWindow,
       );
       state.capabilities.set(runId, observed);
       if (observed.contextWindow !== run.contextWindow) {
@@ -152,12 +165,20 @@ export function agenticRuntime() {
       // it is what lets a restart find the same rollout instead of opening a
       // second conversation for a Run already in flight.
       //
-      const adopted = piSessionFor(run).status.piSessionId;
+      //
+      // Each agent adopts the pi session id of its OWN runtime session, so a
+      // restart finds each working context again rather than collapsing them
+      // onto the Run's conversation.
+      //
+      for (const agent of state.store.listAgents(runId)) {
+        const own = piSessionFor(run, agent).status.piSessionId;
+        if (own && own !== agent.piSessionId) {
+          state.store.updateAgent(agent.id, { piSessionId: own });
+        }
+      }
+      const adopted = piSessionFor(run, primaryAgent).status.piSessionId;
       if (adopted && adopted !== run.piSessionId) {
         state.store.updateRun(runId, { piSessionId: adopted });
-        for (const agent of state.store.listAgents(runId)) {
-          state.store.updateAgent(agent.id, { piSessionId: adopted });
-        }
       }
       await state.service.scheduler.advance(runId, observed);
     }
