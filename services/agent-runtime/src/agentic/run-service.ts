@@ -11,7 +11,7 @@ import { computeContextBudget, type ContextBudgetPolicy } from "./context-budget
 import type { AgenticAgent, AgenticRun, AgenticRunSnapshot } from "./contract";
 import { validatePlan } from "./dag";
 import { reconcileAllRuns, type RunRecovery } from "./recovery";
-import { createAgenticScheduler, seedNodes, type SchedulerStep } from "./scheduler";
+import { createAgenticScheduler, seedNodes, type InferenceGate, type SchedulerStep } from "./scheduler";
 import type { AgenticInferenceSession } from "./scheduler-session";
 import type { AgenticStore, TaskSeed } from "./store";
 
@@ -31,6 +31,7 @@ export type AgenticRunServiceOptions = {
   session: (run: AgenticRun, agent: AgenticAgent | null) => AgenticInferenceSession;
   capabilityFor: (run: AgenticRun) => AgenticCapability;
   budgetPolicy?: ContextBudgetPolicy;
+  inferenceGate?: InferenceGate;
 };
 
 export function createAgenticRunService(options: AgenticRunServiceOptions) {
@@ -39,6 +40,7 @@ export function createAgenticRunService(options: AgenticRunServiceOptions) {
     store,
     session: options.session,
     budgetPolicy: options.budgetPolicy,
+    ...(options.inferenceGate ? { inferenceGate: options.inferenceGate } : {}),
   });
 
   //
