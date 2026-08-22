@@ -132,7 +132,14 @@ export function createOperationStore(context: AgenticStoreContext, artifactsRoot
     }
     if (existing.requestHash !== requestHash) return { kind: "mismatch", operation: existing };
     if (existing.status === "COMMITTED") return { kind: "cached", operation: existing };
-    if (existing.sideEffecting && (existing.status === "STARTED" || existing.status === "UNKNOWN")) {
+    //
+    // Only UNKNOWN means "a process died with this in flight" — recovery is
+    // what puts an operation there. STARTED means this process began it and is
+    // still running it, which happens when a turn is aborted or when a model
+    // issues the same command twice in one batch. Treating STARTED as
+    // reconcile poisoned that command for the rest of the Run.
+    //
+    if (existing.sideEffecting && existing.status === "UNKNOWN") {
       return { kind: "reconcile", operation: existing };
     }
     return { kind: "reserved", operation: existing };
