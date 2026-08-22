@@ -7,6 +7,21 @@ and is not repeated here.
 Versioning is `<upstream base>-local.<n>` — see
 [`docs/upstream-updates.md`](docs/upstream-updates.md).
 
+## v2.1.0-local.12 — 2026-08-22
+
+Base: upstream **2.1.0**. Source only; no binary is published.
+
+- **Compaction counters count compactions performed, not attempted.** A backend
+  that refuses to compact a session it considers too short was bumping the
+  agent's counter but not its Run's, so an agent read one higher than the Run it
+  belongs to — visible in the final verification against the card, where the Run
+  said 7 and its agent said 8.
+- [`docs/durable-agentic-runtime.md`](docs/durable-agentic-runtime.md) now
+  records what running against the card found, what the adversarial review
+  found, and the final verification numbers: a fourteen-task chain, **7
+  checkpoint → compact → automatic resume cycles**, every task satisfied, no
+  manual "continue".
+
 ## v2.1.0-local.11 — 2026-08-21
 
 Eleven states the durable runtime could reach and never leave, found by an
