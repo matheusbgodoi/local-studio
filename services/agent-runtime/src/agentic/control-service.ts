@@ -131,6 +131,17 @@ export function reportProgressForTask(
   if (task.status === "SUCCEEDED" || task.status === "CANCELLED") {
     return { ok: false, reason: `task ${input.taskId} is already ${task.status.toLowerCase()}` };
   }
+  //
+  // A task still waiting on its dependencies has not been worked on, so
+  // evidence for it would be a claim about work that has not happened —
+  // and satisfying its gate early would let the plan be skipped.
+  //
+  if (task.status === "BLOCKED") {
+    return {
+      ok: false,
+      reason: `task ${input.taskId} is blocked on its dependencies; finish those first`,
+    };
+  }
   const applied = applyProgressReport(store, task, input.report, input.turnId);
   if (applied.unknownCriteria.length > 0 && applied.outstanding.length > 0) {
     return {

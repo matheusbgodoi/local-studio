@@ -73,7 +73,11 @@ export function createAgenticRunService(options: AgenticRunServiceOptions) {
       physicalModelId: input.capability.physicalModelId,
       behaviorProfile: input.capability.behaviorProfile,
       sessionId: input.sessionId,
-      piSessionId: input.piSessionId,
+      //
+      // Never the caller's: an agent seeded with the chat's pi session id would
+      // resolve to the owner's live conversation and work inside it.
+      //
+      piSessionId: null,
       contextLimit: budget.usableLimit,
     });
     store.recordPlanRevision({ runId: run.id, reason: "initial plan", tasks: input.tasks });
