@@ -171,7 +171,7 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     reason: string,
     tail: string[],
     errors: string[],
-  ): Promise<{ prompt: string; effective: boolean }> => {
+  ): Promise<{ prompt: string; effective: boolean; recorded: boolean }> => {
     const workingSet = currentWorkingSet(run, task, tail, errors);
     const rendered = renderWorkingSet(workingSet);
     const required = workingSetTokens(workingSet);
@@ -201,7 +201,7 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
         type: "COMPACTION_REFUSED",
         summary: message,
       });
-      return { prompt: rendered, effective: false };
+      return { prompt: rendered, effective: false, recorded: false };
     }
     const checkpoint = store.recordCheckpoint({
       runId: run.id,
@@ -245,7 +245,7 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
         durationMs: outcome.durationMs,
       },
     });
-    return { prompt: rendered, effective: outcome.effective };
+    return { prompt: rendered, effective: outcome.effective, recorded: true };
   };
 
   const launch = async (
@@ -274,6 +274,7 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     });
 
     let compacted = false;
+    let compactionRecorded = false;
     //
     // Compaction can only remove what is NOT the working set. A session
     // already at or below what the task needs has nothing to gain from one,
@@ -300,6 +301,7 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
       );
       prompt = result.prompt;
       compacted = true;
+      compactionRecorded = result.recorded;
       const strikes = result.effective ? 0 : (ineffectiveCompactions.get(run.id) ?? 0) + 1;
       ineffectiveCompactions.set(run.id, strikes);
       if (strikes >= MAX_INEFFECTIVE_COMPACTIONS) {
@@ -347,7 +349,12 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
         activeContextTokens: reading.tokens,
         contextLimit: budget.usableLimit,
         lastHeartbeatMs: store.now(),
-        compactionCount: compacted ? agent.compactionCount + 1 : agent.compactionCount,
+        //
+        // Count compactions performed, not compactions attempted. A refusal
+        // leaves the Run's counter alone, and an agent counting one more than
+        // its own Run reads as a bug in whichever number you trust less.
+        //
+        compactionCount: compactionRecorded ? agent.compactionCount + 1 : agent.compactionCount,
       });
     }
 

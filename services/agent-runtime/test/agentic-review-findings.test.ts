@@ -235,6 +235,38 @@ describe("a rejected turn settles its own rows", () => {
   });
 });
 
+describe("compaction counters count the same thing", () => {
+  test("a refused compaction leaves both the run and its agent where they were", async () => {
+    const harness = createHarness({
+      model: { contextWindow: 9_000, maxTokens: 2_000 },
+      backend: {
+        contextWindow: 9_000,
+        compactionError: "Nothing to compact (session too small)",
+        fallback: (index) => ({ text: `TASK_EVIDENCE c${index + 1}: proven`, ...GROWTH }),
+      },
+    });
+    try {
+      const criteria = Array.from({ length: 10 }, (_, index) => criterion(`c${index + 1}`));
+      const { run } = await harness.service.startRun({
+        goal: "g",
+        capability: harness.capability,
+        sessionId: "s",
+        piSessionId: "p",
+        cwd: "/tmp/p",
+        tasks: [task("Work", [], criteria)],
+      });
+      for (let turn = 0; turn < 10; turn += 1) await harness.service.onTurnSettled(run.id);
+      expect(harness.store.listEvents(run.id).filter((e) => e.type === "COMPACTION_REFUSED").length)
+        .toBeGreaterThan(0);
+      expect(harness.store.listAgents(run.id)[0]?.compactionCount).toBe(
+        harness.store.requireRun(run.id).compactionCount,
+      );
+    } finally {
+      harness.dispose();
+    }
+  });
+});
+
 describe("the budget refuses to produce a limit nothing can fit in", () => {
   test("a fractional override is floored away rather than collapsing the budget to zero", () => {
     const capability = resolveAgenticCapability(fakeAgentModel({ contextWindow: 131_072 }));
