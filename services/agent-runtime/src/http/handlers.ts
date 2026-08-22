@@ -23,6 +23,7 @@ import {
   type ComposerPromptTemplateRef,
   type ComposerSkillRef,
 } from "../../../../shared/agent/composer-refs";
+import { sharedInferenceGate } from "../agentic/inference-gate";
 import { piResourceDiagnostics, piRuntimeManager } from "../pi-runtime";
 import { isAgentSettledEvent } from "../pi-runtime-state";
 import type { LoggedPiEvent, PiAgentSession, PiAgentStatus } from "../pi-runtime-types";
@@ -113,13 +114,20 @@ function launchPrompt(
   resolved: ResolvedTurnSession,
   commandImages: AgentImageInput[] | undefined,
 ) {
+  //
+  // Through the shared gate, at interactive priority: one card decodes one
+  // thing at a time, and the owner's own message goes ahead of a Run's turn
+  // rather than waiting minutes behind it.
+  //
   void Effect.runPromise(
     Effect.tryPromise({
       try: () =>
-        resolved.session.prompt(turn.message, () => undefined, {
-          streamingBehavior: resolved.effectiveStreamingBehavior,
-          ...(commandImages ? { images: commandImages } : {}),
-        }),
+        sharedInferenceGate().run("interactive", () =>
+          resolved.session.prompt(turn.message, () => undefined, {
+            streamingBehavior: resolved.effectiveStreamingBehavior,
+            ...(commandImages ? { images: commandImages } : {}),
+          }),
+        ),
       catch: (error) => error,
     }).pipe(Effect.catch(() => Effect.void)),
   );

@@ -20,6 +20,7 @@ import {
 import type { AgenticCapability } from "./capability";
 import type { AgenticAgent, AgenticRun, AgenticRunStatus, AgenticTask } from "./contract";
 import { resolveReadiness, selectNextTask, validatePlan, type TaskNode } from "./dag";
+import { sharedInferenceGate } from "./inference-gate";
 import { runCompaction, type AgenticInferenceSession } from "./scheduler-session";
 import {
   DEFAULT_STALL_POLICY,
@@ -55,16 +56,12 @@ export type ReplanInput = {
 
 export type InferenceGate = <T>(task: () => Promise<T>) => Promise<T>;
 
+//
+// A Run's turns are background work: the owner's own message goes first.
+//
 export function createSerialGate(): InferenceGate {
-  let tail: Promise<unknown> = Promise.resolve();
-  return <T>(task: () => Promise<T>): Promise<T> => {
-    const next = tail.then(task, task);
-    tail = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
-  };
+  const shared = sharedInferenceGate();
+  return <T>(task: () => Promise<T>): Promise<T> => shared.run("background", task);
 }
 
 export type AgenticSchedulerOptions = {
