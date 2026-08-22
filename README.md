@@ -94,10 +94,15 @@ on the same browser profile. Human verification is supported;
 
 ### Runs that survive their own compaction
 
-Hand the agent a goal and leave. **Runs**, **Tasks** and **Agents** are durable
-records outside the model's context, so a compaction checkpoints, rebuilds the
-working set from the store and schedules the next inference itself — the same
-task stays running, and nobody types "continue". A task completes on acceptance
+Write an ordinary prompt. The served model decides for itself whether that is a
+question or a piece of durable work, and if it is work it plans it, creates the
+**Run**, its **Tasks** and its **Agents**, and gets on with it — you watch,
+rather than issuing commands. The plan appears live in the chat that started it.
+
+Runs, Tasks and Agents are durable records outside the model's context, so a
+compaction checkpoints, rebuilds the working set from the store and schedules
+the next inference itself — the same task stays running, and nobody types
+"continue". A task completes on acceptance
 evidence rather than on the word "done"; repeated non-progress replans within a
 bound; a restart preserves finished work and reconciles anything side-effecting
 that was in flight instead of replaying it.

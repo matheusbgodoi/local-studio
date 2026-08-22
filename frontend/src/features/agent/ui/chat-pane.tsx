@@ -17,6 +17,7 @@ import { type FileMentionRow, type MentionRow } from "@/features/agent/ui/agent-
 import { builtinCommandProvider } from "@/features/agent/composer/builtin-commands";
 import { ComposerProjectDrawer } from "@/features/agent/ui/composer-project-drawer";
 import { SubagentChips } from "@/features/agent/ui/subagent-chips";
+import { RunInlinePanel } from "@/features/runs/run-inline-panel";
 import { GitDiffDrawer } from "@/features/agent/ui/git-diff-drawer";
 import {
   promptTemplateCommandProvider,
@@ -55,6 +56,15 @@ function piSessionIdOf(tab: { piSessionId?: string | null } | null | undefined):
 function subagentChipsFor(piSessionId: string | null | undefined) {
   if (!piSessionId) return null;
   return <SubagentChips piSessionId={piSessionId} />;
+}
+
+// Renders nothing until this conversation is driving a durable Run, which is
+// the model's decision to make and not the composer's.
+function runPanelFor(
+  tab: { id?: string } | null | undefined,
+  piSessionId: string | null | undefined,
+) {
+  return <RunInlinePanel sessionId={tab?.id ?? null} piSessionId={piSessionId ?? null} />;
 }
 
 import {
@@ -766,6 +776,7 @@ export function ChatPane({
           gitSummary,
           onClose: closeDiffDrawer,
         })}
+        {runPanelFor(activeTab, activePiSessionId)}
         {subagentChipsFor(activePiSessionId)}
         <AgentComposerFrame
           attachments={attachments}

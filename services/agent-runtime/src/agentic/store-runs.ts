@@ -173,7 +173,29 @@ export function createRunStore(context: AgenticStoreContext) {
         const dependencies = JSON.stringify(
           seed.dependencies.map((dependency) => idByTitle.get(dependency) ?? dependency),
         );
-        const acceptance = JSON.stringify(seed.acceptance);
+        //
+        // Evidence belongs to the claim it proved, not to a position in a list.
+        // A criterion the revision restated is a different claim and starts
+        // unproven; one it kept keeps what was already shown, or the model
+        // would be made to prove the same thing twice and the stall detector
+        // would read that as no progress.
+        //
+        const provenByDescription = new Map(
+          (carried?.acceptance ?? [])
+            .filter((criterion) => criterion.satisfied)
+            .map((criterion) => [criterion.description, criterion.evidence] as const),
+        );
+        const acceptance = JSON.stringify(
+          seed.acceptance.map((criterion) =>
+            provenByDescription.has(criterion.description)
+              ? {
+                  ...criterion,
+                  satisfied: true,
+                  evidence: provenByDescription.get(criterion.description) ?? null,
+                }
+              : criterion,
+          ),
+        );
         if (carried) {
           context.run(
             `UPDATE agentic_tasks SET plan_revision = ?, position = ?, title = ?, description = ?,
@@ -205,6 +227,30 @@ export function createRunStore(context: AgenticStoreContext) {
           at,
         );
       });
+
+      //
+      // A task the revision left out is no longer work. Finished work stays
+      // finished — it happened — but anything unfinished is cancelled with the
+      // reason, so the scheduler cannot pick up a task the plan has dropped.
+      //
+      const kept = new Set(ids);
+      for (const existing of listTasks(input.runId)) {
+        if (kept.has(existing.id)) continue;
+        if (existing.status === "SUCCEEDED" || existing.status === "CANCELLED") continue;
+        context.run(
+          "UPDATE agentic_tasks SET status = 'CANCELLED', blocker = ?, settled_at_ms = ?, updated_at_ms = ? WHERE id = ?",
+          `dropped by plan revision ${revision}: ${input.reason}`,
+          at,
+          at,
+          existing.id,
+        );
+        appendEvent({
+          runId: input.runId,
+          taskId: existing.id,
+          type: "TASK_CANCELLED",
+          summary: `dropped by plan revision ${revision}`,
+        });
+      }
 
       context.run(
         "INSERT INTO agentic_plan_revisions(run_id, revision, reason, dag_json, created_at_ms) VALUES (?,?,?,?,?)",
