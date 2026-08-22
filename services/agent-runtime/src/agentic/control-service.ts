@@ -1,0 +1,143 @@
+//
+// Committing a validated proposal.
+//
+// Everything here runs after `control-plane` has said the proposal is
+// well-formed. Ids, statuses, agent identity and the acceptance gate are the
+// runtime's; the proposal only supplied intent.
+//
+
+import type { AgenticCapability } from "./capability";
+import { computeContextBudget, type ContextBudgetPolicy } from "./context-budget";
+import type { AgenticAgent, AgenticRun, AgenticTask } from "./contract";
+import { applyProgressReport, type ProgressReport, type ValidatedPlan } from "./control-plane";
+import type { AgenticStore } from "./store";
+
+export type CommittedPlan = {
+  run: AgenticRun;
+  tasks: AgenticTask[];
+  agents: AgenticAgent[];
+};
+
+//
+// A plan that names no agents gets one. Naming several is how the model says
+// the work has independent strands; each becomes a durable agent with its own
+// working context, and the tasks it was given carry its id from the start.
+//
+function assignAgents(
+  store: AgenticStore,
+  run: AgenticRun,
+  capability: AgenticCapability,
+  plan: ValidatedPlan,
+  contextLimit: number,
+): AgenticAgent[] {
+  const existing = store.listAgents(run.id);
+  const byName = new Map(existing.map((agent) => [agent.name, agent] as const));
+  const wanted = plan.agents.length > 0 ? plan.agents : [{ name: "Primary", role: "generalist", taskTitles: [] }];
+
+  const agents: AgenticAgent[] = [];
+  for (const proposed of wanted) {
+    const already = byName.get(proposed.name);
+    if (already) {
+      agents.push(already);
+      continue;
+    }
+    agents.push(
+      store.createAgent({
+        runId: run.id,
+        name: proposed.name,
+        role: proposed.role,
+        modelId: capability.modelId,
+        physicalModelId: capability.physicalModelId,
+        behaviorProfile: capability.behaviorProfile,
+        sessionId: run.sessionId,
+        piSessionId: null,
+        contextLimit,
+      }),
+    );
+  }
+
+  const tasks = store.listTasks(run.id);
+  const idByTitle = new Map(tasks.map((task) => [task.title, task.id] as const));
+  const fallback = agents[0];
+
+  for (const [index, proposed] of wanted.entries()) {
+    const agent = agents[index];
+    if (!agent) continue;
+    for (const title of proposed.taskTitles) {
+      const taskId = idByTitle.get(title);
+      if (taskId) store.updateTask(taskId, { agentId: agent.id });
+    }
+  }
+  if (fallback) {
+    for (const task of store.listTasks(run.id)) {
+      if (!task.agentId) store.updateTask(task.id, { agentId: fallback.id });
+    }
+  }
+  return store.listAgents(run.id);
+}
+
+export function createRunFromPlan(
+  store: AgenticStore,
+  input: {
+    plan: ValidatedPlan;
+    capability: AgenticCapability;
+    sessionId: string;
+    piSessionId: string | null;
+    cwd: string;
+    budgetPolicy?: ContextBudgetPolicy;
+  },
+): CommittedPlan {
+  const budget = computeContextBudget(input.capability, input.budgetPolicy);
+  const run = store.createRun({
+    goal: input.plan.goal,
+    modelId: input.capability.modelId,
+    physicalModelId: input.capability.physicalModelId,
+    behaviorProfile: input.capability.behaviorProfile,
+    contextWindow: input.capability.contextWindow,
+    usableLimit: budget.usableLimit,
+    sessionId: input.sessionId,
+    piSessionId: input.piSessionId,
+    cwd: input.cwd,
+  });
+  store.recordPlanRevision({ runId: run.id, reason: "plan proposed by the model", tasks: input.plan.seeds });
+  const agents = assignAgents(store, run, input.capability, input.plan, budget.usableLimit);
+  store.updateRun(run.id, { status: "PLANNING" });
+  return { run: store.requireRun(run.id), tasks: store.listTasks(run.id), agents };
+}
+
+export function revisePlanForRun(
+  store: AgenticStore,
+  input: { runId: string; reason: string; plan: ValidatedPlan; capability: AgenticCapability },
+): CommittedPlan {
+  const run = store.requireRun(input.runId);
+  store.recordPlanRevision({ runId: run.id, reason: input.reason, tasks: input.plan.seeds });
+  const agents = assignAgents(store, run, input.capability, input.plan, run.usableLimit);
+  store.appendEvent({ runId: run.id, type: "REPLAN", summary: input.reason });
+  return { run: store.requireRun(run.id), tasks: store.listTasks(run.id), agents };
+}
+
+export type ProgressOutcome =
+  | { ok: false; reason: string; validCriteria?: string[] }
+  | { ok: true; outstanding: string[]; satisfied: boolean; unknownCriteria: string[] };
+
+export function reportProgressForTask(
+  store: AgenticStore,
+  input: { runId: string; taskId: string; report: ProgressReport; turnId: number },
+): ProgressOutcome {
+  const task = store.getTask(input.taskId);
+  if (!task || task.runId !== input.runId) {
+    return { ok: false, reason: `task ${input.taskId} does not belong to run ${input.runId}` };
+  }
+  if (task.status === "SUCCEEDED" || task.status === "CANCELLED") {
+    return { ok: false, reason: `task ${input.taskId} is already ${task.status.toLowerCase()}` };
+  }
+  const applied = applyProgressReport(store, task, input.report, input.turnId);
+  if (applied.unknownCriteria.length > 0 && applied.outstanding.length > 0) {
+    return {
+      ok: true,
+      ...applied,
+      validCriteria: task.acceptance.map((criterion) => criterion.id),
+    } as ProgressOutcome;
+  }
+  return { ok: true, ...applied };
+}
