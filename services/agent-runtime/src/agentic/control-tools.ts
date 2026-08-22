@@ -15,6 +15,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { agenticControlHost } from "./control-host";
 import { validateProgress, validateProposal } from "./control-plane";
+import { createToolInterceptor } from "./tool-interceptor";
 
 type ToolSchema = Parameters<ExtensionAPI["registerTool"]>[0]["parameters"];
 
@@ -75,6 +76,20 @@ export function createAgenticControlExtension(getSessionId: () => string | null)
     // The rule reaches the model as part of its system prompt, so the decision
     // is native tool-calling rather than a classifier bolted on the outside.
     //
+    //
+    // Large outputs and side effects are intercepted on the same session the
+    // tools live on, and both hooks stand down when this conversation is not
+    // driving a Run.
+    //
+    createToolInterceptor({
+      store: () => agenticControlHost()?.store ?? null,
+      activeRun: () => {
+        const live = agenticControlHost();
+        const sessionId = getSessionId();
+        return live && sessionId ? live.activeRunForSession(sessionId) : null;
+      },
+    })(pi);
+
     pi.on("before_agent_start", (event) => {
       if (event.systemPrompt.includes("Durable work runtime:")) return {};
       return { systemPrompt: `${event.systemPrompt.trimEnd()}\n\n${AGENTIC_ROUTING_INSTRUCTIONS}` };
