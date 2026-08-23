@@ -242,10 +242,23 @@ export function createAgenticControlExtension(getSessionId: () => string | null)
             `Recorded, but these criterion ids are not on that task: ${outcome.unknownCriteria.join(", ")}. Outstanding: ${outcome.outstanding.join(", ") || "none"}.`,
           );
         }
+        if (!outcome.satisfied) {
+          return text(`Recorded. Still outstanding: ${outcome.outstanding.join(", ")}.`);
+        }
+        //
+        // Say what actually moved. The model needs to see the plan advance
+        // while it is still working, or it will conclude the gate is stuck.
+        //
+        const unblocked = outcome.unblocked ?? [];
         return text(
-          outcome.satisfied
-            ? "Recorded. Every acceptance criterion on this task is now satisfied."
-            : `Recorded. Still outstanding: ${outcome.outstanding.join(", ")}.`,
+          [
+            outcome.settled
+              ? "Recorded. Every criterion is satisfied, so the runtime has marked this task complete."
+              : "Recorded. Every acceptance criterion on this task is now satisfied.",
+            unblocked.length > 0
+              ? `Now ready to start: ${unblocked.join(", ")}.`
+              : "Nothing else became ready; check the plan for what remains.",
+          ].join(" "),
         );
       },
     });

@@ -136,6 +136,9 @@ describe("progress is reported through a tool, and checked", () => {
     const { harness, fake } = boot();
     await fake.callTool("plan_agentic_run", plan);
     const runId = harness.store.listRuns()[0]?.id as string;
+    // "Prove it" depends on "Write it": finish the dependency the way the model
+    // would, so the task under test is genuinely startable.
+    harness.store.updateTask(harness.store.listTasks(runId)[0]?.id as string, { status: "SUCCEEDED" });
     const prove = harness.store.listTasks(runId)[1];
 
     const reply = await fake.callTool("report_task_progress", {
@@ -150,8 +153,9 @@ describe("progress is reported through a tool, and checked", () => {
     const { harness, fake } = boot();
     await fake.callTool("plan_agentic_run", plan);
     const runId = harness.store.listRuns()[0]?.id as string;
+    harness.store.updateTask(harness.store.listTasks(runId)[0]?.id as string, { status: "SUCCEEDED" });
     const prove = harness.store.listTasks(runId)[1];
-    await fake.callTool("report_task_progress", {
+    const reply = await fake.callTool("report_task_progress", {
       taskId: prove?.id,
       evidence: [
         { criterion: "t2c1", evidence: "printed OK" },
@@ -159,8 +163,9 @@ describe("progress is reported through a tool, and checked", () => {
       ],
       complete: true,
     });
-    const reply = await fake.callTool("report_task_progress", { taskId: prove?.id, complete: true });
-    expect(reply).toContain("Every acceptance criterion");
+    // Settled on the spot, not one inference later.
+    expect(reply).toContain("marked this task complete");
+    expect(harness.store.requireTask(prove?.id as string).status).toBe("SUCCEEDED");
   });
 
   test("a report against an unknown task is refused rather than written somewhere", async () => {
@@ -220,6 +225,70 @@ describe("the model can rewrite its own plan", () => {
 // Raised by an adversarial review of the control plane and confirmed against
 // the code before being fixed.
 //
+//
+// Found by the first real-Qwen acceptance run. A capable model did thirty tool
+// calls inside ONE turn: it proved a task, watched it stay RUNNING because the
+// runtime only adjudicated between turns, saw its dependents still BLOCKED, and
+// burned two plan revisions working around a gate that had already been met.
+//
+describe("the plan moves while the model is still working", () => {
+  test("a task whose criteria are all met settles at once, and its dependents open", async () => {
+    const { harness, fake } = boot();
+    await fake.callTool("plan_agentic_run", plan);
+    const runId = harness.store.listRuns()[0]?.id as string;
+    const [write, prove] = harness.store.listTasks(runId);
+
+    expect(write?.status).toBe("READY");
+    expect(prove?.status).toBe("BLOCKED");
+
+    const reply = await fake.callTool("report_task_progress", {
+      taskId: write?.id,
+      evidence: [{ criterion: "t1c1", evidence: "cat stats.py showed mean and median" }],
+      complete: true,
+    });
+
+    // Settled inside the turn, not one inference later.
+    expect(harness.store.requireTask(write?.id as string).status).toBe("SUCCEEDED");
+    expect(harness.store.requireTask(prove?.id as string).status).toBe("READY");
+    expect(reply).toContain("marked this task complete");
+    expect(reply).toContain("Now ready to start: Prove it");
+  });
+
+  test("a revision that drops the edges opens the tasks immediately", async () => {
+    const { harness, fake } = boot();
+    await fake.callTool("plan_agentic_run", plan);
+    const runId = harness.store.listRuns()[0]?.id as string;
+    expect(harness.store.listTasks(runId)[1]?.status).toBe("BLOCKED");
+
+    await fake.callTool("revise_agentic_plan", {
+      reason: "these are independent after all",
+      tasks: [
+        { title: "Write it", acceptance: ["stats.py defines mean and median"] },
+        { title: "Prove it", acceptance: ["the selftest printed OK"] },
+      ],
+    });
+
+    // No dependencies left, so nothing may still read as blocked.
+    for (const task of harness.store.listTasks(runId)) {
+      expect(task.dependencies.length).toBe(0);
+      expect(task.status).not.toBe("BLOCKED");
+    }
+  });
+
+  test("a task is still refused while a dependency is genuinely unfinished", async () => {
+    const { harness, fake } = boot();
+    await fake.callTool("plan_agentic_run", plan);
+    const runId = harness.store.listRuns()[0]?.id as string;
+    const prove = harness.store.listTasks(runId)[1];
+    const reply = await fake.callTool("report_task_progress", {
+      taskId: prove?.id,
+      evidence: [{ criterion: "t2c1", evidence: "skipping ahead" }],
+    });
+    expect(reply).toContain("still depends on Write it");
+    expect(harness.store.requireTask(prove?.id as string).acceptance[0]?.satisfied).toBe(false);
+  });
+});
+
 describe("the review's findings, pinned", () => {
   test("a report against a task still waiting on its dependencies is refused", async () => {
     const { harness, fake } = boot();
@@ -232,7 +301,7 @@ describe("the review's findings, pinned", () => {
       taskId: blocked?.id,
       evidence: [{ criterion: "t2c1", evidence: "not really" }],
     });
-    expect(reply).toContain("blocked on its dependencies");
+    expect(reply).toContain("still depends on");
     expect(harness.store.requireTask(blocked?.id as string).acceptance[0]?.satisfied).toBe(false);
   });
 
