@@ -19,7 +19,8 @@ import {
 } from "./context-budget";
 import type { AgenticCapability } from "./capability";
 import type { AgenticAgent, AgenticRun, AgenticRunStatus, AgenticTask } from "./contract";
-import { resolveReadiness, selectNextTask, validatePlan, type TaskNode } from "./dag";
+import { selectNextTask, validatePlan, type TaskNode } from "./dag";
+import { applyReadiness as sharedApplyReadiness } from "./readiness";
 import { runCompaction, type AgenticInferenceSession } from "./scheduler-session";
 import {
   DEFAULT_STALL_POLICY,
@@ -180,18 +181,7 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
   const budgetFor = (run: AgenticRun, capability: AgenticCapability): ContextBudget =>
     computeContextBudget({ ...capability, contextWindow: run.contextWindow }, budgetPolicy);
 
-  const applyReadiness = (runId: string): AgenticTask[] => {
-    const tasks = store.listTasks(runId);
-    const { ready, blocked } = resolveReadiness(nodesOf(tasks));
-    const readySet = new Set(ready);
-    const blockedSet = new Set(blocked);
-    for (const task of tasks) {
-      if (readySet.has(task.id) && task.status !== "READY") store.updateTask(task.id, { status: "READY" });
-      else if (blockedSet.has(task.id) && task.status !== "BLOCKED")
-        store.updateTask(task.id, { status: "BLOCKED" });
-    }
-    return store.listTasks(runId);
-  };
+  const applyReadiness = (runId: string): AgenticTask[] => sharedApplyReadiness(store, runId);
 
   const currentWorkingSet = (run: AgenticRun, activeTask: AgenticTask | null, tail: string[], errors: string[]) =>
     buildWorkingSet({

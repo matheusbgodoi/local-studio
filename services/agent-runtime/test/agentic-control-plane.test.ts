@@ -341,6 +341,9 @@ describe("a progress report is evidence the runtime checks, not a status the mod
     const harness = createHarness();
     try {
       const committed = setup(harness);
+      // The second task depends on the first, so finish that one the way the
+      // model would before reporting against it.
+      harness.store.updateTask(committed.tasks[0]?.id as string, { status: "SUCCEEDED" });
       const task = committed.tasks[1];
       const outcome = reportProgressForTask(harness.store, {
         runId: committed.run.id,
@@ -364,6 +367,7 @@ describe("a progress report is evidence the runtime checks, not a status the mod
     const harness = createHarness();
     try {
       const committed = setup(harness);
+      harness.store.updateTask(committed.tasks[0]?.id as string, { status: "SUCCEEDED" });
       const outcome = reportProgressForTask(harness.store, {
         runId: committed.run.id,
         taskId: committed.tasks[1]?.id as string,

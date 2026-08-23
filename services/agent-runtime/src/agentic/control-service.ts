@@ -10,6 +10,7 @@ import type { AgenticCapability } from "./capability";
 import { computeContextBudget, type ContextBudgetPolicy } from "./context-budget";
 import type { AgenticAgent, AgenticRun, AgenticTask } from "./contract";
 import { applyProgressReport, type ProgressReport, type ValidatedPlan } from "./control-plane";
+import { applyReadiness, settleTaskIfSatisfied } from "./readiness";
 import type { AgenticStore } from "./store";
 
 export type CommittedPlan = {
@@ -102,6 +103,7 @@ export function createRunFromPlan(
   store.recordPlanRevision({ runId: run.id, reason: "plan proposed by the model", tasks: input.plan.seeds });
   const agents = assignAgents(store, run, input.capability, input.plan, budget.usableLimit);
   store.updateRun(run.id, { status: "PLANNING" });
+  applyReadiness(store, run.id);
   return { run: store.requireRun(run.id), tasks: store.listTasks(run.id), agents };
 }
 
@@ -113,12 +115,26 @@ export function revisePlanForRun(
   store.recordPlanRevision({ runId: run.id, reason: input.reason, tasks: input.plan.seeds });
   const agents = assignAgents(store, run, input.capability, input.plan, run.usableLimit);
   store.appendEvent({ runId: run.id, type: "REPLAN", summary: input.reason });
+  //
+  // A revision changes which tasks are blocked. Leaving that to the next
+  // inference showed the model a plan where nothing depended on anything and
+  // everything was still BLOCKED.
+  //
+  applyReadiness(store, run.id);
   return { run: store.requireRun(run.id), tasks: store.listTasks(run.id), agents };
 }
 
 export type ProgressOutcome =
   | { ok: false; reason: string; validCriteria?: string[] }
-  | { ok: true; outstanding: string[]; satisfied: boolean; unknownCriteria: string[] };
+  | {
+      ok: true;
+      outstanding: string[];
+      satisfied: boolean;
+      unknownCriteria: string[];
+      settled?: boolean;
+      unblocked?: string[];
+      validCriteria?: string[];
+    };
 
 export function reportProgressForTask(
   store: AgenticStore,
@@ -133,22 +149,41 @@ export function reportProgressForTask(
   }
   //
   // A task still waiting on its dependencies has not been worked on, so
-  // evidence for it would be a claim about work that has not happened —
-  // and satisfying its gate early would let the plan be skipped.
+  // evidence for it would be a claim about work that has not happened, and
+  // satisfying its gate early would let the plan be skipped.
   //
-  if (task.status === "BLOCKED") {
+  // Asked of the dependencies themselves rather than of the task's stored
+  // label: the label is derived, and a derived value read before its inputs
+  // settled is exactly how a task that was ready looked blocked.
+  //
+  const byId = new Map(store.listTasks(task.runId).map((entry) => [entry.id, entry] as const));
+  const unmet = task.dependencies.filter((id) => byId.get(id)?.status !== "SUCCEEDED");
+  if (unmet.length > 0) {
+    const names = unmet.map((id) => byId.get(id)?.title ?? id);
     return {
       ok: false,
-      reason: `task ${input.taskId} is blocked on its dependencies; finish those first`,
+      reason: `task ${input.taskId} still depends on ${names.join(", ")}; finish those first`,
     };
   }
   const applied = applyProgressReport(store, task, input.report, input.turnId);
+  //
+  // Settle now, while the model is still working. Waiting for the next
+  // inference left a proved task RUNNING and its dependents BLOCKED, and the
+  // model replanned around a gate that had in fact already been met.
+  //
+  const settled = settleTaskIfSatisfied(
+    store,
+    task.id,
+    input.report.complete,
+    input.report.evidence[0]?.evidence ?? null,
+  );
   if (applied.unknownCriteria.length > 0 && applied.outstanding.length > 0) {
     return {
       ok: true,
       ...applied,
+      ...settled,
       validCriteria: task.acceptance.map((criterion) => criterion.id),
     } as ProgressOutcome;
   }
-  return { ok: true, ...applied };
+  return { ok: true, ...applied, ...settled };
 }
