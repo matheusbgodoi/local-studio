@@ -16,6 +16,7 @@ import {
 } from "./context-budget";
 import type { AgenticAgent, AgenticRun, AgenticRunSnapshot } from "./contract";
 import { createPiAgenticSession } from "./pi-session-adapter";
+import { settleDriveFailure } from "./recovery";
 import { createAgenticRunService, type StartRunInput } from "./run-service";
 import { setAgenticControlHost } from "./control-host";
 import { validateProposal, type ProgressReport, type ValidatedPlan } from "./control-plane";
@@ -195,9 +196,12 @@ export function agenticRuntime() {
     state.cancelled.delete(runId);
     const loop = drive(runId)
       .catch((error: unknown) => {
-        const reason = error instanceof Error ? error.message : String(error);
-        state.store.updateRun(runId, { status: "FAILED", failureReason: reason });
-        state.store.appendEvent({ runId, type: "RUN_FAILED", summary: reason });
+        //
+        // The backend going away is an accident of the moment, not a verdict
+        // on the goal, so it takes the road a killed process takes rather than
+        // ending the Run.
+        //
+        settleDriveFailure(state.store, runId, error);
       })
       .finally(() => {
         state.loops.delete(runId);

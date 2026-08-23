@@ -8,6 +8,7 @@
 // thing a durable runtime must never do is blindly replay a commit.
 //
 
+import { isBackendLoss } from "./backend-loss";
 import type { AgenticRun } from "./contract";
 import type { AgenticStore } from "./store";
 
@@ -81,4 +82,34 @@ export function reconcileRun(store: AgenticStore, run: AgenticRun): RunRecovery 
 
 export function reconcileAllRuns(store: AgenticStore): RunRecovery[] {
   return store.listUnfinishedRuns().map((run) => reconcileRun(store, run));
+}
+
+//
+// What to do when the drive loop throws.
+//
+// Two different accidents wear the same shape here. If the machine serving the
+// model dropped off the network, nothing was decided about the goal: that is
+// the crash case wearing different clothes, so it takes the crash road —
+// reconcile, keep every proved task, reopen as PAUSED. Anything else is a
+// verdict on the work and ends the Run.
+//
+export function settleDriveFailure(
+  store: AgenticStore,
+  runId: string,
+  error: unknown,
+): { paused: boolean; reason: string } {
+  const reason = error instanceof Error ? error.message : String(error);
+  if (!isBackendLoss(error)) {
+    store.updateRun(runId, { status: "FAILED", failureReason: reason });
+    store.appendEvent({ runId, type: "RUN_FAILED", summary: reason });
+    return { paused: false, reason };
+  }
+  reconcileRun(store, store.requireRun(runId));
+  store.updateRun(runId, { failureReason: reason });
+  store.appendEvent({
+    runId,
+    type: "RUN_INTERRUPTED",
+    summary: `the model backend became unreachable (${reason}); the run is paused and can be resumed`,
+  });
+  return { paused: true, reason };
 }
