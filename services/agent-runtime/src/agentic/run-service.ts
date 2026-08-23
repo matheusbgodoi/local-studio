@@ -8,10 +8,10 @@
 
 import type { AgenticCapability } from "./capability";
 import { computeContextBudget, type ContextBudgetPolicy } from "./context-budget";
-import type { AgenticRun, AgenticRunSnapshot } from "./contract";
+import type { AgenticAgent, AgenticRun, AgenticRunSnapshot } from "./contract";
 import { validatePlan } from "./dag";
 import { reconcileAllRuns, type RunRecovery } from "./recovery";
-import { createAgenticScheduler, seedNodes, type SchedulerStep } from "./scheduler";
+import { createAgenticScheduler, seedNodes, type InferenceGate, type SchedulerStep } from "./scheduler";
 import type { AgenticInferenceSession } from "./scheduler-session";
 import type { AgenticStore, TaskSeed } from "./store";
 
@@ -28,9 +28,10 @@ export type StartRunInput = {
 
 export type AgenticRunServiceOptions = {
   store: AgenticStore;
-  session: (run: AgenticRun) => AgenticInferenceSession;
+  session: (run: AgenticRun, agent: AgenticAgent | null) => AgenticInferenceSession;
   capabilityFor: (run: AgenticRun) => AgenticCapability;
   budgetPolicy?: ContextBudgetPolicy;
+  inferenceGate?: InferenceGate;
 };
 
 export function createAgenticRunService(options: AgenticRunServiceOptions) {
@@ -39,6 +40,7 @@ export function createAgenticRunService(options: AgenticRunServiceOptions) {
     store,
     session: options.session,
     budgetPolicy: options.budgetPolicy,
+    ...(options.inferenceGate ? { inferenceGate: options.inferenceGate } : {}),
   });
 
   //
@@ -71,7 +73,11 @@ export function createAgenticRunService(options: AgenticRunServiceOptions) {
       physicalModelId: input.capability.physicalModelId,
       behaviorProfile: input.capability.behaviorProfile,
       sessionId: input.sessionId,
-      piSessionId: input.piSessionId,
+      //
+      // Never the caller's: an agent seeded with the chat's pi session id would
+      // resolve to the owner's live conversation and work inside it.
+      //
+      piSessionId: null,
       contextLimit: budget.usableLimit,
     });
     store.recordPlanRevision({ runId: run.id, reason: "initial plan", tasks: input.tasks });

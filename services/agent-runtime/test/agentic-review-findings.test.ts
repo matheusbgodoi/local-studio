@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 // Relative on purpose: bun resolves no `@/` alias from this package.
 import {
   computeContextBudget,
@@ -7,6 +10,8 @@ import {
 import { resolveAgenticCapability } from "../src/agentic/capability";
 import { applyEvidence, parseTurnReport } from "../src/agentic/turn-report";
 import { fakeAgentModel } from "./support/agentic-backend";
+import { openAgenticDatabase } from "../src/agentic/schema";
+import { createAgenticStore } from "../src/agentic/store";
 import { createHarness, criterion, driveToSettled, task } from "./support/agentic-harness";
 
 //
@@ -284,6 +289,70 @@ describe("the budget refuses to produce a limit nothing can fit in", () => {
         resolveAgenticCapability(fakeAgentModel({ contextWindow, maxTokens: contextWindow })),
       );
       expect(budget.usableLimit).toBeGreaterThan(0);
+    }
+  });
+});
+
+//
+// The previous owner build shipped store version 1. Opening one of those with
+// this code must migrate it, not refuse it: the alternative is an owner whose
+// unfinished runs vanish on upgrade.
+//
+describe("an older store opens, and a newer one is refused rather than guessed at", () => {
+  test("a version 1 store keeps its runs and gains the new table", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "agentic-migrate-"));
+    try {
+      const first = createAgenticStore(dir);
+      const run = first.createRun({
+        goal: "written by the older build",
+        modelId: "m",
+        physicalModelId: "m",
+        behaviorProfile: null,
+        contextWindow: 8_000,
+        usableLimit: 4_000,
+        sessionId: "s",
+        piSessionId: null,
+        cwd: "/tmp/p",
+      });
+      first.close();
+
+      // Put the file back to how version 1 left it.
+      const raw = openAgenticDatabase(dir);
+      raw.database.prepare("UPDATE agentic_metadata SET value = '1' WHERE key = 'version'").run();
+      raw.database.prepare("DROP TABLE agentic_turn_signals").run();
+      raw.database.close();
+
+      const second = createAgenticStore(dir);
+      try {
+        expect(second.requireRun(run.id).goal).toBe("written by the older build");
+        expect(second.tableNames()).toContain("agentic_turn_signals");
+        second.recordSignal({
+          runId: run.id,
+          taskId: null,
+          agentId: null,
+          turnId: 1,
+          kind: "complete",
+          detail: {},
+        });
+        expect(second.listSignals(run.id).length).toBe(1);
+      } finally {
+        second.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a store from a newer build is refused with its version named", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "agentic-future-"));
+    try {
+      createAgenticStore(dir).close();
+      const raw = openAgenticDatabase(dir);
+      raw.database.prepare("UPDATE agentic_metadata SET value = '99' WHERE key = 'version'").run();
+      raw.database.close();
+      expect(() => createAgenticStore(dir)).toThrow("newer build");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

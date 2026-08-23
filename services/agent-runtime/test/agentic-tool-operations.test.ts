@@ -98,7 +98,14 @@ describe("a side effect is reserved once and committed once", () => {
     }
   });
 
-  test("a read-only operation caught mid-flight is simply retried; a side-effecting one is not", async () => {
+  //
+  // STARTED means this process began it and may still be running it — an
+  // aborted turn, or the same command issued twice in one batch. Only UNKNOWN
+  // means a process died with it in flight, and only that has to be reconciled.
+  // Conflating the two poisoned a command for the rest of the Run after a
+  // single abort.
+  //
+  test("an operation this process started is retryable; one a crash left behind is not", async () => {
     const harness = createHarness(harnessOptions);
     try {
       const { run } = await startRun(harness);
@@ -114,6 +121,13 @@ describe("a side effect is reserved once and committed once", () => {
 
       harness.store.reserveOperation({ ...base, idempotencyKey: "write-1", action: "fs.write", sideEffecting: true });
       harness.store.markOperationStarted("write-1");
+      expect(
+        harness.store.reserveOperation({ ...base, idempotencyKey: "write-1", action: "fs.write", sideEffecting: true })
+          .kind,
+      ).toBe("reserved");
+
+      // Recovery is what turns "in flight" into "nobody knows".
+      harness.store.markOperationUnknown("write-1", "process ended mid-flight");
       expect(
         harness.store.reserveOperation({ ...base, idempotencyKey: "write-1", action: "fs.write", sideEffecting: true })
           .kind,

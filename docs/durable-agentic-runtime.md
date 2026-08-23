@@ -332,10 +332,95 @@ observe the third.
 | `agentic-crash-recovery.test.ts` | restart after checkpoint, mid-task, around a tool operation |
 | `agentic-profile-durability.test.ts` | profile restoration, declared default, ordinary chat untouched |
 | `agentic-stall-replan.test.ts` | bounded retry, replan, no infinite loop |
+| `agentic-review-findings.test.ts` | every state an adversarial review found the runtime could not leave |
+| `agentic-control-plane.test.ts` | what the runtime accepts as a plan, and what it refuses |
+| `agentic-control-tools.test.ts` | the tools under the names and shapes the model sees |
+| `agentic-tool-interception.test.ts` | artifacts and idempotency on the real tool path |
+| `agentic-multi-agent.test.ts` | two agents, independent contexts, one decode at a time |
+| `agentic-inference-gate.test.ts` | one card decodes once; the owner goes first |
 
 ---
 
-## 13. What the card found
+## 13. The autonomous control plane
+
+**IMPLEMENTED.** The owner writes an ordinary prompt. The served model decides
+whether that is a question or durable work, and if it is work, it plans it,
+creates the Run and drives it. Nothing about that path asks the owner to press
+anything.
+
+### The tools
+
+`agentic/control-tools.ts` registers four tools on **every** chat session,
+because deciding that a request is durable work is the model's to make and a
+session that could not reach the tools could never make it.
+
+| tool | what the model proposes |
+|---|---|
+| `plan_agentic_run` | a goal, tasks with dependencies and acceptance criteria, optionally named agents |
+| `revise_agentic_plan` | a replacement plan, when what it learned means the current one cannot work |
+| `report_task_progress` | evidence against a task's criteria, or that it is blocked, or a question only the owner can answer |
+| `read_agentic_artifact` | part of a large output the runtime stored outside the conversation |
+
+**POLICY — the model proposes, the runtime decides.** There is no tool that
+writes a row, sets a status or invents an id. `agentic/control-plane.ts`
+validates every proposal: titles unique, dependencies inside the plan, the DAG
+acyclic, at least one acceptance criterion per task, and bounds — twelve tasks,
+six criteria, four agents — so a trivial request cannot become a twelve-task
+DAG and a confused model cannot fill the store. A rejected proposal comes back
+with a reason it can act on rather than a silent failure.
+
+**POLICY — the Run a conversation drives is resolved from the session**, never
+taken from the model, which removes a class of both mistake and mischief.
+
+### Routing
+
+**POLICY.** No keyword classifier. The rule reaches the model as a section of
+its system prompt (`before_agent_start`, the same seam the session goal uses)
+and the tools advertise themselves through `promptSnippet` and
+`promptGuidelines`. The decision is native tool-calling.
+
+A question, an explanation or a single small edit stays ordinary chat and
+creates nothing. **EVIDENCE:** `agentic-control-tools.test.ts` drives the tools
+under the exact names and argument shapes the model sees, and asserts that a
+turn which calls no tool leaves the store empty.
+
+### Structured reporting
+
+**IMPLEMENTED.** `agentic_turn_signals`. A turn that called the reporting tool
+has already had its evidence validated and committed; the scheduler adjudicates
+from those signals. Prose markers still parse as a fallback for a turn that
+reported in words, but no state transition depends on the model spelling a
+magic string correctly any more.
+
+### Real tool execution
+
+**IMPLEMENTED.** `agentic/tool-interceptor.ts` hooks `tool_call` and
+`tool_result` on the same session, and both stand down outside a Run so
+ordinary chat is untouched.
+
+- An output over the preview budget becomes a durable artifact; what reaches
+  the model is a reference, its size, and the head and tail. It can read any
+  other part with `read_agentic_artifact`, and nothing re-pastes the payload.
+- A side-effecting operation (`bash`, `write`, `edit`) is reserved in the ledger
+  before it runs and recorded after. One caught in flight when a process died
+  is **blocked** until the model has checked the real external state.
+  Deliberately re-running the same command is still allowed and left in the
+  record — exactly-once applies where it must, across a crash, not to a
+  legitimate second `npm test`.
+
+### Agents and the card
+
+**IMPLEMENTED.** Each logical agent gets its own runtime session, so its
+working context, compaction history and checkpoints are its own; compacting one
+cannot touch another. **EVIDENCE:** `agentic-multi-agent.test.ts`.
+
+**POLICY.** One process-wide gate (`agentic/inference-gate.ts`) serialises every
+decode — a Run's turns and the owner's chat both queue in it, because the
+scheduler serialising only its own turns still allowed a chat turn and a Run
+turn to decode together on one card. Interactive work is taken first, so an
+overnight Run never makes the owner wait minutes to be answered.
+
+## 14. What the card found
 
 **MEASURED.** Running this against the resident Qwen found four defects the
 offline battery could not, each now pinned by a test: the usable limit already
@@ -357,7 +442,7 @@ against `qwen-daily` (window 176128 read live, scheduler budget narrowed to
 succeeded, 312085 input / 37917 output cumulative, one plan revision never
 needed, profile `qwen-daily`/`standard` unchanged, and no manual "continue".
 
-## 14. The end-to-end override
+## 15. The end-to-end override
 
 `LOCAL_STUDIO_AGENTIC_USABLE_CONTEXT` narrows the **scheduler's** usable
 context for a long run against the real card, so several genuine

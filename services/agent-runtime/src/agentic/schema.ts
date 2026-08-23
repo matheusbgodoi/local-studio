@@ -41,7 +41,7 @@ export const loadSqlDatabase = (): new (filepath: string) => SqlDatabase => {
 };
 
 export const AGENTIC_STORE_FILENAME = "agentic-runtime.sqlite";
-export const AGENTIC_STORE_VERSION = 1;
+export const AGENTIC_STORE_VERSION = 2;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS agentic_metadata (
@@ -211,6 +211,20 @@ CREATE TABLE IF NOT EXISTS agentic_events (
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS agentic_events_run ON agentic_events(run_id, id);
+
+CREATE TABLE IF NOT EXISTS agentic_turn_signals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL,
+  task_id TEXT,
+  agent_id TEXT,
+  turn_id INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('evidence','complete','blocked','needs_user')),
+  detail TEXT NOT NULL,
+  consumed INTEGER NOT NULL DEFAULT 0,
+  created_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS agentic_turn_signals_run ON agentic_turn_signals(run_id, consumed, id);
 `;
 
 const createOwnerOnlyFile = (filepath: string): void => {
@@ -237,15 +251,29 @@ export function openAgenticDatabase(dataDir: string): { database: SqlDatabase; f
   database.exec("PRAGMA trusted_schema = OFF");
   database.exec(DDL);
 
+  //
+  // Every table above is CREATE TABLE IF NOT EXISTS, so opening an older store
+  // with newer code adds what is missing and leaves the rows alone. Migrating
+  // forward is the whole job; the only unrecoverable case is a store written
+  // by code newer than this, which must not be guessed at.
+  //
   database
     .prepare("INSERT OR IGNORE INTO agentic_metadata(key, value) VALUES ('version', ?)")
     .run(String(AGENTIC_STORE_VERSION));
   const stored = database
     .prepare("SELECT value FROM agentic_metadata WHERE key = 'version'")
     .get() as { value?: unknown } | undefined;
-  if (stored?.value !== String(AGENTIC_STORE_VERSION)) {
+  const storedVersion = Number(stored?.value);
+  if (!Number.isFinite(storedVersion) || storedVersion > AGENTIC_STORE_VERSION) {
     database.close();
-    throw new Error("Unsupported agentic runtime store version");
+    throw new Error(
+      `Agentic runtime store was written by a newer build (version ${String(stored?.value)})`,
+    );
+  }
+  if (storedVersion < AGENTIC_STORE_VERSION) {
+    database
+      .prepare("UPDATE agentic_metadata SET value = ? WHERE key = 'version'")
+      .run(String(AGENTIC_STORE_VERSION));
   }
 
   if (!memory) {

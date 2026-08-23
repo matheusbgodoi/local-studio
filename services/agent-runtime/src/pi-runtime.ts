@@ -27,6 +27,8 @@ import { refreshPiModels, resolvePiModelSelection } from "./pi-runtime-models";
 import { getProviderHub } from "./provider-hub";
 import { attachGoalDriver } from "./goal-driver";
 import { createGoalPromptExtension } from "./goal-prompt";
+import { createAgenticControlExtension } from "./agentic/control-tools";
+import { sharedInferenceGate } from "./agentic/inference-gate";
 import { findRuntimeSessionForLookup, piStatusFromEvents } from "./pi-runtime-state";
 import { configuredPiSessionDir, findSessionFile } from "./sessions-store";
 import { getGlobalSingleton } from "./instances";
@@ -291,6 +293,14 @@ export function piResourceDiagnostics(agentDir?: string): PiResourceDiagnostic[]
 }
 
 class PiSdkSession extends EventEmitter implements PiAgentSession {
+  //
+  // The manager keys its map by this id; the session needs it too, because the
+  // control tools resolve which Run a conversation is driving from it.
+  //
+  constructor(private readonly runtimeSessionId: string) {
+    super();
+  }
+
   private runtime: AgentSessionRuntime | null = null;
   private unsubscribe: (() => void) | null = null;
   private eventSeq = 0;
@@ -473,6 +483,7 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
         const captureConnectorApi = (api: ExtensionAPI) => {
           this.connectorApi = api;
         };
+        const runtimeSessionId = this.runtimeSessionId;
         const runtime = yield* Effect.tryPromise({
           try: () =>
             createAgentSessionRuntime(
@@ -513,6 +524,15 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
                               // spawn a single MCP process. It only captures the
                               // live ExtensionAPI so `/mcp <name>` can register
                               // that one connector's tools later, in-place.
+                              // The durable-work control surface. Present on
+                              // EVERY chat session, because deciding that a
+                              // request is durable work is the model's to make
+                              // — a session that could not reach the tools
+                              // could never make it.
+                              {
+                                name: "local-studio-agentic",
+                                factory: createAgenticControlExtension(() => runtimeSessionId),
+                              },
                               {
                                 name: "local-studio-connectors",
                                 factory: createConnectorToolsExtension((api) => {
@@ -662,8 +682,16 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     this.on("loggedEvent", listener);
     this.activePromptCount += 1;
     this.lastError = null;
+    //
+    // Every turn in this process funnels through here — chat, subagents,
+    // automations, the goal driver, the phone bridge and a Run's own steps — so
+    // this is the one place that can make "one card decodes one thing at a
+    // time" true rather than true of some callers. The count is incremented
+    // first, so a turn waiting for the card still reports as running.
+    //
+    const priority = options.source === "rpc" ? "background" : "interactive";
     return Effect.tryPromise({
-      try: () => this.promptSession(message, options),
+      try: () => sharedInferenceGate().run(priority, () => this.promptSession(message, options)),
       catch: (error) => error,
     }).pipe(
       Effect.catch((error) =>
@@ -779,7 +807,11 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
       return Effect.fail(new Error("Cannot compact while the agent is running."));
     }
     return Effect.tryPromise({
-      try: () => this.requireSession().compact(customInstructions),
+      // Summarisation is a decode too, and it is never the owner waiting.
+      try: () =>
+        sharedInferenceGate().run("background", () =>
+          Promise.resolve(this.requireSession().compact(customInstructions)),
+        ),
       catch: (error) => error,
     });
   }
@@ -1007,7 +1039,7 @@ class PiRuntimeManager {
     const existing = this.sessions.get(sessionId);
     if (existing) return existing;
 
-    const created = new PiSdkSession();
+    const created = new PiSdkSession(sessionId);
     attachGoalDriver(created);
     this.sessions.set(sessionId, created);
     return created;

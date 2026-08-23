@@ -113,6 +113,11 @@ function launchPrompt(
   resolved: ResolvedTurnSession,
   commandImages: AgentImageInput[] | undefined,
 ) {
+  //
+  // The shared inference gate lives in the runtime's prompt path, so a chat
+  // turn is serialised against every other decode without this call site
+  // knowing about it — and without the session reporting idle while it waits.
+  //
   void Effect.runPromise(
     Effect.tryPromise({
       try: () =>
