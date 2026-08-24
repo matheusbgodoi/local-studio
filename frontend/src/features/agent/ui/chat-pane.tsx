@@ -152,7 +152,7 @@ import {
   type TerminalOwnersSnapshot,
 } from "@/features/agent/ui/use-persistent-terminal-owners";
 import { PersistentTerminals } from "@/features/agent/ui/persistent-terminals";
-import { saveTextFile } from "@/lib/save-text-file";
+import { saveTextFile } from "@/features/agent/composer/save-text-file";
 import { cx } from "@/ui/utils";
 import { ExtensionUiDialog } from "@/features/agent/ui/extension-ui-dialog";
 import {

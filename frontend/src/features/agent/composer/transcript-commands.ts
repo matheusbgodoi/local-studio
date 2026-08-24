@@ -5,7 +5,7 @@ import {
 } from "@/features/agent/messages/export-markdown";
 import { assistantContentCopyText } from "@/features/agent/ui/timeline/activity-grouping";
 import { writeClipboardText } from "@/lib/clipboard";
-import { saveTextFile } from "@/lib/save-text-file";
+import { saveTextFile } from "./save-text-file";
 import type {
   ComposerCommand,
   ComposerCommandOutcome,
