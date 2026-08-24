@@ -8,6 +8,8 @@ import { log } from "../helpers/logger";
 import { registerOAuthVault } from "./oauth-vault";
 import { resolveStablePort } from "../helpers/ports";
 import { resolveAugmentedPath } from "../helpers/resolve-path";
+import { readFrontendToken, readRemoteHost, readRemoteUser } from "./frontend-token";
+import { repointTailnetServe } from "./tailnet-serve";
 import {
   startOrReuseAgentRuntime,
   stopAgentRuntime,
@@ -204,6 +206,14 @@ export async function startFrontendServer(
   const port = await resolveStablePort(options.port ?? readPersistedPort());
   persistPort(port);
   const url = `http://127.0.0.1:${port}`;
+  const frontendToken = readFrontendToken(DESKTOP_CONFIG.userDataDir);
+  //
+  // Read only when a token exists. The host allowlist and the token are two
+  // halves of one decision — widening the first without the second would open
+  // the app to anything that can reach the published name.
+  //
+  const remoteHost = frontendToken ? readRemoteHost(DESKTOP_CONFIG.userDataDir) : null;
+  const remoteUser = remoteHost ? readRemoteUser(DESKTOP_CONFIG.userDataDir) : null;
   const agentRuntime = await startOrReuseAgentRuntime({ frontendUrl: url }, options.agentRuntime);
 
   log.info(`Starting embedded frontend server from ${serverScript} on ${url}`);
@@ -235,6 +245,14 @@ export async function startFrontendServer(
       LOCAL_STUDIO_AGENT_CWD: process.env.LOCAL_STUDIO_AGENT_CWD || app.getPath("home"),
       LOCAL_STUDIO_AGENT_RUNTIME_URL: agentRuntime.url,
       LOCAL_STUDIO_FRONTEND_BASE: url,
+      //
+      // Present only when the owner has enabled remote access. Its presence is
+      // what makes the frontend demand a token for every request, including from
+      // this machine — see logic/frontend-token.ts.
+      //
+      ...(frontendToken ? { LOCAL_STUDIO_FRONTEND_TOKEN: frontendToken } : {}),
+      ...(remoteHost ? { ALLOWED_TAILSCALE_HOSTS: remoteHost } : {}),
+      ...(remoteUser ? { ALLOWED_TAILSCALE_USERS: remoteUser } : {}),
     },
   });
 
@@ -283,6 +301,8 @@ export async function startFrontendServer(
     );
     throw error;
   }
+
+  if (remoteHost) void repointTailnetServe(remoteHost, port);
 
   return {
     agentRuntime,

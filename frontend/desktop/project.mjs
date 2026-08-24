@@ -1815,6 +1815,78 @@ async function afterPack(context) {
   console.log(`  afterPack: embedded frontend and agent runtime present (${electronPlatformName})`);
 }
 
+
+//
+// Remote access over the tailnet.
+//
+// `tailscale serve` publishes a loopback server to the owner's OWN tailnet and
+// nowhere else — it is not `funnel`, which is the public one and is never used
+// here. Tailnet membership is therefore the outer boundary.
+//
+// The token is the inner one, and it is not redundant: the desktop build answers
+// loopback requests unauthenticated on the assumption that loopback is the only
+// way in, and serve breaks exactly that assumption by connecting over loopback
+// itself. Creating the token file is what flips the frontend to demanding it —
+// see frontend/desktop/logic/frontend-token.ts.
+//
+async function remoteAccess(args3 = process.argv.slice(2)) {
+  let os5 = await import("node:os");
+  let fs5 = await import("node:fs");
+  let path5 = await import("node:path");
+  let { execFileSync } = await import("node:child_process");
+  let userData = path5.join(os5.homedir(), "Library", "Application Support", "Local Studio");
+  let tokenFile = path5.join(userData, "frontend-token");
+  let disable = args3.includes("--off");
+
+  let tailscale = ["/usr/local/bin/tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"]
+    .find((candidate) => fs5.existsSync(candidate));
+  if (!tailscale) throw Error("tailscale was not found");
+
+  let hostFile = path5.join(userData, "remote-host");
+  let userFile = path5.join(userData, "remote-user");
+
+  if (disable) {
+    execFileSync(tailscale, ["serve", "reset"], { stdio: "inherit" });
+    for (let file of [tokenFile, hostFile, userFile]) fs5.rmSync(file, { force: true });
+    console.log("Remote access is off. Restart Local Studio so it stops requiring the token.");
+    return;
+  }
+
+  let port = valueAfter(args3, "--port");
+  if (!port) throw Error("pass --port <the port Local Studio's embedded server is on>");
+
+  if (!fs5.existsSync(tokenFile)) {
+    fs5.mkdirSync(userData, { recursive: true });
+    let { randomBytes: rb } = await import("node:crypto");
+    fs5.writeFileSync(tokenFile, rb(32).toString("base64url") + "\n", { mode: 0o600 });
+  }
+  let token = fs5.readFileSync(tokenFile, "utf8").trim();
+
+  execFileSync(tailscale, ["serve", "--bg", "--https=443", "http://127.0.0.1:" + port], {
+    stdio: "inherit",
+  });
+  let state = JSON.parse(execFileSync(tailscale, ["status", "--json"], { encoding: "utf8" }));
+  let dns = state.Self?.DNSName?.replace(/\.$/, "");
+  if (!dns) throw Error("this machine has no MagicDNS name; enable MagicDNS for the tailnet");
+  let login = state.User?.[state.Self?.UserID]?.LoginName ?? "";
+
+  fs5.writeFileSync(hostFile, dns + "\n", { mode: 0o600 });
+  if (/^[^\s,]+@[^\s,]+$/.test(login)) fs5.writeFileSync(userFile, login + "\n", { mode: 0o600 });
+  else fs5.rmSync(userFile, { force: true });
+
+  console.log("");
+  console.log("Remote access is on, for devices on this tailnet only.");
+  console.log("Restart Local Studio so its server starts requiring the token, then open this ONCE");
+  console.log("on the phone to pair it (the token moves into a cookie and drops out of the URL):");
+  console.log("");
+  console.log("  https://" + dns + "/agent?token=" + token);
+  console.log("");
+  console.log("Afterwards, and for Add to Home Screen, use:  https://" + dns + "/agent");
+  console.log("");
+  console.log("Reachable only from this tailnet" + (login ? ", and only as " + login : "") + ".");
+  console.log("Turn it off with:  npm run remote-access -- --off");
+}
+
 var project_entry_default = afterPack, root5 = path11.resolve(path11.dirname(fileURLToPath11(import.meta.url)), "../.."), commands = new Map([
   ["assert-release-main", () => Promise.resolve().then(() => (init_assert_release_main(), exports_assert_release_main))],
   ["assert-standalone", () => Promise.resolve().then(() => (init_assert_standalone_build(), exports_assert_standalone_build))],
@@ -1838,7 +1910,8 @@ var project_entry_default = afterPack, root5 = path11.resolve(path11.dirname(fil
   ["validate-package", () => Promise.resolve().then(() => (init_validate_package_json(), exports_validate_package_json))],
   ["validate-structure", () => Promise.resolve().then(() => (init_validate_barrel_dir_siblings(), exports_validate_barrel_dir_siblings))],
   ["validate-ui", () => Promise.resolve().then(() => (init_validate_ui_structure(), exports_validate_ui_structure))],
-  ["audit-layout", async () => auditLayout()]
+  ["audit-layout", async () => auditLayout()],
+  ["remote-access", async () => remoteAccess()]
 ]);
 function parsedVersion(value) {
   let match = value.match(/(\d+)\.(\d+)(?:\.(\d+))?/);

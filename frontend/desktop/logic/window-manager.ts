@@ -1,6 +1,7 @@
 import { app, BrowserWindow } from "electron";
 import path from "node:path";
 import { DESKTOP_CONFIG } from "../configs";
+import { readFrontendToken } from "./frontend-token";
 import { log } from "../helpers/logger";
 import { hardenWebContents, registerPermissionPolicy } from "./security";
 
@@ -73,7 +74,12 @@ export function createMainWindow(appUrl: string): BrowserWindow {
   // client-chosen. Seeding the cookie into this window's own session is what
   // lets the native app keep working while remote access stays gated.
   //
-  const token = process.env.LOCAL_STUDIO_FRONTEND_TOKEN?.trim();
+  //
+  // Read from the same file the Next server's env is built from, not from this
+  // process's environment: a GUI app does not inherit a shell, so the env var is
+  // only ever set by the app itself and reading it here would be circular.
+  //
+  const token = readFrontendToken(DESKTOP_CONFIG.userDataDir);
   const load = (): void => {
     void window.loadURL(appUrl);
   };
