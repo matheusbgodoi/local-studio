@@ -81,9 +81,13 @@
     padding-top: env(safe-area-inset-top, 0px);
   }
 
-  /* No app topbar on agent routes — the workspace owns the full viewport. */
+  /* No app topbar on agent routes — the workspace owns the full viewport.
+     Sized against the padded parent, not the raw viewport: `.mobile-pwa-main`
+     already reserves the bottom safe area, so a 100dvh child overflowed it by
+     the height of the home indicator and left phantom scroll under the
+     composer. */
   .agent-workspace {
-    height: 100dvh;
+    height: 100%;
   }
 
   /* The session right sidebar has no room to sit beside the thread on a phone,
@@ -184,5 +188,19 @@
   .mobile-pwa-topbar,
   .mobile-pwa-drawer {
     background: color-mix(in srgb, var(--bg) 96%, transparent);
+  }
+}
+
+/* Touch targets in the composer. The desktop sizes (Send 30px, Attach 28px)
+   are below the 44px a finger needs, and these two are the most-tapped
+   controls in the app on a phone. Grown here rather than in the component so
+   desktop density is untouched. The !important matches the utilities being
+   overridden, which set !min-h-7/!min-w-7 on the same properties. */
+@media (max-width: 768px) and (pointer: coarse) {
+  .agent-composer-actions-row button[aria-label="Send"],
+  .agent-composer-actions-row button[aria-label="Stop"],
+  .agent-composer-actions-row button[aria-label="Attach files"] {
+    min-width: 44px !important;
+    min-height: 44px !important;
   }
 }
