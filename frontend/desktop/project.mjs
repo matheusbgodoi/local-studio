@@ -1852,8 +1852,19 @@ async function remoteAccess(args3 = process.argv.slice(2)) {
     return;
   }
 
+  //
+  // Defaults to the port the app persisted for itself. Passing the wrong one is
+  // the difference between a working phone and a permanent 502, and the app
+  // already writes the right answer down.
+  //
   let port = valueAfter(args3, "--port");
-  if (!port) throw Error("pass --port <the port Local Studio's embedded server is on>");
+  if (!port) {
+    try {
+      port = fs5.readFileSync(path5.join(userData, "embedded-frontend.port"), "utf8").trim();
+    } catch {
+      throw Error("Local Studio has not run yet; start it once, or pass --port");
+    }
+  }
 
   if (!fs5.existsSync(tokenFile)) {
     fs5.mkdirSync(userData, { recursive: true });
