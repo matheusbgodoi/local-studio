@@ -5,7 +5,7 @@ import type { TranscriptPhase } from "./use-chat-pane-composer-actions";
 import { Spinner } from "@/ui";
 import { ArrowUp, Plus } from "@/ui/icon-registry";
 import type { BrowserBackend } from "@/features/agent/tools/types";
-import { GlobeIcon, PanelIcon, SitegeistIcon, StopIcon } from "@/ui/icons";
+import { PanelIcon, SitegeistIcon, StopIcon } from "@/ui/icons";
 import { ComposerDictationButton } from "./composer-dictation-button";
 
 export function AgentComposerActions({
@@ -16,13 +16,12 @@ export function AgentComposerActions({
   status,
   input,
   attachmentsCount,
-  browserToolEnabled,
   browserBackend,
   onToggleBrowserBackend,
-  onToggleBrowserTool,
   onAbortTurn,
   onTranscript,
   modelSelector,
+  networkControl,
 }: {
   fileInputRef: RefObject<HTMLInputElement | null>;
   onAttachFiles: (files: FileList | null) => void;
@@ -31,13 +30,12 @@ export function AgentComposerActions({
   status?: string;
   input: string;
   attachmentsCount: number;
-  browserToolEnabled: boolean;
   browserBackend: BrowserBackend;
   onToggleBrowserBackend: () => void;
-  onToggleBrowserTool: () => void;
   onAbortTurn: () => void;
   onTranscript: (text: string, phase?: TranscriptPhase) => void;
   modelSelector?: ReactNode;
+  networkControl?: ReactNode;
 }) {
   const inputHasText = Boolean(input.trim());
   const starting = status === "starting";
@@ -69,36 +67,15 @@ export function AgentComposerActions({
       </button>
       <button
         type="button"
-        onClick={onToggleBrowserTool}
-        aria-pressed={browserToolEnabled}
-        aria-label="Browser tools"
-        title={
-          browserToolEnabled
-            ? "Browser tool: ON — agent can drive the browser"
-            : "Browser tool: OFF — click to let the agent navigate, click, fill, and read pages"
-        }
-        className={`composer-action-optional inline-flex !h-7 !min-h-7 !w-7 !min-w-7 shrink-0 items-center justify-center rounded-full ${browserToolEnabled ? activeIconClass : inactiveIconClass}`}
+        onClick={onToggleBrowserBackend}
+        aria-label={`Browser backend: ${browserBackendLabel}. Switch to ${browserBackendTarget}.`}
+        className={`composer-action-optional inline-flex !h-7 !min-h-7 !w-7 !min-w-7 shrink-0 items-center justify-center rounded-full ${usingSitegeist ? activeIconClass : inactiveIconClass}`}
+        title={`Browser: ${browserBackendLabel}. Click to use ${browserBackendTarget}.`}
       >
-        <span className="relative inline-flex">
-          <GlobeIcon className="h-4 w-4" />
-        </span>
+        {usingSitegeist ? <SitegeistIcon className="h-4 w-4" /> : <PanelIcon className="h-4 w-4" />}
       </button>
-      {browserToolEnabled ? (
-        <button
-          type="button"
-          onClick={onToggleBrowserBackend}
-          aria-label={`Browser backend: ${browserBackendLabel}. Switch to ${browserBackendTarget}.`}
-          className={`composer-action-optional inline-flex !h-7 !min-h-7 !w-7 !min-w-7 shrink-0 items-center justify-center rounded-full ${usingSitegeist ? activeIconClass : inactiveIconClass}`}
-          title={`Browser: ${browserBackendLabel}. Click to use ${browserBackendTarget}.`}
-        >
-          {usingSitegeist ? (
-            <SitegeistIcon className="h-4 w-4" />
-          ) : (
-            <PanelIcon className="h-4 w-4" />
-          )}
-        </button>
-      ) : null}
       <div className="ml-auto flex min-w-0 shrink items-center gap-0.5">
+        {networkControl}
         {modelSelector}
         <ComposerDictationButton
           disabled={running}

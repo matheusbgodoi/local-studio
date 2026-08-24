@@ -98,6 +98,7 @@ export {
   KeyRound,
   Link,
   ListChecks,
+  Lock,
   Circle,
   Loader2,
   LoaderCircle,
