@@ -66,7 +66,24 @@ export function createMainWindow(appUrl: string): BrowserWindow {
   });
 
   window.once("ready-to-show", () => window.show());
-  void window.loadURL(appUrl);
+  //
+  // When the owner sets a frontend token, it applies to EVERY request — the
+  // desktop window included, because the server cannot tell a request proxied
+  // in by `tailscale serve` from one made by this window, and a Host header is
+  // client-chosen. Seeding the cookie into this window's own session is what
+  // lets the native app keep working while remote access stays gated.
+  //
+  const token = process.env.LOCAL_STUDIO_FRONTEND_TOKEN?.trim();
+  const load = (): void => {
+    void window.loadURL(appUrl);
+  };
+  if (token) {
+    void window.webContents.session.cookies
+      .set({ url: appUrl, name: "local_studio_token", value: token, httpOnly: true, path: "/" })
+      .then(load, load);
+  } else {
+    load();
+  }
 
   return window;
 }
