@@ -35,22 +35,6 @@ files:
   - "!node_modules/@playwright/**"
 
 extraResources:
-  # The on-device helpers: dictation, and conversation titles. Standalone Swift executables
-  # rather than native Node addons: this repository has no node-gyp, no node-addon-api and no
-  # electron-rebuild, and a helper spawned over stdio needs none of them and does not have to be
-  # rebuilt when Electron moves. Both built by desktop/speech/build.sh; see the header of
-  # LocalStudioDictation.swift and of LocalStudioTitle.swift.
-  #
-  # They have to be OPTIONAL: they only exist after that script has run, and only on macOS. A
-  # build without them must still succeed and produce an app whose dictation button is simply
-  # absent and whose session titles stay the derived ones — the correct degradation, and not a
-  # button that fails when pressed.
-  #
-  # Expressed as a directory plus a filter, not as `optional: true`. `optional` is not a key
-  # electron-builder knows: it does not warn about it, it just fails the whole FileSet against
-  # the schema and reports `extraResources.0 should be a string`, which points at the entry
-  # rather than at the invented key. A `from` directory that always exists with a filter that
-  # may match nothing gives the tolerance that key was reaching for, using the schema as it is.
   - from: desktop/speech
     to: speech
     filter:

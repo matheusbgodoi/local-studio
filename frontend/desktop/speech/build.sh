@@ -1,21 +1,4 @@
 #!/usr/bin/env bash
-# Build the on-device helpers: dictation, and conversation titles.
-#
-# Deliberately plain `swiftc`, not a SwiftPM package: this produces executables with no
-# manifest, no .build directory and no resolution step, which is exactly what
-# electron-builder's extraResources wants to copy. A package would add ceremony and change
-# nothing about the output.
-#
-# ONE script for both, not one each. They are the same build in every respect that matters —
-# same compiler flags, same architecture, same deployment target, same probe-then-degrade
-# contract — and two scripts would be two places to forget to bump the target.
-#
-#     ./build.sh              build both for the host architecture
-#     ./build.sh --check      build, then probe both and fail if either API is unavailable
-#
-# The deployment target is macOS 26: SpeechAnalyzer / SpeechTranscriber and FoundationModels do
-# not exist below it. The app itself may target lower — the helpers simply will not be spawned
-# there, and the probes on the main-process side are what decide.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -46,9 +29,6 @@ build() {
   echo "==> built $(du -h "$out" | cut -f1)"
 }
 
-# A 30 s ceiling because a hang here is a REPORT, not a hang. The first version of the dictation
-# helper deadlocked before its first line — top-level Swift is @MainActor and a bare `Task { }`
-# blocked on a semaphore never ran — and it presented as an API that "takes a while".
 probe() {
   local out="$1"
   shift
@@ -81,9 +61,6 @@ print('    installed    %s' % ', '.join(d.get('installedLocales') or []))
     echo "error: title probe failed or timed out" >&2
     exit 1
   fi
-  # The reason matters more here than it does for speech. `deviceNotEligible`,
-  # `appleIntelligenceNotEnabled` and `modelNotReady` are three different conversations with
-  # whoever is running this, and only the last one fixes itself by waiting.
   printf '%s\n' "$out" | python3 -c "
 import json, sys
 d = json.load(sys.stdin)

@@ -372,6 +372,15 @@ with a reason it can act on rather than a silent failure.
 **POLICY — the Run a conversation drives is resolved from the session**, never
 taken from the model, which removes a class of both mistake and mischief.
 
+The Run row keeps the chat's original `piSessionId`. Each logical agent uses a
+separate rollout so its compaction and control messages cannot rewrite the
+owner's transcript, but that rollout is durable runtime state rather than a
+user conversation: it is marked internal as soon as Pi assigns its id and is
+filtered from both ordinary and archived chat listings. On recovery, existing
+agent rollout ids are marked again before work continues. The chat therefore
+shows the Run strip and sidebar while the scheduler retains independent working
+context without creating another visible chat.
+
 ### Routing
 
 **POLICY.** No keyword classifier. The rule reaches the model as a section of
