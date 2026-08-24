@@ -11,6 +11,7 @@ import { lookup } from "node:dns/promises";
 import { request as httpRequest, type RequestOptions } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { sanitizePublicBrowserUrl } from "../../../../shared/agent/sanitize-embedded-browser-url";
+import { networkService } from "../network";
 
 const MAX_BYTES = 512 * 1024;
 const FETCH_TIMEOUT_MS = 12_000;
@@ -173,22 +174,43 @@ function normalizeResolvedAddress(input: ResolvedHostInput): ResolvedHostAddress
   return { address: input, family: input.includes(":") ? 6 : 4 };
 }
 
+function pinnedLookup(address: ResolvedHostAddress): RequestOptions["lookup"] {
+  return ((
+    _hostname: string,
+    lookupOptions: unknown,
+    callback: (...args: unknown[]) => void,
+  ) => {
+    const wantsAll = Boolean((lookupOptions as { all?: boolean } | undefined)?.all);
+    if (wantsAll) callback(null, [address]);
+    else callback(null, address.address, address.family);
+  }) as RequestOptions["lookup"];
+}
+
 function requestBoundedUrl(url: string, address: ResolvedHostAddress): Promise<BoundedResponse> {
   const testRequest = globalThis.__LOCAL_STUDIO_BROWSER_READER_REQUEST_FOR_TEST;
   if (testRequest) return testRequest(url, address);
   const parsed = new URL(url);
   const request = parsed.protocol === "https:" ? httpsRequest : httpRequest;
+  const network = networkService();
+  if (network.protectionDemanded() && !network.mayEgress()) {
+    //
+    // Refused rather than attempted. This path runs inside the runtime process,
+    // outside the jail, so nothing in the kernel would stop it from reaching the
+    // destination directly — which is exactly why it has to stop itself.
+    //
+    return Promise.reject(new Error("protected network is unavailable; the request was not sent"));
+  }
+  const agents = network.httpAgents();
   const options: RequestOptions = {
     headers: { Accept: ACCEPT, "User-Agent": USER_AGENT },
-    lookup: ((
-      _hostname: string,
-      lookupOptions: unknown,
-      callback: (...args: unknown[]) => void,
-    ) => {
-      const wantsAll = Boolean((lookupOptions as { all?: boolean } | undefined)?.all);
-      if (wantsAll) callback(null, [address]);
-      else callback(null, address.address, address.family);
-    }) as RequestOptions["lookup"],
+    //
+    // Under protection the name is resolved at the far end of the tunnel, so the
+    // pinned lookup is dropped: resolving here would put the query on the
+    // machine's own resolver and tell it where the traffic is going.
+    //
+    ...(agents
+      ? { agent: parsed.protocol === "https:" ? agents.https : agents.http }
+      : { lookup: pinnedLookup(address) }),
   };
 
   return new Promise((resolve, reject) => {

@@ -46,7 +46,10 @@ import {
   writeShellShim,
   type JailedCommand,
 } from "./jail";
+import type { Agent as HttpAgent } from "node:http";
+import type { Agent as HttpsAgent } from "node:https";
 import { describeProvider, loadProfile, type WireGuardProfile } from "./provider";
+import { proxyAgents } from "./proxy-agent";
 import { resolveSingBoxBinary, startTunnel, type TunnelProcess } from "./sing-box";
 
 const PROXY_PORT = Number(process.env.LOCAL_STUDIO_EGRESS_PROXY_PORT ?? 47_318);
@@ -204,6 +207,18 @@ export class NetworkService {
 
   chromiumArguments(): string[] {
     return this.protectionDemanded() && this.profilePath ? chromiumJailArguments() : [];
+  }
+
+  //
+  // For the two egress paths that live inside this process and therefore cannot
+  // be jailed. Returns null in Direct, where the caller keeps its own transport
+  // untouched; returns an agent that only ever dials the tunnel when protection
+  // is demanded. There is no third answer, so no caller can accidentally fall
+  // back to a direct socket.
+  //
+  httpAgents(): { http: HttpAgent; https: HttpsAgent } | null {
+    const endpoint = this.proxyEndpoint();
+    return endpoint ? proxyAgents(endpoint) : null;
   }
 
   proxyEndpoint(): string | null {
@@ -395,7 +410,7 @@ export class NetworkService {
         mechanism: enforced ? JAIL_MECHANISM : null,
         proxyEndpoint: this.proxyEndpoint(),
         jailedProcesses: 0,
-        unconfinedPaths: enforced ? unconfinedPaths(false) : [],
+        unconfinedPaths: enforced ? unconfinedPaths(true) : [],
       },
       dns: reading?.dns ?? "unavailable",
       ipv4: reading?.ipv4 ?? "unavailable",

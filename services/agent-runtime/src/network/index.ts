@@ -31,3 +31,11 @@ export function protectedSpawn(command: string, args: string[]): { command: stri
 export function protectedEnvironment(): Record<string, string> {
   return networkService().environment();
 }
+
+//
+// For the in-process HTTP paths. `null` means Direct and the caller keeps its
+// own transport; anything else dials the tunnel and nothing but the tunnel.
+//
+export function protectedHttpAgents(): ReturnType<NetworkService["httpAgents"]> {
+  return networkService().httpAgents();
+}
