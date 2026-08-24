@@ -3,6 +3,17 @@ import { agenticRuntime } from "./agentic/service";
 import { startAutomationScheduler } from "./automation-scheduler";
 import { createAgentRuntimeApp } from "./http/app";
 import { networkService } from "./network";
+import { resetBoundaryScopedResources } from "./network/boundary-reset";
+
+//
+// The jail binds a process when it is spawned and cannot be applied to one
+// already running, so anything long-lived carries the policy in force when it
+// started. Registered here, in the entry point, because the things that must be
+// dropped are the browser, the connector pool and the PTYs — and having the
+// network service import those would pull Playwright and a native pty binding
+// into every bundle that merely reads the network status.
+//
+networkService().onBoundaryChange(resetBoundaryScopedResources);
 
 startAutomationScheduler();
 

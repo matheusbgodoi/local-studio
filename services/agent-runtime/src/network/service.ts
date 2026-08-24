@@ -48,7 +48,6 @@ import {
 } from "./jail";
 import type { Agent as HttpAgent } from "node:http";
 import type { Agent as HttpsAgent } from "node:https";
-import { resetBoundaryScopedResources } from "./boundary-reset";
 import { describeProvider, loadProfile, type WireGuardProfile } from "./provider";
 import { inProcessRoutingSupported, proxyAgents } from "./proxy-agent";
 import { resolveSingBoxBinary, startTunnel, type TunnelProcess } from "./sing-box";
@@ -95,9 +94,31 @@ export class NetworkService {
   private attestLoop = 0;
   private timer: NodeJS.Timeout | null = null;
   private transition: Promise<void> = Promise.resolve();
+  private boundaryChanged: (() => void) | null = null;
 
   constructor(private readonly dataDir: string = resolveDataDir()) {
     this.profile = loadProfile(this.dataDir);
+  }
+
+  //
+  // Registered by the runtime entry rather than imported here.
+  //
+  // What has to be discarded when the boundary moves is a browser context, a
+  // connector pool and a set of PTYs — and importing those from this module
+  // drags Playwright and a native pty binding into every bundle that touches
+  // the network service, including the Next route that calls a connector. The
+  // service decides WHEN; the entry point supplies WHAT.
+  //
+  onBoundaryChange(reset: () => void): void {
+    this.boundaryChanged = reset;
+  }
+
+  private resetBoundaryScoped(): void {
+    try {
+      this.boundaryChanged?.();
+    } catch {
+      // a resource that will not close must not stop the transition
+    }
   }
 
   onEvent(listener: Listener): () => void {
@@ -322,7 +343,7 @@ export class NetworkService {
     // Anything long-lived that was started before the boundary existed is
     // running outside it, and the jail cannot be applied retroactively.
     //
-    resetBoundaryScopedResources();
+    this.resetBoundaryScoped();
     this.emit("vpn.starting");
 
     try {
@@ -370,7 +391,7 @@ export class NetworkService {
       // Symmetrically: a process still carrying a jail whose profile is about
       // to be irrelevant is dropped too, so Direct really is direct.
       //
-      resetBoundaryScopedResources();
+      this.resetBoundaryScoped();
       await tunnel.stop();
       this.emit("vpn.disconnected", "protection is no longer requested");
     }
