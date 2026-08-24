@@ -400,8 +400,23 @@ Measured separately, by hand, with a live loopback proxy:
 | Playwright + Chromium via proxy | full page |
 | Playwright + Chromium without proxy | `ERR_NAME_NOT_RESOLVED` |
 | Playwright + Chromium, **tunnel killed** | `ERR_PROXY_CONNECTION_FAILED` — never a direct load |
+| Playwright **headful** via proxy | full page |
+| Playwright **headful** without proxy | `ERR_ACCESS_DENIED` |
+| Playwright **headful**, tunnel killed | `ERR_PROXY_CONNECTION_FAILED` |
 | `node -e fetch(...)` via proxy | 200 |
 | `git ls-remote` via proxy | refs returned |
+
+**Boot ordering, with a protected Run already on disk.** Measured across a real
+restart: before `recover()` the state is `DIRECT` and egress is allowed; the
+instant `recover()` returns, protection is *demanded* and `mayEgress()` is
+**false**; it stays false through `STARTING`, and becomes true only at
+`PROTECTED`. At no point is a recovered protected Run permitted to reach the
+network before the tunnel carries it.
+
+**Concurrency.** With conversation A protected and B on Direct, every spawn is
+jailed — B's included. `protectedSessionCount` counts only A. Returning A to
+Direct releases the boundary and spawns are unwrapped again. This is the
+"protected wins" policy of §8, measured rather than asserted.
 
 **The most important one**, run with work in flight: killing sing-box left the
 proxy path failing (exit 7), the direct path failing with an **empty body**, and
