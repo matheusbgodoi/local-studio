@@ -91,6 +91,17 @@ export function jailSupported(): boolean {
 // next login — an escape that goes around the network rule rather than through
 // it.
 //
+// THE LAST RULE IS THE ONE THAT MATTERS. Seatbelt is last-match-wins, and the
+// profile itself and both exec shims live inside the data directory the jail
+// makes writable. Without a trailing deny a jailed process could simply
+// overwrite `egress-<port>.sb` with `(allow default)` and wait: the process
+// that applies the profile is the UNJAILED parent, and sandbox-exec re-reads it
+// from disk on every spawn, so the very next tool call would run with no
+// boundary at all while the status still read PROTECTED. That is not a nested
+// sandbox_apply — which the kernel refuses — it is editing the rules before
+// they are applied, and it defeats the whole design. An adversarial review
+// found it and reproduced it end to end.
+//
 export function buildProfile(options: JailOptions): string {
   const writable = options.writableRoots
     .filter((root) => root.trim().length > 0)
@@ -112,6 +123,7 @@ ${writable}
   (subpath "/private/var/folders")
   (subpath "/dev")
 )
+(deny file-write* (subpath ${JSON.stringify(path.resolve(options.profileDirectory))}))
 `;
 }
 
@@ -241,13 +253,10 @@ export function writeShellShim(profileDirectory: string, profilePath: string): s
 // boundary is known not to cover, and its presence is what keeps the status
 // from claiming more than was built.
 //
-export function unconfinedPaths(inProcessRouted: boolean): string[] {
-  const paths: string[] = [];
-  if (!inProcessRouted) {
-    paths.push(
-      "agent-runtime in-process HTTP (search, reader, connectors) is not jailed; it is routed in code",
-    );
-  }
-  paths.push("a socket connected before the jail and passed in as a descriptor stays writable");
-  return paths;
+export function unconfinedPaths(): string[] {
+  return [
+    "the reader and browser_search run in this process and are routed in code, not confined by the kernel",
+    "remote MCP connectors cannot be routed and are refused while protection is on",
+    "a socket connected before the jail and passed in as a descriptor stays writable",
+  ];
 }

@@ -48,8 +48,9 @@ import {
 } from "./jail";
 import type { Agent as HttpAgent } from "node:http";
 import type { Agent as HttpsAgent } from "node:https";
+import { resetBoundaryScopedResources } from "./boundary-reset";
 import { describeProvider, loadProfile, type WireGuardProfile } from "./provider";
-import { proxyAgents } from "./proxy-agent";
+import { inProcessRoutingSupported, proxyAgents } from "./proxy-agent";
 import { resolveSingBoxBinary, startTunnel, type TunnelProcess } from "./sing-box";
 
 const PROXY_PORT = Number(process.env.LOCAL_STUDIO_EGRESS_PROXY_PORT ?? 47_318);
@@ -90,6 +91,8 @@ export class NetworkService {
   private state: NetworkProtectionState = "DIRECT";
   private detail: string | null = null;
   private startedAtMs = 0;
+  private generation = 0;
+  private attestLoop = 0;
   private timer: NodeJS.Timeout | null = null;
   private transition: Promise<void> = Promise.resolve();
 
@@ -185,8 +188,19 @@ export class NetworkService {
   // the command untouched, which is what keeps Direct mode exactly as fast and
   // as capable as it was before this feature existed.
   //
+  // When protection IS demanded and the jail could not be built, it THROWS.
+  // Returning the bare command would be the worst outcome this codebase can
+  // produce: a protected workload running with no boundary while the caller
+  // believes it is confined. Refusing to start a process is recoverable;
+  // starting an unconfined one is not.
+  //
   wrap(command: JailedCommand): JailedCommand {
-    if (!this.protectionDemanded() || !this.profilePath) return command;
+    if (!this.protectionDemanded()) return command;
+    if (!this.profilePath) {
+      throw new Error(
+        `protected network is ${this.state.toLowerCase()}; the process was not started because it could not be confined`,
+      );
+    }
     return jailCommand(this.profilePath, command);
   }
 
@@ -226,7 +240,13 @@ export class NetworkService {
   //
   httpAgents(): { http: HttpAgent; https: HttpsAgent } | null {
     const endpoint = this.proxyEndpoint();
-    return endpoint ? proxyAgents(endpoint) : null;
+    if (!endpoint) return null;
+    //
+    // Null here means "protection is on and this path cannot be routed", which
+    // the caller must treat as a refusal — never as permission to go direct.
+    //
+    if (!inProcessRoutingSupported()) return null;
+    return proxyAgents(endpoint);
   }
 
   proxyEndpoint(): string | null {
@@ -239,7 +259,19 @@ export class NetworkService {
   // tunnels or tear one down while the other is building it.
   //
   private reconcile(): Promise<void> {
-    this.transition = this.transition.then(() => this.applyDemand()).catch(() => undefined);
+    this.transition = this.transition
+      .then(() => this.applyDemand())
+      .catch((error: unknown) => {
+        //
+        // Swallowing this would leave protection demanded with no jail, no
+        // ERROR state and nothing to retry — the status would keep whatever it
+        // last said while nothing was actually enforced. The failure becomes
+        // the state instead, which refuses egress and tells the owner why.
+        //
+        this.fail(
+          error instanceof Error ? error.message : "the protected boundary could not be built",
+        );
+      });
     return this.transition;
   }
 
@@ -282,9 +314,15 @@ export class NetworkService {
       writableRoots: [this.dataDir, process.env.LOCAL_STUDIO_AGENT_CWD ?? ""],
     });
 
+    this.generation += 1;
     this.state = "STARTING";
     this.detail = null;
     this.startedAtMs = Date.now();
+    //
+    // Anything long-lived that was started before the boundary existed is
+    // running outside it, and the jail cannot be applied retroactively.
+    //
+    resetBoundaryScopedResources();
     this.emit("vpn.starting");
 
     try {
@@ -306,6 +344,7 @@ export class NetworkService {
       // BLOCKED rather than ERROR because a tunnel that dropped may well come
       // back, and a Run waiting on it has not failed at anything.
       //
+      this.generation += 1;
       this.tunnel = null;
       if (!this.protectionDemanded()) return;
       this.state = "BLOCKED";
@@ -318,6 +357,7 @@ export class NetworkService {
   }
 
   private async disengage(): Promise<void> {
+    this.generation += 1;
     this.stopAttesting();
     const tunnel = this.tunnel;
     this.tunnel = null;
@@ -326,12 +366,18 @@ export class NetworkService {
     this.state = "DIRECT";
     this.detail = null;
     if (tunnel) {
+      //
+      // Symmetrically: a process still carrying a jail whose profile is about
+      // to be irrelevant is dropped too, so Direct really is direct.
+      //
+      resetBoundaryScopedResources();
       await tunnel.stop();
       this.emit("vpn.disconnected", "protection is no longer requested");
     }
   }
 
   private fail(detail: string): void {
+    this.generation += 1;
     this.state = "ERROR";
     this.detail = detail;
     this.profilePath = null;
@@ -340,18 +386,28 @@ export class NetworkService {
 
   private startAttesting(): void {
     this.stopAttesting();
+    const loop = ++this.attestLoop;
+    const alive = (): boolean => loop === this.attestLoop && this.protectionDemanded();
     const schedule = (): void => {
+      if (!alive()) return;
       const starting = Date.now() - this.startedAtMs < START_GRACE_MS;
       const delay = starting ? ATTEST_STARTUP_INTERVAL_MS : ATTEST_INTERVAL_MS;
       this.timer = setTimeout(() => {
+        if (!alive()) return;
         void this.measure().finally(() => {
-          if (this.protectionDemanded()) schedule();
+          if (alive()) schedule();
         });
       }, delay);
       this.timer.unref?.();
     };
+    //
+    // The loop counter is what a stopped-then-restarted supervisor needs: an
+    // attestation already awaiting its probe cannot be cancelled, and without
+    // this it would reschedule itself on the way out, so every tunnel restart
+    // would leave another concurrent prober behind.
+    //
     void this.measure().finally(() => {
-      if (this.protectionDemanded()) schedule();
+      if (alive()) schedule();
     });
   }
 
@@ -361,16 +417,27 @@ export class NetworkService {
   }
 
   private stopAttesting(): void {
+    this.attestLoop += 1;
     this.stopAttestingTimer();
   }
 
   private async measure(): Promise<void> {
     if (!this.protectionDemanded() || !this.tunnel) return;
+    //
+    // A probe takes seconds, and in that time the tunnel can die, the owner can
+    // switch everything to Direct, or a new tunnel can replace this one. The
+    // generation is captured before the await and re-checked after it, so a
+    // reading taken against a tunnel that no longer exists is discarded rather
+    // than published — otherwise a slow success could overwrite BLOCKED with
+    // PROTECTED and hand the owner a padlock for a tunnel that is gone.
+    //
+    const generation = this.generation;
     const carriesIpv6 = this.profile?.allowedIps.includes("::/0") ?? false;
     const reading = await attest(
       { proxyPort: PROXY_PORT, timeoutMs: ATTEST_TIMEOUT_MS },
       carriesIpv6,
     );
+    if (generation !== this.generation || !this.protectionDemanded() || !this.tunnel) return;
     this.attestation = reading;
     const previous = this.state;
 
@@ -429,7 +496,7 @@ export class NetworkService {
         mechanism: enforced ? JAIL_MECHANISM : null,
         proxyEndpoint: this.proxyEndpoint(),
         jailedProcesses: 0,
-        unconfinedPaths: enforced ? unconfinedPaths(true) : [],
+        unconfinedPaths: enforced ? unconfinedPaths() : [],
       },
       dns: reading?.dns ?? "unavailable",
       ipv4: reading?.ipv4 ?? "unavailable",

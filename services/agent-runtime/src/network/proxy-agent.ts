@@ -75,6 +75,23 @@ function parseEndpoint(endpoint: string): { host: string; port: number } {
 //
 const cache = new Map<string, { http: HttpAgent; https: HttpsAgent }>();
 
+//
+// Whether replacing `createConnection` on an Agent actually diverts the socket.
+//
+// It does under node, which is how the runtime ships (`node dist/server.js`) —
+// measured: the override runs, the CONNECT goes to the tunnel, the response
+// comes back 200. It does NOT under Bun, which `bun --watch src/server.ts` uses
+// for development: the same code returns 200 having never called the override,
+// i.e. straight out of the machine's own route.
+//
+// So this is checked rather than assumed, and a caller that cannot be routed
+// refuses instead of quietly leaking. Getting this wrong would be invisible —
+// the request succeeds either way, and only the exit address differs.
+//
+export function inProcessRoutingSupported(): boolean {
+  return typeof (globalThis as { Bun?: unknown }).Bun === "undefined";
+}
+
 export function proxyAgents(endpoint: string): { http: HttpAgent; https: HttpsAgent } {
   const existing = cache.get(endpoint);
   if (existing) return existing;
