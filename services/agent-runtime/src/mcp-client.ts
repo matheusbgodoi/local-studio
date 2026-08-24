@@ -2,6 +2,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Tool, ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
+import { protectedEnvironment, protectedSpawn } from "./network";
 
 export type McpToolAnnotations = ToolAnnotations;
 export type McpToolInfo = Tool;
@@ -64,10 +65,17 @@ const authorizedFetch = (target: HttpTarget): typeof fetch =>
 
 const transportFor = (target: McpTarget) => {
   if (target.transport === "stdio") {
+    //
+    // A local MCP server is an arbitrary program the owner installed, and it
+    // opens whatever sockets it likes. It runs on the session's behalf, so it
+    // goes inside the same boundary as everything else the agent starts —
+    // otherwise "protected" would mean protected except for connectors.
+    //
+    const jailed = protectedSpawn(target.command, target.args ?? []);
     return new StdioClientTransport({
-      command: target.command,
-      args: target.args ?? [],
-      env: { ...processEnvironment(), ...(target.env ?? {}) },
+      command: jailed.command,
+      args: jailed.args,
+      env: { ...processEnvironment(), ...protectedEnvironment(), ...(target.env ?? {}) },
       ...(target.cwd ? { cwd: target.cwd } : {}),
       stderr: "pipe",
     });

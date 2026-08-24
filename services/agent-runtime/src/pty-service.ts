@@ -15,6 +15,7 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { existsSync, realpathSync, statSync } from "node:fs";
+import { protectedEnvironment, protectedSpawn } from "./network";
 
 // The runtime ships as ESM; node-pty is a CJS native addon, so load it with a
 // scoped require rather than a static import (which would break the bun-run
@@ -83,8 +84,21 @@ function loadFactory(): PtyFactory | null {
     const mod = (
       required && "spawn" in required ? required : (required as { default: Mod }).default
     ) as Mod;
-    factory = ({ cwd, cols, rows, shell, args, env }) =>
-      mod.spawn(shell, args, { cwd, cols, rows, env, name: "xterm-256color" });
+    factory = ({ cwd, cols, rows, shell, args, env }) => {
+      //
+      // The shell is the widest surface there is: curl, git, npm, pip, ssh and
+      // anything else the owner or the model types. Wrapping it here wraps all
+      // of them, because the jail is inherited across exec.
+      //
+      const jailed = protectedSpawn(shell, args);
+      return mod.spawn(jailed.command, jailed.args, {
+        cwd,
+        cols,
+        rows,
+        env,
+        name: "xterm-256color",
+      });
+    };
     return factory;
   } catch (error) {
     factoryError = error instanceof Error ? error : new Error(String(error));
@@ -129,7 +143,7 @@ function safeCwd(input: string | undefined | null): string {
 }
 
 function buildEnv(): NodeJS.ProcessEnv {
-  const env = { ...process.env };
+  const env = { ...process.env, ...protectedEnvironment() };
   env.TERM = "xterm-256color";
   env.COLORTERM = "truecolor";
   env.LANG = env.LANG || "en_US.UTF-8";

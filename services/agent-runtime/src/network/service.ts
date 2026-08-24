@@ -41,6 +41,7 @@ import {
   jailEnvironment,
   jailSupported,
   unconfinedPaths,
+  writeChromiumShim,
   writeProfile,
   type JailedCommand,
 } from "./jail";
@@ -181,8 +182,18 @@ export class NetworkService {
     return this.protectionDemanded() ? jailEnvironment(PROXY_PORT) : {};
   }
 
+  //
+  // Playwright is handed this instead of the real Chromium path when protection
+  // is on. Returning the original path when it is off is what keeps Direct mode
+  // byte-identical to how it behaved before this existed.
+  //
+  chromiumExecutable(executablePath: string): string {
+    if (!this.protectionDemanded() || !this.profilePath) return executablePath;
+    return writeChromiumShim(path.join(this.dataDir, "network"), this.profilePath, executablePath);
+  }
+
   chromiumArguments(): string[] {
-    return this.protectionDemanded() && this.profilePath ? chromiumJailArguments(PROXY_PORT) : [];
+    return this.protectionDemanded() && this.profilePath ? chromiumJailArguments() : [];
   }
 
   proxyEndpoint(): string | null {

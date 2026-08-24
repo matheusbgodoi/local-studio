@@ -158,21 +158,42 @@ export function jailEnvironment(proxyPort: number): Record<string, string> {
 // protection, and that is a real trade: it removes Chromium's own defence
 // against hostile page content while keeping the egress boundary.
 //
-// --proxy-server is what makes the browser usable rather than merely contained:
-// Chromium ignores HTTP_PROXY entirely and reads either the system network
-// settings or this flag. Measured on this machine: jailed with the flag,
-// example.com returns its full 560-byte DOM; jailed without it, the same run
-// returns an empty 39-byte document. That is the fail-closed outcome, and it is
-// what the acceptance run asserts. A socks5:// proxy resolves names at the
-// proxy, so no separate DNS flag is needed — getaddrinfo is already denied
-// inside the jail.
+// The proxy itself is set through Playwright's own `proxy` option, which emits
+// --proxy-server for us; only --no-sandbox has to be added by hand. Chromium
+// ignores HTTP_PROXY entirely, so without that option a jailed browser reaches
+// nothing: measured, it returns ERR_NAME_NOT_RESOLVED. A socks5 proxy resolves
+// names at the far end, so no DNS flag is needed either — getaddrinfo is already
+// denied inside the jail.
 //
-export function chromiumJailArguments(proxyPort: number): string[] {
-  return [
-    "--no-sandbox",
-    `--proxy-server=socks5://127.0.0.1:${proxyPort}`,
-    "--proxy-bypass-list=<-loopback>",
-  ];
+export function chromiumJailArguments(): string[] {
+  return ["--no-sandbox"];
+}
+
+//
+// Playwright spawns Chromium itself, from `executablePath`, so there is no argv
+// for jailCommand() to wrap. Pointing executablePath at a tiny exec shim is what
+// puts the browser inside the same boundary as everything else: Playwright
+// spawns the shim, the shim execs sandbox-exec, and sandbox-exec execs the real
+// binary. exec replaces the process rather than forking, so the debugging pipe
+// Playwright talks to on fd 3 and 4 survives untouched.
+//
+// Measured: a Playwright-driven Chromium behind this shim loads a real page
+// through the proxy, returns ERR_NAME_NOT_RESOLVED without it, and returns
+// ERR_PROXY_CONNECTION_FAILED — never a direct load — once the tunnel is killed.
+//
+export function writeChromiumShim(
+  profileDirectory: string,
+  profilePath: string,
+  executablePath: string,
+): string {
+  mkdirSync(profileDirectory, { recursive: true, mode: 0o700 });
+  const shim = path.join(profileDirectory, "chromium-jail.sh");
+  writeFileSync(
+    shim,
+    `#!/bin/sh\nexec ${SANDBOX_EXEC} -f ${JSON.stringify(profilePath)} ${JSON.stringify(executablePath)} "$@"\n`,
+    { mode: 0o700 },
+  );
+  return shim;
 }
 
 //

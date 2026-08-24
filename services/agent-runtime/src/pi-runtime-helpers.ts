@@ -20,10 +20,12 @@ export type RuntimePromptTemplateRef = {
   path?: string;
 };
 
+import type { NetworkPolicy } from "../../../shared/agent/network-policy";
+
 export type RuntimeStartOptions = {
   thinkingLevel?: AgentThinkingLevel;
   toolAccess?: AgentToolAccess;
-  browserToolEnabled?: boolean;
+  networkPolicy?: NetworkPolicy;
   browserSessionId?: string;
   browserBackend?: "embedded" | "sitegeist";
   skills?: RuntimeSkillRef[];
@@ -282,7 +284,13 @@ export function runtimeOptionsFingerprint(options: RuntimeStartOptions): string 
   return JSON.stringify({
     thinkingLevel: options.thinkingLevel ?? "high",
     toolAccess: options.toolAccess ?? "full",
-    browser: options.browserToolEnabled === true,
+    //
+    // The network policy is in the fingerprint because it changes what the
+    // runtime's children are wrapped in, and a runtime already started with the
+    // wrong wrapper cannot be corrected in place. Browser is NOT in it any
+    // more: it is always loaded, so it can never differ between two starts.
+    //
+    networkPolicy: options.networkPolicy ?? "direct",
     browserBackend: browserBackend(options),
     browserSessionId: options.browserSessionId ?? "",
     skills,
@@ -314,10 +322,6 @@ export function deriveFrontendBase(env: NodeJS.ProcessEnv = process.env): string
   return `http://127.0.0.1:${port}`;
 }
 
-function shouldLoadBrowserTool(options: RuntimeStartOptions): boolean {
-  return options.browserToolEnabled === true;
-}
-
 function browserBackend(options: RuntimeStartOptions): "embedded" | "sitegeist" {
   const backend = options.browserBackend ?? process.env.LOCAL_STUDIO_BROWSER_BACKEND;
   if (backend === "sitegeist") return "sitegeist";
@@ -337,9 +341,15 @@ function browserSkillPathFor(backend: "embedded" | "sitegeist"): string | null {
 function runtimeExtensionPaths(options: RuntimeStartOptions): string[] {
   const timeoutExtensionPath = resolveTimeoutExtensionPath();
   const agentPolicyExtensionPath = resolveAgentPolicyExtensionPath();
-  const browserExtensionPath = shouldLoadBrowserTool(options)
-    ? browserExtensionPathFor(browserBackend(options))
-    : null;
+  //
+  // The browser is a normal capability now. It used to be gated on a
+  // per-conversation switch, which described a tool rather than a route:
+  // turning it off never removed the agent's internet, because bash, curl,
+  // python, node, git and every MCP were still there. The model picks the right
+  // tool for the job, and what the traffic is allowed to do is the network
+  // policy's business, not the tool list's.
+  //
+  const browserExtensionPath = browserExtensionPathFor(browserBackend(options));
   return uniqueExistingPaths([
     timeoutExtensionPath,
     agentPolicyExtensionPath,
@@ -355,11 +365,10 @@ function runtimeExtensionPaths(options: RuntimeStartOptions): string[] {
 }
 
 function runtimeSkillPaths(options: RuntimeStartOptions): string[] {
-  const loadBrowser = shouldLoadBrowserTool(options);
   const backend = browserBackend(options);
   return uniqueExistingPaths([
     ...selectedSkillPaths(options.skills ?? []),
-    loadBrowser ? browserSkillPathFor(backend) : null,
+    browserSkillPathFor(backend),
     // Personal roots are ALWAYS handed to Pi so `/skill:<name>` resolves. They
     // cost nothing in the prompt because personalSkillsOverride marks them
     // model-invocation-disabled, and they are not part of

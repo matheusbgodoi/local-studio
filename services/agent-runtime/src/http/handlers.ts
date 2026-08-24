@@ -33,6 +33,11 @@ import {
   replayAfterCursor,
   shouldSendTrailingIdleStatus,
 } from "./stream-order";
+import { networkService } from "../network";
+import {
+  DEFAULT_NETWORK_POLICY,
+  parseNetworkPolicy,
+} from "../../../../shared/agent/network-policy";
 
 // ─── POST /api/agent/turn ─────────────────────────────────────────────────
 
@@ -94,16 +99,24 @@ function ensurePromptRuntimeEffect(
   resolved: ResolvedTurnSession,
 ): Effect.Effect<void, unknown> {
   return Effect.tryPromise({
-    try: () =>
-      resolved.session.ensureStarted(turn.modelId, turn.cwd, resolved.effectivePiSessionId, {
+    try: () => {
+      //
+      // The conversation's preference is registered BEFORE the runtime starts,
+      // so the boundary is already up by the time anything the runtime spawns
+      // could reach the network. Registering it afterwards would leave a window
+      // in which a protected turn ran unprotected.
+      //
+      networkService().setSessionPolicy(turn.sessionId, turn.networkPolicy);
+      return resolved.session.ensureStarted(turn.modelId, turn.cwd, resolved.effectivePiSessionId, {
         thinkingLevel: turn.thinkingLevel,
         toolAccess: turn.toolAccess,
-        browserToolEnabled: turn.browserToolEnabled,
+        networkPolicy: turn.networkPolicy,
         browserSessionId: turn.browserSessionId,
         browserBackend: turn.browserBackend,
         skills: turn.skills,
         promptTemplates: turn.promptTemplates,
-      }),
+      });
+    },
     catch: (error) => error,
   });
 }
@@ -312,7 +325,7 @@ type CompactRequest = {
   cwd?: string;
   piSessionId?: string | null;
   customInstructions?: string;
-  browserToolEnabled?: boolean;
+  networkPolicy?: string;
   browserSessionId?: string;
   browserBackend?: "embedded" | "sitegeist";
   skills?: ComposerSkillRef[];
@@ -360,7 +373,14 @@ function compactRouteEffect(request: Request): Effect.Effect<Response, unknown> 
           session.ensureStarted(modelId, cwd, piSessionId, {
             thinkingLevel: body.thinkingLevel,
             toolAccess: body.toolAccess === "full" ? "full" : "read_only",
-            browserToolEnabled: body.browserToolEnabled === true,
+            //
+            // A compaction restarts the runtime if the fingerprint moved, so it
+            // has to carry the same policy the turns do — otherwise compacting a
+            // protected conversation would rebuild it unprotected. This body is
+            // cast rather than parsed, so the value goes through the shared
+            // validator instead of being trusted.
+            //
+            networkPolicy: parseNetworkPolicy(body.networkPolicy) ?? DEFAULT_NETWORK_POLICY,
             browserSessionId:
               typeof body.browserSessionId === "string" ? body.browserSessionId.trim() : undefined,
             browserBackend: body.browserBackend === "sitegeist" ? "sitegeist" : "embedded",
