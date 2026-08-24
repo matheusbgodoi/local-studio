@@ -247,8 +247,14 @@ function applySessionMetadata(
   summary: SessionSummary,
   metadataFor: SessionMetadataLookup,
 ): SessionSummary {
-  const { internal: _, ...metadata } = metadataFor(summary.id);
-  return { ...summary, ...metadata };
+  const metadata = metadataFor(summary.id);
+  return {
+    ...summary,
+    archived: metadata.archived,
+    archivedAt: metadata.archivedAt,
+    parentSessionId: metadata.parentSessionId,
+    subagentName: metadata.subagentName,
+  };
 }
 
 function summaryRelevantTime(summary: SessionSummary, archivedOnly: boolean): number {

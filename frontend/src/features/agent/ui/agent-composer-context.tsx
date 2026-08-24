@@ -237,6 +237,7 @@ const BUILTIN_COMMAND_ICONS: Record<string, typeof Slash> = {
   terminal: TerminalSquare,
   fork: GitFork,
   copy: Copy,
+  export: FileText,
   "export:file": Download,
   "export:clipboard": Copy,
 };

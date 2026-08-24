@@ -90,6 +90,15 @@ export function transcriptCommandProvider(
         },
       },
       {
+        id: "transcript:export",
+        name: "export",
+        title: "Export",
+        description: "Choose a Markdown file or the clipboard",
+        source: "core",
+        icon: "command",
+        run: () => ({ kind: "set-input", input: "/export:" }),
+      },
+      {
         id: "transcript:export-file",
         name: "export:file",
         title: "Save Markdown file",

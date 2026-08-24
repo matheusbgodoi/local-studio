@@ -11,15 +11,29 @@ import { useMountSubscription } from "@/hooks/use-mount-subscription";
 
 function titleExcerpt(tab: SessionTab | null): string {
   if (!tab) return "";
-  const user = tab.messages.find((message) => message.role === "user");
-  const assistant = tab.messages.find((message) => message.role === "assistant");
-  if (!user || !assistant) return "";
-  const userText = visibleUserTextFromPi(user.text).trim();
-  const assistantText = (
-    assistant.text.trim() || assistantContentCopyText(assistant.blocks ?? []).trim()
-  ).slice(0, 4000);
-  if (!userText || !assistantText) return "";
-  return `User:\n${userText.slice(0, 1800)}\n\nAssistant:\n${assistantText}`;
+  const greeting = /^(?:oi|ol[áa]|hey|hello|hi|bom dia|boa tarde|boa noite)[!,.?\s]*$/i;
+  const start = tab.messages.findIndex((message) => {
+    if (message.role !== "user") return false;
+    const text = visibleUserTextFromPi(message.text).trim();
+    return Boolean(text && !greeting.test(text));
+  });
+  if (start === -1) return "";
+
+  let hasAssistant = false;
+  const lines: string[] = [];
+  for (const message of tab.messages.slice(start)) {
+    if (message.role === "user") {
+      const text = visibleUserTextFromPi(message.text).trim();
+      if (text) lines.push(`User:\n${text}`);
+      continue;
+    }
+    if (message.role !== "assistant") continue;
+    const text = message.text.trim() || assistantContentCopyText(message.blocks ?? []).trim();
+    if (!text) continue;
+    hasAssistant = true;
+    lines.push(`Assistant:\n${text}`);
+  }
+  return hasAssistant ? lines.join("\n\n").slice(0, 5800) : "";
 }
 
 export function useChatPaneSessionTitle({
@@ -68,10 +82,9 @@ export function useChatPaneSessionTitle({
     generatedFor.current.add(piSessionId);
     const tabId = activeTab.id;
     const keys = [...sessionPrefKeys];
-    let cancelled = false;
     void bridge(excerpt, navigator.language || "en-US")
       .then((result) => {
-        if (cancelled || !result.ok) return;
+        if (!result.ok) return;
         const latest = loadSessionPrefs();
         if (keys.some((key) => cleanSessionTitle(latest[key]?.title))) return;
         const title = cleanSessionTitle(result.title);
@@ -79,13 +92,7 @@ export function useChatPaneSessionTitle({
         onRenameSession(tabId, title);
         patchCanonicalSessionPref(piSessionId, keys, { title });
       })
-      .catch(() => generatedFor.current.delete(piSessionId))
-      .finally(() => {
-        if (cancelled) generatedFor.current.delete(piSessionId);
-      });
-    return () => {
-      cancelled = true;
-    };
+      .catch(() => generatedFor.current.delete(piSessionId));
   }, [activeTab?.id, activeTab?.piSessionId, excerpt, onRenameSession, running, sessionPrefTitle]);
 
   const patchActiveSessionPrefs = useCallback(

@@ -29,7 +29,9 @@ function RemoteAccessButton() {
     setOpen(next);
     setCopied(null);
     if (next) {
-      void window.localStudioDesktop?.getRemoteAccessInfo?.().then(setInfo);
+      void window.localStudioDesktop
+        ?.getRemoteAccessInfo?.()
+        .then(setInfo, () => setInfo({ enabled: false, url: null, tokenAvailable: false }));
     }
   };
 
@@ -40,13 +42,19 @@ function RemoteAccessButton() {
 
   const copyUrl = (): void => {
     if (!info?.url) return;
-    void writeClipboardText(info.url).then(() => markCopied("url"));
+    void writeClipboardText(info.url).then(
+      () => markCopied("url"),
+      () => undefined,
+    );
   };
 
   const copyToken = (): void => {
-    void window.localStudioDesktop?.copyRemoteAccessToken?.().then((result) => {
-      if (result.ok) markCopied("token");
-    });
+    void window.localStudioDesktop?.copyRemoteAccessToken?.().then(
+      (result) => {
+        if (result.ok) markCopied("token");
+      },
+      () => undefined,
+    );
   };
 
   return (

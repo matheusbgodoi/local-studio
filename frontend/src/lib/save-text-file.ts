@@ -26,10 +26,14 @@ export async function saveTextFile(
   const dialog =
     typeof window === "undefined" ? undefined : window.localStudioDesktop?.saveTextFile;
   if (dialog) {
-    const result = await dialog({ defaultFileName: filename, content });
-    if (result.ok) return { kind: "saved", filePath: result.filePath };
-    if (result.canceled) return { kind: "canceled" };
-    return { kind: "error", message: result.error ?? "The file could not be saved." };
+    try {
+      const result = await dialog({ defaultFileName: filename, content });
+      if (result.ok) return { kind: "saved", filePath: result.filePath };
+      if (result.canceled) return { kind: "canceled" };
+      return { kind: "error", message: result.error ?? "The file could not be saved." };
+    } catch {
+      return { kind: "error", message: "The file could not be saved." };
+    }
   }
   return downloadTextFile(filename, content, mimeType)
     ? { kind: "downloaded", filename }

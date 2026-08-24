@@ -62,6 +62,7 @@ let frontendHealthFailures = 0;
 let restartAttempts = 0;
 let lastRestartAt = 0;
 let shutdownPromise: Promise<void> | undefined;
+let titleGenerationQueue: Promise<void> = Promise.resolve();
 let quitAfterShutdown = false;
 let relaunchAfterShutdown = false;
 const expectedFrontendStopPids = new Set<number>();
@@ -393,7 +394,14 @@ function registerIpcHandlers(): void {
       return { ok: false, reason: "invalid_request" };
     }
     const safeLocale = locale.trim().slice(0, 64) || "en-US";
-    return generateSessionTitle(excerpt.slice(0, 6000), safeLocale);
+    const request = titleGenerationQueue.then(() =>
+      generateSessionTitle(excerpt.slice(0, 6000), safeLocale),
+    );
+    titleGenerationQueue = request.then(
+      () => undefined,
+      () => undefined,
+    );
+    return request;
   });
 
   ipcMain.handle("desktop:get-remote-access-info", () => {

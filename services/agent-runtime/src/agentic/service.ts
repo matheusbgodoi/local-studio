@@ -56,6 +56,7 @@ type RuntimeState = {
   loops: Map<string, Promise<void>>;
   cancelled: Set<string>;
   capabilities: Map<string, AgenticCapability>;
+  hiddenRollouts: Set<string>;
 };
 
 //
@@ -88,19 +89,20 @@ const hideExecutionRollout = (
   run: AgenticRun,
   agent: AgenticAgent,
   piSessionId: string,
-): void => {
+): Promise<void> => {
   const goal = run.goal.replace(/\s+/g, " ").trim();
   const short =
     goal.length > ROLLOUT_TITLE_CHARS ? `${goal.slice(0, ROLLOUT_TITLE_CHARS)}…` : goal;
-  void setSessionInternal(piSessionId, {
+  return setSessionInternal(piSessionId, {
     cwd: run.cwd,
     title: `Run: ${short} — ${agent.name}`,
-  }).catch(() => {});
+  });
 };
 
 function createRuntime(): RuntimeState {
   const store = createAgenticStore(resolveDataDir());
   const capabilities = new Map<string, AgenticCapability>();
+  const hiddenRollouts = new Set<string>();
 
   const capabilityFor = (run: AgenticRun): AgenticCapability => {
     const cached = capabilities.get(run.id);
@@ -121,11 +123,22 @@ function createRuntime(): RuntimeState {
 
   for (const run of store.listRuns()) {
     for (const agent of store.listAgents(run.id)) {
-      if (agent.piSessionId) hideExecutionRollout(run, agent, agent.piSessionId);
+      if (!agent.piSessionId) continue;
+      const piSessionId = agent.piSessionId;
+      void hideExecutionRollout(run, agent, piSessionId)
+        .then(() => hiddenRollouts.add(piSessionId))
+        .catch(() => {});
     }
   }
 
-  return { store, service, loops: new Map(), cancelled: new Set(), capabilities };
+  return {
+    store,
+    service,
+    loops: new Map(),
+    cancelled: new Set(),
+    capabilities,
+    hiddenRollouts,
+  };
 }
 
 const NETWORK_RECOVERY = new WeakSet<object>();
@@ -229,7 +242,12 @@ export function agenticRuntime() {
         const own = piSessionFor(run, agent).status.piSessionId;
         if (own && own !== agent.piSessionId) {
           state.store.updateAgent(agent.id, { piSessionId: own });
-          hideExecutionRollout(run, agent, own);
+        }
+        if (own && !state.hiddenRollouts.has(own)) {
+          try {
+            await hideExecutionRollout(run, agent, own);
+            state.hiddenRollouts.add(own);
+          } catch {}
         }
       }
       await state.service.scheduler.advance(runId, observed);
