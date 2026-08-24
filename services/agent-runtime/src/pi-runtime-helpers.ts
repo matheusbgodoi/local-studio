@@ -393,6 +393,17 @@ function runtimeEnvInjections(
   };
 }
 
+//
+// Whether the relay backend exists at all on this machine. The composer only
+// offers the browser-backend switch when it does — a control that switches to a
+// backend nobody configured is worse than no control, and it was sitting in the
+// composer's most valuable slot being mistaken for something else.
+//
+export function sitegeistRelayUrl(): string {
+  const env = process.env;
+  return (env.SITEGEIST_RELAY_URL ?? readSitegeistRelayEnv(env).SITEGEIST_RELAY_URL ?? "").trim();
+}
+
 function readSitegeistRelayEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   const filePath = expandHome(
     env.LOCAL_STUDIO_SITEGEIST_RELAY_ENV_PATH ?? "~/.config/sitegeist-relay/env",

@@ -33,6 +33,7 @@ import {
   replayAfterCursor,
   shouldSendTrailingIdleStatus,
 } from "./stream-order";
+import { sitegeistRelayUrl } from "../pi-runtime-helpers";
 import { networkService } from "../network";
 import {
   DEFAULT_NETWORK_POLICY,
@@ -573,6 +574,20 @@ export function handleSetupChecks(): Response {
   const diagnostics = piResourceDiagnostics();
   return Response.json({
     checks: [
+      {
+        //
+        // Whether the Sitegeist relay is configured at all. The composer uses
+        // this to decide whether to offer the browser-backend switch: without a
+        // relay the alternative backend does not exist, and a control that
+        // switches to nothing is worse than no control.
+        //
+        id: "sitegeist-relay",
+        label: "Sitegeist relay",
+        ok: Boolean(sitegeistRelayUrl()),
+        value: sitegeistRelayUrl() ? "configured" : "not configured",
+        guidance:
+          "Optional. Set SITEGEIST_RELAY_URL, or ~/.config/sitegeist-relay/env, to run the agent's browser through the relay instead of the embedded panel.",
+      },
       {
         id: "pi-sdk",
         label: "Pi SDK",

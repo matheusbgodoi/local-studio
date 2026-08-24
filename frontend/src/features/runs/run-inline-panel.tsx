@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import { StatusPill } from "@/ui";
 import type { AgenticRunSnapshot, AgenticTask } from "@shared/agent/agentic-run";
 import { isProtectedPolicy } from "@shared/agent/network-policy";
@@ -40,11 +41,34 @@ export function RunInlinePanel({
   return <RunInlineBody snapshot={snapshot} />;
 }
 
+//
+// How many task rows the strip shows before it starts hiding them.
+//
+// This panel sits directly above the composer, so its height is taken from the
+// conversation. A twelve-task plan pushed the message the owner was reading off
+// the screen. Collapsed, the strip stays about the size of the run it describes;
+// the full plan is one click away here and always complete in the Run sidebar.
+//
+const COLLAPSED_TASKS = 3;
+
 function RunInlineBody({ snapshot }: { snapshot: AgenticRunSnapshot }) {
+  const [expanded, setExpanded] = useState(false);
   const { run, tasks, agents, events } = snapshot;
   const done = tasks.filter((task) => task.status === "SUCCEEDED").length;
   const agent = agents.find((entry) => entry.status === "WORKING") ?? agents[0];
   const latest = events[events.length - 1];
+  //
+  // Collapsed, it keeps whatever is actually happening rather than the first N
+  // in plan order: the active task, the ones still to come, and enough finished
+  // ones to show where the run has got to.
+  //
+  const activeIndex = Math.max(
+    0,
+    tasks.findIndex((task) => task.id === run.activeTaskId),
+  );
+  const window = Math.max(0, Math.min(activeIndex - 1, tasks.length - COLLAPSED_TASKS));
+  const visibleTasks = expanded ? tasks : tasks.slice(window, window + COLLAPSED_TASKS);
+  const hiddenCount = tasks.length - visibleTasks.length;
 
   return (
     <div className="mx-auto w-full max-w-(--composer-w) px-2 pb-1">
@@ -69,7 +93,7 @@ function RunInlineBody({ snapshot }: { snapshot: AgenticRunSnapshot }) {
         </div>
 
         <ul className="mt-1.5 space-y-0.5">
-          {tasks.map((task) => (
+          {visibleTasks.map((task) => (
             <li key={task.id} className="flex items-baseline gap-2 text-[length:var(--fs-xs)]">
               <span className="w-3 shrink-0 text-(--ui-muted)">{taskMark(task)}</span>
               <span
@@ -89,6 +113,17 @@ function RunInlineBody({ snapshot }: { snapshot: AgenticRunSnapshot }) {
             </li>
           ))}
         </ul>
+        {hiddenCount > 0 ? (
+          <button
+            type="button"
+            onClick={() => setExpanded((value) => !value)}
+            className="mt-1 text-[length:var(--fs-xs)] text-(--ui-muted) underline-offset-2 hover:text-(--ui-fg) hover:underline"
+          >
+            {expanded
+              ? "Show less"
+              : `Show ${hiddenCount} more task${hiddenCount === 1 ? "" : "s"}`}
+          </button>
+        ) : null}
 
         <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[length:var(--fs-xs)] text-(--ui-muted)">
           {latest ? (
