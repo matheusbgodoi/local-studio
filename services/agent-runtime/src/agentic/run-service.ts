@@ -7,6 +7,8 @@
 //
 
 import type { AgenticCapability } from "./capability";
+import { networkService } from "../network";
+import type { NetworkPolicy } from "../../../../shared/agent/network-policy";
 import { computeContextBudget, type ContextBudgetPolicy } from "./context-budget";
 import type { AgenticAgent, AgenticRun, AgenticRunSnapshot } from "./contract";
 import { validatePlan } from "./dag";
@@ -24,6 +26,7 @@ export type StartRunInput = {
   tasks: TaskSeed[];
   agentName?: string;
   agentRole?: string;
+  networkPolicy?: NetworkPolicy;
 };
 
 export type AgenticRunServiceOptions = {
@@ -64,6 +67,12 @@ export function createAgenticRunService(options: AgenticRunServiceOptions) {
       sessionId: input.sessionId,
       piSessionId: input.piSessionId,
       cwd: input.cwd,
+      //
+      // Captured at birth from the conversation that asked for it, and durable
+      // from here on. The owner moving the toggle afterwards starts the NEXT
+      // Run somewhere else; it does not quietly re-route this one.
+      //
+      networkPolicy: input.networkPolicy ?? networkService().sessionPolicy(input.sessionId),
     });
     store.createAgent({
       runId: run.id,

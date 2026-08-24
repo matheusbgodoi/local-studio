@@ -122,6 +122,15 @@ export class NetworkService {
     void this.reconcile();
   }
 
+  //
+  // What a conversation is asking for right now. A Run reads this exactly once,
+  // when it is created, and then owns its own copy — which is why the toggle
+  // moving later cannot change a Run that is already in flight.
+  //
+  sessionPolicy(sessionId: string): NetworkPolicy {
+    return this.sessionPolicies.get(sessionId) ?? "direct";
+  }
+
   releaseSession(sessionId: string): void {
     if (this.sessionPolicies.delete(sessionId)) void this.reconcile();
   }

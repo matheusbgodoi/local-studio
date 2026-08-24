@@ -20,6 +20,11 @@ import type {
   AgenticToolOperation,
   AgenticWorkingSet,
 } from "./contract";
+import {
+  DEFAULT_NETWORK_POLICY,
+  parseNetworkPolicy,
+  type NetworkPolicy,
+} from "../../../../shared/agent/network-policy";
 
 export type Row = Record<string, unknown>;
 
@@ -67,6 +72,7 @@ export const toRun = (row: Row): AgenticRun => ({
   modelId: text(row.model_id),
   physicalModelId: text(row.physical_model_id),
   behaviorProfile: nullableText(row.behavior_profile),
+  networkPolicy: (parseNetworkPolicy(row.network_policy) ?? DEFAULT_NETWORK_POLICY) as NetworkPolicy,
   contextWindow: int(row.context_window),
   usableLimit: int(row.usable_limit),
   sessionId: text(row.session_id),

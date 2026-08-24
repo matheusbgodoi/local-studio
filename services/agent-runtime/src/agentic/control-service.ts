@@ -12,6 +12,8 @@ import type { AgenticAgent, AgenticRun, AgenticTask } from "./contract";
 import { applyProgressReport, type ProgressReport, type ValidatedPlan } from "./control-plane";
 import { applyReadiness, settleTaskIfSatisfied } from "./readiness";
 import type { AgenticStore } from "./store";
+import { networkService } from "../network";
+import type { NetworkPolicy } from "../../../../shared/agent/network-policy";
 
 export type CommittedPlan = {
   run: AgenticRun;
@@ -85,6 +87,7 @@ export function createRunFromPlan(
     sessionId: string;
     piSessionId: string | null;
     cwd: string;
+    networkPolicy?: NetworkPolicy;
     budgetPolicy?: ContextBudgetPolicy;
   },
 ): CommittedPlan {
@@ -98,6 +101,7 @@ export function createRunFromPlan(
     usableLimit: budget.usableLimit,
     sessionId: input.sessionId,
     piSessionId: input.piSessionId,
+    networkPolicy: input.networkPolicy ?? networkService().sessionPolicy(input.sessionId),
     cwd: input.cwd,
   });
   store.recordPlanRevision({ runId: run.id, reason: "plan proposed by the model", tasks: input.plan.seeds });
