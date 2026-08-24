@@ -61,7 +61,7 @@ function RunInlineBody({ snapshot }: { snapshot: AgenticRunSnapshot }) {
           </span>
           <div className="grow" />
           <Link
-            href="/runs"
+            href={`/runs?run=${encodeURIComponent(run.id)}`}
             className="text-[length:var(--fs-xs)] text-(--ui-muted) underline-offset-2 hover:underline"
           >
             Open run
