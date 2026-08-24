@@ -40,7 +40,7 @@ export default function RunsPage() {
 
   return (
     <AppPage>
-      <PageContainer width="lg">
+      <PageContainer width="sm">
         <PageHeader
           eyebrow="Agentic"
           title="Runs"

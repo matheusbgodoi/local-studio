@@ -26,6 +26,7 @@ import { resolveDataDir } from "../data-dir";
 import { getGlobalSingleton } from "../instances";
 import { piRuntimeManager } from "../pi-runtime";
 import { refreshPiModels } from "../pi-runtime-models";
+import { setSessionInternal } from "../session-metadata-store";
 import type { AgentModel } from "../../../../shared/agent/models";
 import { networkService } from "../network";
 
@@ -81,6 +82,22 @@ const sessionFor = (run: AgenticRun, agent: AgenticAgent | null) =>
     fallbackContextWindow: run.contextWindow,
   });
 
+const ROLLOUT_TITLE_CHARS = 72;
+
+const hideExecutionRollout = (
+  run: AgenticRun,
+  agent: AgenticAgent,
+  piSessionId: string,
+): void => {
+  const goal = run.goal.replace(/\s+/g, " ").trim();
+  const short =
+    goal.length > ROLLOUT_TITLE_CHARS ? `${goal.slice(0, ROLLOUT_TITLE_CHARS)}…` : goal;
+  void setSessionInternal(piSessionId, {
+    cwd: run.cwd,
+    title: `Run: ${short} — ${agent.name}`,
+  }).catch(() => {});
+};
+
 function createRuntime(): RuntimeState {
   const store = createAgenticStore(resolveDataDir());
   const capabilities = new Map<string, AgenticCapability>();
@@ -101,6 +118,12 @@ function createRuntime(): RuntimeState {
   });
 
   service.recover();
+
+  for (const run of store.listRuns()) {
+    for (const agent of store.listAgents(run.id)) {
+      if (agent.piSessionId) hideExecutionRollout(run, agent, agent.piSessionId);
+    }
+  }
 
   return { store, service, loops: new Map(), cancelled: new Set(), capabilities };
 }
@@ -202,25 +225,12 @@ export function agenticRuntime() {
           usableLimit: computeContextBudget(observed, agenticBudgetPolicy()).usableLimit,
         });
       }
-      //
-      // The pi session id only exists once the runtime has started. Adopting
-      // it is what lets a restart find the same rollout instead of opening a
-      // second conversation for a Run already in flight.
-      //
-      //
-      // Each agent adopts the pi session id of its OWN runtime session, so a
-      // restart finds each working context again rather than collapsing them
-      // onto the Run's conversation.
-      //
       for (const agent of state.store.listAgents(runId)) {
         const own = piSessionFor(run, agent).status.piSessionId;
         if (own && own !== agent.piSessionId) {
           state.store.updateAgent(agent.id, { piSessionId: own });
+          hideExecutionRollout(run, agent, own);
         }
-      }
-      const adopted = piSessionFor(run, primaryAgent).status.piSessionId;
-      if (adopted && adopted !== run.piSessionId) {
-        state.store.updateRun(runId, { piSessionId: adopted });
       }
       await state.service.scheduler.advance(runId, observed);
     }

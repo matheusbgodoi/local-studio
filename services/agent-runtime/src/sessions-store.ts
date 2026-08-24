@@ -247,7 +247,8 @@ function applySessionMetadata(
   summary: SessionSummary,
   metadataFor: SessionMetadataLookup,
 ): SessionSummary {
-  return { ...summary, ...metadataFor(summary.id) };
+  const { internal: _, ...metadata } = metadataFor(summary.id);
+  return { ...summary, ...metadata };
 }
 
 function summaryRelevantTime(summary: SessionSummary, archivedOnly: boolean): number {
@@ -311,6 +312,7 @@ async function readListCandidate(
     if (!summary?.id) return null;
     if (!sessionCwdMatches(summary.cwd, cwd)) return null;
     if (options.wantedIds.size > 0 && !options.wantedIds.has(summary.id)) return null;
+    if (metadataFor(summary.id).internal) return null;
     const decorated = applySessionMetadata(summary, metadataFor);
     return summaryMatchesListOptions(decorated, options) ? decorated : null;
   } catch {
