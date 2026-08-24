@@ -61,6 +61,18 @@ export type JailedCommand = {
   args: string[];
 };
 
+//
+// Single-quoted for /bin/sh, not JSON-quoted. JSON.stringify produces double
+// quotes, and inside those a shell still expands $ and backticks — so a data
+// directory containing either (it comes from LOCAL_STUDIO_DATA_DIR, which the
+// environment controls) would be interpreted rather than passed through. Single
+// quotes suppress every expansion, and the only character that needs handling
+// is the quote itself.
+//
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
 export function jailSupported(): boolean {
   return process.platform === "darwin" && existsSync(SANDBOX_EXEC);
 }
@@ -197,7 +209,7 @@ export function writeChromiumShim(
   const shim = path.join(profileDirectory, "chromium-jail.sh");
   writeFileSync(
     shim,
-    `#!/bin/sh\nexec ${SANDBOX_EXEC} -f ${JSON.stringify(profilePath)} ${JSON.stringify(executablePath)} "$@"\n`,
+    `#!/bin/sh\nexec ${SANDBOX_EXEC} -f ${shellQuote(profilePath)} ${shellQuote(executablePath)} "$@"\n`,
     { mode: 0o700 },
   );
   return shim;
@@ -218,7 +230,7 @@ export function writeShellShim(profileDirectory: string, profilePath: string): s
   const shim = path.join(profileDirectory, "shell-jail.sh");
   writeFileSync(
     shim,
-    `#!/bin/sh\nexec ${SANDBOX_EXEC} -f ${JSON.stringify(profilePath)} ${shell} "$@"\n`,
+    `#!/bin/sh\nexec ${SANDBOX_EXEC} -f ${shellQuote(profilePath)} ${shell} "$@"\n`,
     { mode: 0o700 },
   );
   return shim;
