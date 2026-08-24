@@ -52,8 +52,17 @@ export async function handleNetworkProvider(request: Request): Promise<Response>
 
   if (request.method === "DELETE") {
     clearProfile(resolveDataDir());
-    networkService().reloadProfile();
-    return Response.json({ ok: true, provider: null });
+    const service = networkService();
+    service.reloadProfile();
+    //
+    // Reconciled, not just reloaded. Removing the configuration while sessions
+    // still ask for protection used to leave the old tunnel running and the
+    // status still claiming a boundary that had nothing behind it. Now the
+    // service re-derives its state and reports ERROR — protection requested,
+    // nothing to build it from — which refuses egress rather than pretending.
+    //
+    await service.reconcileNow();
+    return Response.json({ ok: true, provider: null, status: service.status() });
   }
 
   const body = (await request.json().catch(() => null)) as {

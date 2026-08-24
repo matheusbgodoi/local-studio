@@ -3,7 +3,14 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Tool, ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { protectedEnvironment, protectedFetch, protectedSpawn } from "./network";
-import { assertNoInheritedDescriptors, PROTECTED_STDIO } from "./network/jail";
+import { assertNoInheritedDescriptors } from "./network/jail";
+
+//
+// Named once and asserted against the same name, so the assertion cannot drift
+// from the value actually handed to the child — checking a separate constant
+// would have passed while this said "inherit".
+//
+const STDIO_STDERR = "pipe" as const;
 
 export type McpToolAnnotations = ToolAnnotations;
 export type McpToolInfo = Tool;
@@ -88,13 +95,13 @@ const transportFor = (target: McpTarget) => {
     // connect() returned EPERM. Asserted here so a future edit that "tidies"
     // the option away fails loudly instead of quietly reopening it.
     //
-    assertNoInheritedDescriptors(PROTECTED_STDIO);
+    assertNoInheritedDescriptors(["pipe", "pipe", STDIO_STDERR]);
     return new StdioClientTransport({
       command: jailed.command,
       args: jailed.args,
       env: { ...processEnvironment(), ...protectedEnvironment(), ...(target.env ?? {}) },
       ...(target.cwd ? { cwd: target.cwd } : {}),
-      stderr: "pipe",
+      stderr: STDIO_STDERR,
     });
   }
   //

@@ -9,6 +9,7 @@ import {
 } from "../session-metadata-store";
 import { findSessionFile, listSessions, loadSession } from "../sessions-store";
 import { errorMessage, jsonError } from "./helpers";
+import { networkService } from "../network";
 
 function parseRelativeSince(value: string | null): Date | null {
   if (!value) return null;
@@ -230,5 +231,13 @@ export async function handleSessionDelete(request: Request, id: string): Promise
   // survived would hide a session that still exists.
   //
   await forgetSessionMetadata(id);
+  //
+  // A deleted conversation stops asking for protection. Without this its claim
+  // outlives it: the policy map is keyed by session id and nothing else removes
+  // an entry, so a conversation the owner deleted while it was protected would
+  // hold the tunnel up — and route everyone else through it — for the rest of
+  // the process's life.
+  //
+  networkService().releaseSession(id);
   return Response.json({ session: { id, deleted: true } });
 }

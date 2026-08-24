@@ -236,6 +236,33 @@ export async function runAcceptance(): Promise<number> {
     ),
   );
 
+  //
+  // MEASURED, not echoed. `status.dns` is derived from a request the RUNTIME
+  // made through the tunnel, which says nothing about whether a jailed child can
+  // resolve names on the machine's own resolver — and for a while it could,
+  // because allowing unix sockets for Chromium's benefit also re-opened
+  // mDNSResponder. The suite reported "DNS protected" throughout, because it was
+  // reading a constant back to itself. This asks the jail directly.
+  //
+  const resolved = jailedShell(
+    `python3 -c "
+import socket
+try:
+    socket.getaddrinfo('example.com', 443)
+    print('RESOLVED')
+except Exception:
+    print('denied')"`,
+    20_000,
+  );
+  checks.push({
+    name: "jailed DNS denied",
+    outcome: resolved.trim() === "denied" ? "PASS" : "FAIL",
+    note:
+      resolved.trim() === "denied"
+        ? "getaddrinfo dies inside the jail"
+        : "a jailed process resolved a name on this machine's resolver",
+  });
+
   const status = service.status();
   checks.push(observation("DNS", status.dns));
   checks.push(observation("IPv4", status.ipv4));

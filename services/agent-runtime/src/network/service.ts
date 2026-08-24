@@ -67,6 +67,10 @@ const ATTEST_INTERVAL_MS = 15_000;
 const ATTEST_STARTUP_INTERVAL_MS = 2_000;
 const ATTEST_TIMEOUT_MS = 10_000;
 const START_GRACE_MS = 30_000;
+//
+// Below this, an exit means "could not start" rather than "dropped".
+//
+const IMMEDIATE_EXIT_MS = 2_000;
 
 export type NetworkEvent =
   | "network.policy.changed"
@@ -92,6 +96,7 @@ export class NetworkService {
   private state: NetworkProtectionState = "DIRECT";
   private detail: string | null = null;
   private startedAtMs = 0;
+  private tunnelError: string | null = null;
   private generation = 0;
   private attestLoop = 0;
   private timer: NodeJS.Timeout | null = null;
@@ -136,6 +141,22 @@ export class NetworkService {
         // a listener must not be able to break the boundary it is watching
       }
     }
+  }
+
+  //
+  // Re-derive the boundary from what is on disk now. Used when the provider
+  // configuration changes underneath a live policy.
+  //
+  async reconcileNow(): Promise<void> {
+    //
+    // Torn down first, because engage() returns early while a tunnel exists and
+    // would otherwise leave the old one running against a configuration that no
+    // longer exists. Disengaging and re-deriving is what makes the state honest:
+    // still demanded, nothing to build it from, therefore ERROR.
+    //
+    await this.transition.catch(() => undefined);
+    await this.disengage();
+    await this.reconcile();
   }
 
   reloadProfile(): void {
@@ -236,7 +257,20 @@ export class NetworkService {
   // off so the SDK falls back to its own shell resolution untouched.
   //
   shellShimPath(): string | null {
-    if (!this.protectionDemanded() || !this.profilePath) return null;
+    if (!this.protectionDemanded()) return null;
+    //
+    // THROWS rather than returning null when protection is demanded but the jail
+    // could not be built. Returning null here means "use the SDK's own shell",
+    // which is a bare /bin/bash outside the boundary — the caller reads it as
+    // "Direct" when the truth is "protected and broken". wrap() already refuses
+    // in that state; this used to disagree with it, so a conversation still
+    // marked vpn_protected got an unjailed shell.
+    //
+    if (!this.profilePath) {
+      throw new Error(
+        `protected network is ${this.state.toLowerCase()}; the agent shell could not be confined`,
+      );
+    }
     return writeShellShim(path.join(this.dataDir, "network"), this.profilePath);
   }
 
@@ -246,7 +280,16 @@ export class NetworkService {
   // byte-identical to how it behaved before this existed.
   //
   chromiumExecutable(executablePath: string): string {
-    if (!this.protectionDemanded() || !this.profilePath) return executablePath;
+    if (!this.protectionDemanded()) return executablePath;
+    //
+    // Same reason as shellShimPath: handing back the real binary while
+    // protection is demanded launches an unconfined browser under a padlock.
+    //
+    if (!this.profilePath) {
+      throw new Error(
+        `protected network is ${this.state.toLowerCase()}; the browser could not be confined`,
+      );
+    }
     return writeChromiumShim(
       path.join(this.dataDir, "network"),
       this.profilePath,
@@ -382,7 +425,10 @@ export class NetworkService {
       return;
     }
 
+    const startedAt = Date.now();
+    this.tunnelError = this.tunnel.lastError();
     this.tunnel.child.once("exit", () => {
+      this.tunnelError = this.tunnel?.lastError() ?? this.tunnelError;
       //
       // The tunnel died. The jail stays exactly where it is, so nothing escapes
       // while this is true; the state simply becomes the honest one. This is
@@ -392,12 +438,29 @@ export class NetworkService {
       this.generation += 1;
       this.tunnel = null;
       if (!this.protectionDemanded()) return;
+      //
+      // A tunnel that dies immediately is not a tunnel that dropped — it is one
+      // that cannot start, most often because the proxy port is already bound.
+      // Reconciling would re-engage, which would die again, which would
+      // reconcile: measured, that spun about forty times a second and tore down
+      // the browser and every PTY on each pass while the state never settled.
+      // It becomes ERROR instead, which refuses egress and stops.
+      //
+      const instant = Date.now() - startedAt < IMMEDIATE_EXIT_MS;
+      if (instant) {
+        this.fail(
+          this.tunnelError ?? "the tunnel exited immediately; the proxy port may already be in use",
+        );
+        return;
+      }
+
       this.state = "BLOCKED";
       this.detail = "the tunnel process is not running; public egress is blocked";
       this.emit("vpn.disconnected", this.detail);
       void this.reconcile();
     });
 
+    this.tunnelError = null;
     this.startAttesting();
   }
 

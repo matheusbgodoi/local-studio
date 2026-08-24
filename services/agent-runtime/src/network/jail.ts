@@ -83,10 +83,22 @@ export function jailSupported(): boolean {
 // trap: Chrome's ProcessSingleton binds a unix socket in TMPDIR before it does
 // anything else, so the full Chromium — which is what
 // `chromium.executablePath()` actually resolves to here — aborted at startup
-// under protection, and the per-pid profile fallback failed the same way. A
-// unix socket is not a route to anywhere; it has no address family that can
-// leave the machine. Allowing it costs nothing at the boundary, and IP egress
-// was re-measured unchanged either side of the change.
+// under protection, and the per-pid profile fallback failed the same way.
+//
+// THE OUTBOUND SIDE IS SCOPED BY PATH, and that is the whole point of these
+// three lines rather than one. An earlier version allowed unix sockets
+// wholesale on the reasoning that they "cannot leave the machine". They cannot,
+// but the daemons behind them can: `getaddrinfo` reaches mDNSResponder over a
+// unix socket, so a blanket allow re-opened the system resolver inside the jail.
+// Measured — with the blanket rule a jailed process resolved example.com; with
+// these scoped rules it is denied again. That mattered because DNS is egress:
+// the query leaves on the machine's own resolver, off-tunnel, carrying whatever
+// name the caller chose, and it keeps working when the tunnel is down. An
+// adversarial review caught it, four reviewers independently.
+//
+// Bind and inbound stay unscoped: they only ever touch a socket this process
+// created. Outbound is limited to the temporary directories Chromium puts its
+// own singleton socket in, which is the only outbound unix connection it needs.
 //
 // `remote ip` in a Seatbelt profile accepts only `*` or `localhost` as a host —
 // a literal address or a CIDR is rejected at parse time — but the port is
@@ -126,8 +138,9 @@ export function buildProfile(options: JailOptions): string {
 (allow network-bind (local ip "localhost:*"))
 (allow network-inbound (local ip "localhost:*"))
 (allow network-bind (local unix-socket))
-(allow network-outbound (remote unix-socket))
 (allow network-inbound (local unix-socket))
+(allow network-outbound (remote unix-socket (subpath "/private/var/folders")))
+(allow network-outbound (remote unix-socket (subpath "/private/tmp")))
 
 (deny file-write*)
 (allow file-write*
@@ -177,8 +190,6 @@ export function jailCommand(profilePath: string, command: JailedCommand): Jailed
 // from the same process returned EPERM. One deleted keyword was the whole
 // distance between "documented limitation" and "realised leak".
 //
-export const PROTECTED_STDIO = ["pipe", "pipe", "pipe"] as const;
-
 export function assertNoInheritedDescriptors(stdio: readonly unknown[]): void {
   if (stdio.length > 3) {
     throw new Error("a protected child was given a descriptor above fd 2; refusing to start it");

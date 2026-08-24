@@ -41,10 +41,20 @@ export type SingBoxOptions = {
 };
 
 //
-// Everything that must keep working while protection is on and must therefore
-// never be sent through the tunnel: loopback, link-local, and the RFC 6598
-// range Tailscale uses. These are the ONLY exceptions, they are all private,
-// and none of them is a route to the public internet.
+// Private space, which this proxy REFUSES rather than routes.
+//
+// The jail permits exactly one destination — this proxy — so whatever the proxy
+// is willing to dial is, transitively, what a jailed workload can reach. An
+// earlier version sent these to a `direct` outbound, reasoning that loopback and
+// Tailscale must keep working. They must, but not for the jailed workload: the
+// runtime reaches them on its own route, outside the jail, and never through
+// here. Routing them made the one permitted destination a general-purpose pivot
+// — measured, a jailed process could not reach a loopback server directly
+// (EPERM) but reached it through the proxy (200), which includes the
+// agent-runtime's own unauthenticated control API and therefore the ability to
+// switch protection off.
+//
+// Rejected here, they are unreachable both ways.
 //
 const PRIVATE_DESTINATIONS = [
   "127.0.0.0/8",
@@ -113,11 +123,11 @@ export function buildConfig(options: SingBoxOptions): unknown {
         ],
       },
     ],
-    outbounds: [{ type: "direct", tag: "private-direct" }],
+    outbounds: [],
     route: {
       auto_detect_interface: false,
       rules: [
-        { ip_cidr: PRIVATE_DESTINATIONS, outbound: "private-direct" },
+        { ip_cidr: PRIVATE_DESTINATIONS, action: "reject" },
         { action: "sniff" },
       ],
       final: "tunnel",
