@@ -147,11 +147,19 @@ function copyDirectory(source: string, target: string): void {
   cpSync(source, target, { recursive: true, force: true });
 }
 
-async function waitForServer(url: string, timeoutMs: number): Promise<void> {
+//
+// The probe carries the token because there is no exemption for local callers.
+// An earlier attempt exempted anything presenting a loopback Host, which a
+// second tailnet device defeated by simply sending `Host: 127.0.0.1` —
+// `tailscale serve` forwards the client's Host rather than rewriting it. So
+// every caller authenticates, this one included.
+//
+async function waitForServer(url: string, timeoutMs: number, token: string | null): Promise<void> {
   const startedAt = Date.now();
+  const headers = token ? { "x-local-studio-token": token } : undefined;
   while (Date.now() - startedAt < timeoutMs) {
     try {
-      const response = await fetch(url, { redirect: "manual" });
+      const response = await fetch(url, { redirect: "manual", headers });
       if (response.ok || response.status === 307 || response.status === 308) {
         return;
       }
@@ -214,7 +222,10 @@ export async function startFrontendServer(
   //
   const remoteHost = frontendToken ? readRemoteHost(DESKTOP_CONFIG.userDataDir) : null;
   const remoteUser = remoteHost ? readRemoteUser(DESKTOP_CONFIG.userDataDir) : null;
-  const agentRuntime = await startOrReuseAgentRuntime({ frontendUrl: url }, options.agentRuntime);
+  const agentRuntime = await startOrReuseAgentRuntime(
+    { frontendUrl: url, frontendToken },
+    options.agentRuntime,
+  );
 
   log.info(`Starting embedded frontend server from ${serverScript} on ${url}`);
 
@@ -288,7 +299,7 @@ export async function startFrontendServer(
   currentEmbeddedServer = child;
 
   try {
-    await waitForServer(url, DESKTOP_CONFIG.startupTimeoutMs);
+    await waitForServer(url, DESKTOP_CONFIG.startupTimeoutMs, frontendToken);
   } catch (error) {
     await stopFrontendServer(
       {

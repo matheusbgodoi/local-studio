@@ -41,33 +41,6 @@ export function isLoopbackHost(value: string): boolean {
   return name === "localhost" || name === "127.0.0.1" || name === "::1";
 }
 
-//
-// Whether this request reached us from off the machine.
-//
-// `tailscale serve` — the one publishing path this app supports — rewrites Host
-// to the MagicDNS name before forwarding, and a client cannot override that: the
-// investigation measured a forged `Host`/`X-Forwarded-For` being replaced with
-// the true values. So every request that came in from the tailnet presents a
-// non-loopback host here, and everything that reached the port directly is a
-// process already running on this machine.
-//
-// This is NOT the rejected "decide the posture from the Host header" check. The
-// posture is fixed by the owner; this only exempts callers that are already
-// inside the trust boundary — the Electron window, the readiness probe, the
-// agent runtime's tool extensions — which can read the token file anyway, so
-// demanding it of them buys nothing and breaks the app.
-//
-// An unparseable host counts as remote: the token is required when in doubt.
-//
-// Caveat worth stating: a raw TCP forward that does not rewrite Host (`ssh -L`)
-// would present a loopback host from off-box. That requires shell access to this
-// machine as this user, which is already game over.
-//
-export function isRemoteRequest(host: string | null, forwardedHost: string | null): boolean {
-  const effective = normalizedHost(forwardedHost) ?? normalizedHost(host);
-  return effective === null || !isLoopbackHost(effective);
-}
-
 function isMutation(method: string): boolean {
   return ["POST", "PUT", "PATCH", "DELETE"].includes(method.toUpperCase());
 }

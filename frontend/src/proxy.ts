@@ -11,7 +11,6 @@ import {
   CSRF_BOOTSTRAP_HEADER,
   CSRF_HEADER,
   evaluateRequestBoundary,
-  isRemoteRequest,
   splitAllowedValues,
 } from "@/lib/security/request-boundary";
 
@@ -31,9 +30,6 @@ function denyResponse(isApi: boolean, status: number, message: string): NextResp
 function enforceAccess(request: NextRequest): NextResponse | null {
   const posture = resolveAccessPosture();
   if (posture.kind === "allow") return null;
-  if (!isRemoteRequest(request.headers.get("host"), request.headers.get("x-forwarded-host"))) {
-    return null;
-  }
 
   const url = request.nextUrl;
   const isApi = url.pathname.startsWith("/api/");

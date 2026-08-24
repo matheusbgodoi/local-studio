@@ -6,7 +6,6 @@ import {
   presentedToken,
   resolveAccessPosture,
 } from "./access";
-import { isRemoteRequest } from "../security/request-boundary";
 
 function safeEqual(a: string, b: string): boolean {
   const ab = Buffer.from(a);
@@ -24,9 +23,6 @@ function safeEqual(a: string, b: string): boolean {
 export function requireApiAccess(request: NextRequest): Response | null {
   const posture = resolveAccessPosture();
   if (posture.kind === "allow") return null;
-  if (!isRemoteRequest(request.headers.get("host"), request.headers.get("x-forwarded-host"))) {
-    return null;
-  }
   const presented = presentedToken(
     request.headers.get(STUDIO_TOKEN_HEADER),
     request.cookies.get(STUDIO_TOKEN_COOKIE)?.value,
