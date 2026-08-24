@@ -2,7 +2,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Tool, ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
-import { assertRoutableEgress, protectedEnvironment, protectedSpawn } from "./network";
+import { protectedEnvironment, protectedFetch, protectedSpawn } from "./network";
 import { assertNoInheritedDescriptors, PROTECTED_STDIO } from "./network/jail";
 
 export type McpToolAnnotations = ToolAnnotations;
@@ -49,11 +49,18 @@ const combinedSignal = (
 
 const authorizedFetch = (target: HttpTarget): typeof fetch =>
   async (input, init) => {
+    //
+    // Resolved per call, not captured once: protection can be engaged or
+    // released while a connector is pooled, and the transport outlives either
+    // transition. Resolving here means the next request follows the policy in
+    // force now, and throws rather than going direct if it cannot.
+    //
     const send = async (forceRefresh: boolean): Promise<Response> => {
+      const routed = protectedFetch(`the remote MCP connector at ${new URL(target.url).host}`);
       const headers = new Headers(init?.headers);
       const authorization = target.authorize ? await target.authorize(forceRefresh) : {};
       for (const [name, value] of Object.entries(authorization)) headers.set(name, value);
-      return fetch(input, {
+      return routed(input, {
         ...init,
         headers,
         redirect: target.authorize ? "error" : "follow",
@@ -91,14 +98,13 @@ const transportFor = (target: McpTarget) => {
     });
   }
   //
-  // A remote MCP server is reached with the global fetch, which takes no agent
-  // and therefore cannot be pointed at the tunnel from here. Rather than let a
-  // protected session talk to it over the machine's own route — which is what
-  // used to happen, and which an adversarial review caught — it is refused
-  // while protection is demanded. The status contract names this so the owner
-  // can see it rather than discover it.
+  // Routed rather than refused. A remote MCP server is reached with a fetch, and
+  // the global one takes no agent — so this hands the transport a fetch built on
+  // node:https whose only socket factory is the CONNECT tunnel. Measured against
+  // the real Gmail and Calendar endpoints: the full StreamableHTTP lifecycle,
+  // SSE included, crosses the tunnel, and with the tunnel killed it throws
+  // instead of finding another way out.
   //
-  assertRoutableEgress(`the remote MCP connector at ${new URL(target.url).host}`);
   return new StreamableHTTPClientTransport(new URL(target.url), {
     requestInit: { headers: target.headers ?? {} },
     fetch: authorizedFetch(target),

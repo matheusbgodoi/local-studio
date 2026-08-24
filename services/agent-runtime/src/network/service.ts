@@ -41,6 +41,7 @@ import {
   jailEnvironment,
   jailSupported,
   unconfinedPaths,
+  type JailOptions,
   writeChromiumShim,
   writeProfile,
   writeShellShim,
@@ -50,6 +51,7 @@ import type { Agent as HttpAgent } from "node:http";
 import type { Agent as HttpsAgent } from "node:https";
 import { describeProvider, loadProfile, type WireGuardProfile } from "./provider";
 import { inProcessRoutingSupported, proxyAgents } from "./proxy-agent";
+import { tunnelledFetch } from "./tunnelled-fetch";
 import { resolveSingBoxBinary, startTunnel, type TunnelProcess } from "./sing-box";
 
 const PROXY_PORT = Number(process.env.LOCAL_STUDIO_EGRESS_PROXY_PORT ?? 47_318);
@@ -281,6 +283,19 @@ export class NetworkService {
     //
     if (!inProcessRoutingSupported()) return null;
     return proxyAgents(endpoint);
+  }
+
+  //
+  // The routed fetch, for in-process callers that need a fetch() rather than an
+  // Agent. Same discipline as httpAgents(): null means Direct (keep your own
+  // transport) or "this runtime cannot divert a socket" (refuse), never
+  // "go direct".
+  //
+  httpFetch(): typeof fetch | null {
+    const endpoint = this.proxyEndpoint();
+    if (!endpoint) return null;
+    if (!inProcessRoutingSupported()) return null;
+    return tunnelledFetch(endpoint);
   }
 
   proxyEndpoint(): string | null {

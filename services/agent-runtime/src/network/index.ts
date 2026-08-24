@@ -41,19 +41,24 @@ export function protectedHttpAgents(): ReturnType<NetworkService["httpAgents"]> 
 }
 
 //
-// For an in-process egress path that has NOT been taught to use the tunnel.
+// The fetch an in-process caller acting for the agent must use.
 //
-// Node's global fetch takes no agent, so a caller built on it cannot be routed
-// without either a dependency this package does not declare or a global
-// dispatcher that would drag model inference and controller traffic through the
-// VPN as well. Until such a caller is converted, the honest behaviour is to
-// refuse it while protection is demanded rather than let it out directly — a
-// broken connector is recoverable, a silent leak is not.
+// Three answers, and none of them is "go direct while protected":
 //
-export function assertRoutableEgress(what: string): void {
+//   Direct                      -> the global fetch, untouched.
+//   Protected, routable         -> a fetch whose only socket factory is the
+//                                  CONNECT tunnel.
+//   Protected, not routable     -> throws. Under Bun an Agent's createConnection
+//                                  override is ignored, so a "routed" request
+//                                  would silently go direct; refusing is the
+//                                  only honest answer there.
+//
+export function protectedFetch(what: string): typeof fetch {
   const network = networkService();
-  if (!network.protectionDemanded()) return;
+  if (!network.protectionDemanded()) return fetch;
+  const routed = network.httpFetch();
+  if (routed) return routed;
   throw new Error(
-    `${what} cannot be confined to the protected tunnel, so it was refused while VPN Protected is active`,
+    `${what} cannot be confined to the protected tunnel on this runtime, so it was refused while VPN Protected is active`,
   );
 }

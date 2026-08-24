@@ -111,12 +111,29 @@ export function inProcessRoutingSupported(): boolean {
   return typeof (globalThis as { Bun?: unknown }).Bun === "undefined";
 }
 
-export function proxyAgents(endpoint: string): { http: HttpAgent; https: HttpsAgent } {
-  const existing = cache.get(endpoint);
+//
+// Keyed by purpose as well as endpoint.
+//
+// The reader's pool caps at eight sockets, which is right for short bounded
+// fetches. A StreamableHTTP MCP connection holds a standing SSE stream open plus
+// one socket per in-flight call, so eight is a starvation limit rather than a
+// safety one — measured, the ninth same-origin request never got a response.
+// Streaming callers get an uncapped pool, which is what node's global fetch gave
+// them before they were routed.
+//
+export function proxyAgents(
+  endpoint: string,
+  purpose: "bounded" | "streaming" = "bounded",
+): { http: HttpAgent; https: HttpsAgent } {
+  const key = `${purpose}:${endpoint}`;
+  const existing = cache.get(key);
   if (existing) return existing;
 
   const proxy = parseEndpoint(endpoint);
-  const options: AgentOptions = { keepAlive: true, maxSockets: 8 };
+  const options: AgentOptions = {
+    keepAlive: true,
+    ...(purpose === "streaming" ? {} : { maxSockets: 8 }),
+  };
 
   //
   // createConnection is replaced on the instance rather than by subclassing:
@@ -157,6 +174,6 @@ export function proxyAgents(endpoint: string): { http: HttpAgent; https: HttpsAg
     http: tunnelled(new HttpAgent(options), false),
     https: tunnelled(new HttpsAgent(options), true),
   };
-  cache.set(endpoint, agents);
+  cache.set(key, agents);
   return agents;
 }
