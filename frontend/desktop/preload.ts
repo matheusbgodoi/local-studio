@@ -10,6 +10,11 @@ const bridge: DesktopBridge = {
   getUpdateStatus: () => ipcRenderer.invoke("desktop:get-update-status"),
   startUpdate: () => ipcRenderer.invoke("desktop:start-update"),
   openDirectory: () => ipcRenderer.invoke("desktop:open-directory"),
+  saveTextFile: (request) => ipcRenderer.invoke("desktop:save-text-file", request),
+  generateSessionTitle: (excerpt, locale) =>
+    ipcRenderer.invoke("desktop:generate-session-title", excerpt, locale),
+  getRemoteAccessInfo: () => ipcRenderer.invoke("desktop:get-remote-access-info"),
+  copyRemoteAccessToken: () => ipcRenderer.invoke("desktop:copy-remote-access-token"),
   getPathForFile: (file) => webUtils.getPathForFile(file),
   probeDictation: (locale: string) => ipcRenderer.invoke("desktop:dictation-probe", locale),
   startDictation: (locale: string) => ipcRenderer.invoke("desktop:dictation-start", locale),

@@ -90,6 +90,26 @@ export interface KittylitterCopyResult {
   error?: string;
 }
 
+export interface SaveTextFileRequest {
+  defaultFileName: string;
+  content: string;
+}
+
+export interface SaveTextFileResult {
+  ok: boolean;
+  canceled?: boolean;
+  filePath?: string;
+  error?: string;
+}
+
+export type SessionTitleResult = { ok: true; title: string } | { ok: false; reason: string };
+
+export interface RemoteAccessInfo {
+  enabled: boolean;
+  url: string | null;
+  tokenAvailable: boolean;
+}
+
 /** On-device dictation. The audio never enters the renderer and never leaves the machine —
  *  the helper opens the microphone itself and only ever sends back text. */
 export type DictationProbeResult = {
@@ -130,6 +150,10 @@ export interface DesktopBridge {
   getUpdateStatus(): Promise<DesktopUpdateSnapshot>;
   startUpdate(): Promise<DesktopUpdateSnapshot>;
   openDirectory(): Promise<ProjectEntry | null>;
+  saveTextFile(request: SaveTextFileRequest): Promise<SaveTextFileResult>;
+  generateSessionTitle(excerpt: string, locale: string): Promise<SessionTitleResult>;
+  getRemoteAccessInfo(): Promise<RemoteAccessInfo>;
+  copyRemoteAccessToken(): Promise<{ ok: boolean }>;
   getPathForFile(file: File): string;
   listProjects(): Promise<ProjectEntry[]>;
   addProject(directoryPath: string): Promise<ProjectEntry>;

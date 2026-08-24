@@ -1,2 +1,3 @@
-# The compiled helper is a build artefact, not source. build.sh makes it.
+# The compiled helpers are build artefacts, not source. build.sh makes them.
 LocalStudioDictation
+LocalStudioTitle

@@ -35,14 +35,16 @@ files:
   - "!node_modules/@playwright/**"
 
 extraResources:
-  # The on-device dictation helper. A standalone Swift executable rather than a native Node
-  # addon: this repository has no node-gyp, no node-addon-api and no electron-rebuild, and a
-  # helper spawned over stdio needs none of them and does not have to be rebuilt when Electron
-  # moves. Built by desktop/speech/build.sh; see the header of LocalStudioDictation.swift.
+  # The on-device helpers: dictation, and conversation titles. Standalone Swift executables
+  # rather than native Node addons: this repository has no node-gyp, no node-addon-api and no
+  # electron-rebuild, and a helper spawned over stdio needs none of them and does not have to be
+  # rebuilt when Electron moves. Both built by desktop/speech/build.sh; see the header of
+  # LocalStudioDictation.swift and of LocalStudioTitle.swift.
   #
-  # It has to be OPTIONAL: it only exists after that script has run, and only on macOS. A build
-  # without it must still succeed and produce an app whose dictation button is simply absent —
-  # the correct degradation, and not a button that fails when pressed.
+  # They have to be OPTIONAL: they only exist after that script has run, and only on macOS. A
+  # build without them must still succeed and produce an app whose dictation button is simply
+  # absent and whose session titles stay the derived ones — the correct degradation, and not a
+  # button that fails when pressed.
   #
   # Expressed as a directory plus a filter, not as `optional: true`. `optional` is not a key
   # electron-builder knows: it does not warn about it, it just fails the whole FileSet against
@@ -53,6 +55,7 @@ extraResources:
     to: speech
     filter:
       - LocalStudioDictation
+      - LocalStudioTitle
   - from: desktop/resources/app-update.yml
     to: app-update.yml
   - from: ../services/agent-runtime/dist/standalone.mjs

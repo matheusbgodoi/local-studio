@@ -10,6 +10,7 @@ import {
   type BrowserWindow,
 } from "electron";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { DesktopAppState } from "./types";
 import { DESKTOP_CONFIG } from "./configs";
@@ -18,6 +19,8 @@ import { log } from "./helpers/logger";
 import { isHttpUrl } from "./helpers/url";
 import { createMainWindow } from "./logic/window-manager";
 import { probeDictation, startDictation, stopDictation } from "./logic/dictation";
+import { generateSessionTitle } from "./logic/session-title";
+import { readFrontendToken, readRemoteHost } from "./logic/frontend-token";
 import { registerNavigationPolicy } from "./logic/security";
 import { startFrontendServer, stopFrontendServer, type ServerHandle } from "./logic/app-server";
 import {
@@ -361,6 +364,54 @@ function registerIpcHandlers(): void {
       log.error(`Failed to add project from dialog: ${String(error)}`);
       throw error;
     }
+  });
+
+  ipcMain.handle("desktop:save-text-file", async (_, request: unknown) => {
+    const payload = (request ?? {}) as { defaultFileName?: unknown; content?: unknown };
+    if (typeof payload.content !== "string") return { ok: false, error: "Nothing to save." };
+    const suggested =
+      typeof payload.defaultFileName === "string" && payload.defaultFileName.trim()
+        ? path.basename(payload.defaultFileName.trim())
+        : "export.txt";
+    const options = { defaultPath: path.join(app.getPath("downloads"), suggested) };
+    const owner = mainWindow ?? undefined;
+    const result = owner
+      ? await dialog.showSaveDialog(owner, options)
+      : await dialog.showSaveDialog(options);
+    if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+    try {
+      await writeFile(result.filePath, payload.content, "utf8");
+      return { ok: true, filePath: result.filePath };
+    } catch (error) {
+      log.error(`Failed to save file from dialog: ${String(error)}`);
+      return { ok: false, error: "The file could not be written." };
+    }
+  });
+
+  ipcMain.handle("desktop:generate-session-title", async (_, excerpt: unknown, locale: unknown) => {
+    if (typeof excerpt !== "string" || typeof locale !== "string") {
+      return { ok: false, reason: "invalid_request" };
+    }
+    const safeLocale = locale.trim().slice(0, 64) || "en-US";
+    return generateSessionTitle(excerpt.slice(0, 6000), safeLocale);
+  });
+
+  ipcMain.handle("desktop:get-remote-access-info", () => {
+    const userData = app.getPath("userData");
+    const host = readRemoteHost(userData);
+    const tokenAvailable = Boolean(readFrontendToken(userData));
+    return {
+      enabled: Boolean(host && tokenAvailable),
+      url: host ? `https://${host}/agent` : null,
+      tokenAvailable,
+    };
+  });
+
+  ipcMain.handle("desktop:copy-remote-access-token", () => {
+    const token = readFrontendToken(app.getPath("userData"));
+    if (!token) return { ok: false };
+    clipboard.writeText(token);
+    return { ok: true };
   });
 
   ipcMain.handle(
