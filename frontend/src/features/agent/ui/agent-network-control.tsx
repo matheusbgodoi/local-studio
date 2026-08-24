@@ -19,8 +19,13 @@ import {
   observationLabel,
   tunnelLabel,
 } from "@/features/agent/network/network-labels";
-import { setSessionNetworkPolicy } from "@/features/agent/network/network-status-store";
+import {
+  refreshNetworkStatus,
+  setSessionNetworkPolicy,
+} from "@/features/agent/network/network-status-store";
 import { useNetworkStatus } from "@/features/agent/network/use-network-status";
+import { importNetworkProvider } from "@/features/agent/network/network-api";
+import { Effect } from "effect";
 
 //
 // The network control for ONE conversation, sitting next to the model control
@@ -183,9 +188,93 @@ export function AgentNetworkControl({
 
           <div className={POPOVER_SEPARATOR_CLASS} />
 
-          <NetworkDetails status={status} loading={loading} error={error} policy={policy} />
+          {status && !status.configured ? (
+            <ProviderImport onImported={() => void refreshNetworkStatus()} />
+          ) : (
+            <NetworkDetails status={status} loading={loading} error={error} policy={policy} />
+          )}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+//
+// Protection cannot be turned on without a provider, and until this existed the
+// only way to supply one was curl — a feature with no way in. It appears exactly
+// when `configured` is false, which is also the state the 409 refusal reports,
+// so the answer to "why won't it turn on" is in the same place as the question.
+//
+// The configuration is pasted rather than picked from disk: the runtime reads
+// the TEXT and keeps the keys itself, a file path would have to be read by the
+// browser anyway, and nothing here should hold a private key longer than the
+// request that carries it.
+//
+function ProviderImport({ onImported }: { onImported: () => void }) {
+  const [config, setConfig] = useState("");
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = (): void => {
+    if (!config.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    void Effect.runPromise(importNetworkProvider(config, name.trim() || "WireGuard"))
+      .then((outcome) => {
+        if (outcome.accepted) {
+          //
+          // Cleared on success so the key material does not sit in a React state
+          // tree for the rest of the session.
+          //
+          setConfig("");
+          setName("");
+          onImported();
+          return;
+        }
+        setError(outcome.error);
+      })
+      .catch((cause: unknown) => {
+        setError(
+          cause instanceof Error ? cause.message : "The configuration could not be imported",
+        );
+      })
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <div className="px-2.5 pb-2 pt-1">
+      <p className="text-[length:var(--fs-xs)] text-(--fg)">No VPN configuration imported</p>
+      <p className="mt-1 text-[length:var(--fs-xs)] leading-relaxed text-(--dim)">
+        Paste a WireGuard configuration from your provider. It must route everything (
+        <span className="font-mono">AllowedIPs</span> including{" "}
+        <span className="font-mono">0.0.0.0/0</span>) — a split tunnel would leave a direct path.
+      </p>
+      <input
+        value={name}
+        onChange={(event) => setName(event.currentTarget.value)}
+        placeholder="Name (optional)"
+        className="mt-2 w-full rounded-md border border-(--border) bg-(--bg) px-2 py-1 text-[length:var(--fs-xs)] text-(--fg) placeholder:text-(--dim)"
+      />
+      <textarea
+        value={config}
+        onChange={(event) => setConfig(event.currentTarget.value)}
+        spellCheck={false}
+        rows={5}
+        placeholder={
+          "[Interface]\nPrivateKey = …\nAddress = …\n\n[Peer]\nPublicKey = …\nEndpoint = host:port\nAllowedIPs = 0.0.0.0/0, ::/0"
+        }
+        className="mt-1.5 w-full resize-none rounded-md border border-(--border) bg-(--bg) px-2 py-1 font-mono text-[length:var(--fs-2xs)] leading-relaxed text-(--fg) placeholder:text-(--dim)"
+      />
+      {error ? <p className="mt-1 text-[length:var(--fs-xs)] text-(--err)">{error}</p> : null}
+      <button
+        type="button"
+        onClick={submit}
+        disabled={busy || !config.trim()}
+        className="mt-1.5 inline-flex h-7 items-center rounded-md bg-(--active) px-2.5 text-[length:var(--fs-xs)] text-(--fg) hover:bg-(--hover) disabled:opacity-40"
+      >
+        {busy ? "Importing…" : "Import configuration"}
+      </button>
     </div>
   );
 }

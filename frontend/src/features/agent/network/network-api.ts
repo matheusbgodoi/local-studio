@@ -1,6 +1,7 @@
 //
-// The client half of the network surface. Two calls: read what is true, and ask
-// for what this conversation wants.
+// The client half of the network surface. Three calls: read what is true, ask
+// for what this conversation wants, and import the provider configuration that
+// makes protection possible at all.
 //
 // Every response is decoded through the shared schema rather than cast, because
 // this is the one payload in the app whose fields are read as a safety claim: a
@@ -38,6 +39,62 @@ const decodeRefusal = Schema.decodeUnknownOption(NetworkPolicyRefusalSchema);
 export type NetworkPolicyOutcome =
   | { accepted: true; status: NetworkStatus }
   | { accepted: false; error: string; status: NetworkStatus | null };
+
+const ProviderResponseSchema = Schema.Struct({
+  ok: Schema.Boolean,
+  provider: Schema.NullOr(
+    Schema.Struct({
+      name: Schema.String,
+      protocol: Schema.String,
+      endpointHost: Schema.String,
+      fullTunnel: Schema.Boolean,
+      hasIpv6: Schema.Boolean,
+    }),
+  ),
+});
+
+const decodeProvider = Schema.decodeUnknownSync(ProviderResponseSchema);
+
+export type ImportedProvider = typeof ProviderResponseSchema.Type.provider;
+
+export type ProviderImportOutcome =
+  | { accepted: true; provider: ImportedProvider }
+  | { accepted: false; error: string };
+
+//
+// The configuration text is sent once and never read back — the runtime keeps
+// the keys and returns only a description of them. A rejection carries the
+// validator's own words ("AllowedIPs must include 0.0.0.0/0", "PrivateKey is
+// not a valid WireGuard key") because those tell the owner what to fix.
+//
+export function importNetworkProvider(
+  config: string,
+  name: string,
+): Effect.Effect<ProviderImportOutcome, Error> {
+  return Effect.tryPromise({
+    try: async (): Promise<ProviderImportOutcome> => {
+      const response = await fetch("/api/agent/network/provider", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ config, name }),
+      });
+      const payload = (await response.json().catch(() => null)) as { error?: unknown } | null;
+      if (!response.ok) {
+        return {
+          accepted: false,
+          error:
+            typeof payload?.error === "string"
+              ? payload.error
+              : `The configuration was refused (HTTP ${response.status})`,
+        };
+      }
+      return { accepted: true, provider: decodeProvider(payload).provider };
+    },
+    catch: (error) =>
+      error instanceof Error ? error : new Error("Failed to import the configuration"),
+  });
+}
 
 export function loadNetworkStatus(): Effect.Effect<NetworkStatus, Error> {
   return Effect.tryPromise({
