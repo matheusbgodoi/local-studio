@@ -55,8 +55,16 @@ import { resolveSingBoxBinary, startTunnel, type TunnelProcess } from "./sing-bo
 const PROXY_PORT = Number(process.env.LOCAL_STUDIO_EGRESS_PROXY_PORT ?? 47_318);
 const CLASH_PORT = Number(process.env.LOCAL_STUDIO_EGRESS_CLASH_PORT ?? 47_319);
 const ATTEST_INTERVAL_MS = 15_000;
-const ATTEST_TIMEOUT_MS = 6_000;
-const START_GRACE_MS = 20_000;
+//
+// While the tunnel is coming up the handshake and the first route can take
+// several seconds, and a 15s cadence means the difference between "protected"
+// and "still starting" is decided by which side of a tick the handshake landed
+// on. During the grace window it is polled densely instead, so the state the
+// owner sees settles in about as long as the tunnel actually takes.
+//
+const ATTEST_STARTUP_INTERVAL_MS = 2_000;
+const ATTEST_TIMEOUT_MS = 10_000;
+const START_GRACE_MS = 30_000;
 
 export type NetworkEvent =
   | "network.policy.changed"
@@ -332,17 +340,28 @@ export class NetworkService {
 
   private startAttesting(): void {
     this.stopAttesting();
-    const tick = (): void => {
-      void this.measure();
+    const schedule = (): void => {
+      const starting = Date.now() - this.startedAtMs < START_GRACE_MS;
+      const delay = starting ? ATTEST_STARTUP_INTERVAL_MS : ATTEST_INTERVAL_MS;
+      this.timer = setTimeout(() => {
+        void this.measure().finally(() => {
+          if (this.protectionDemanded()) schedule();
+        });
+      }, delay);
+      this.timer.unref?.();
     };
-    this.timer = setInterval(tick, ATTEST_INTERVAL_MS);
-    this.timer.unref?.();
-    tick();
+    void this.measure().finally(() => {
+      if (this.protectionDemanded()) schedule();
+    });
+  }
+
+  private stopAttestingTimer(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
   }
 
   private stopAttesting(): void {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
+    this.stopAttestingTimer();
   }
 
   private async measure(): Promise<void> {

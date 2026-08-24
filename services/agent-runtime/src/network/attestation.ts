@@ -109,12 +109,23 @@ async function readExitAddress(
   port: number,
   timeoutMs: number,
 ): Promise<{ ip: string | null; country: string | null }> {
-  const response = await plainProxyGet(port, "http://ip-api.com/line/?fields=query,countryCode", timeoutMs);
+  const response = await plainProxyGet(
+    port,
+    "http://ip-api.com/line/?fields=query,countryCode",
+    timeoutMs,
+  );
   if (!response) return { ip: null, country: null };
-  const [ip, country] = response.split(/\r?\n/).map((line) => line.trim());
+  //
+  // Matched by shape, not by position. The service returns the fields in its own
+  // order rather than the order they were requested in, so reading line 0 as the
+  // address yields a country code that then fails every check downstream and
+  // leaves the state stuck short of PROTECTED. The acceptance run caught exactly
+  // that, against a working tunnel.
+  //
+  const lines = response.split(/\r?\n/).map((line) => line.trim());
   return {
-    ip: ip && IPV4.test(ip) ? ip : null,
-    country: country && /^[A-Z]{2}$/.test(country) ? country : null,
+    ip: lines.find((line) => IPV4.test(line)) ?? null,
+    country: lines.find((line) => /^[A-Z]{2}$/.test(line)) ?? null,
   };
 }
 
@@ -193,7 +204,30 @@ export async function attest(
     };
   }
 
+  //
+  // A CONNECT that returns 200 is NOT proof that anything works. sing-box
+  // accepts and acknowledges the CONNECT before the upstream is established, so
+  // a tunnel whose peer is unreachable answers 200 and then carries nothing.
+  // Measured against a peer in TEST-NET-1: every CONNECT succeeded while no
+  // request completed. Treating that as evidence would be exactly the
+  // "unknown becomes Protected" this file exists to prevent.
+  //
+  // The exit-address read is the weakest thing that proves a full request and a
+  // full response crossed the tunnel, so it — not the CONNECT — is what every
+  // positive observation below is derived from.
+  //
   const exit = await readExitAddress(targets.proxyPort, targets.timeoutMs);
+  if (!exit.ip) {
+    return {
+      proxyReachable: true,
+      exitIp: null,
+      exitCountry: null,
+      dns: "unavailable",
+      ipv4: "unavailable",
+      ipv6: "unavailable",
+      detail: "the tunnel accepted a connection but no request completed through it",
+    };
+  }
 
   //
   // IPv6 is measured when the tunnel claims to carry it, and only reported as
@@ -209,11 +243,9 @@ export async function attest(
     : ("blocked" as const);
 
   //
-  // A name was resolved and a connection reached the far side, both through the
-  // tunnel and neither possible on the machine's own resolver from inside the
-  // jail, so DNS and IPv4 are attested rather than assumed. Without an exit
-  // address the connection still proved the path, but the claim is weaker and
-  // the caller downgrades to DEGRADED on the missing field.
+  // A name was resolved and a whole response came back, both through the tunnel
+  // and neither possible on the machine's own resolver from inside the jail, so
+  // DNS and IPv4 are attested rather than assumed.
   //
   return {
     proxyReachable: true,
