@@ -42,6 +42,17 @@ export type Attestation = {
 
 const IPV4 = /^(\d{1,3}\.){3}\d{1,3}$/;
 
+//
+// More than one, because a single free echo service is a single point of
+// failure for the whole claim — and these rate-limit. Tried in order until one
+// yields something that looks like an address.
+//
+const EXIT_SOURCES = [
+  "http://ip-api.com/line/?fields=query,countryCode",
+  "http://checkip.amazonaws.com/",
+  "http://icanhazip.com/",
+];
+
 function proxyReachable(port: number, timeoutMs: number): Promise<boolean> {
   return new Promise((resolve) => {
     const socket = connect({ host: "127.0.0.1", port });
@@ -109,11 +120,13 @@ async function readExitAddress(
   port: number,
   timeoutMs: number,
 ): Promise<{ ip: string | null; country: string | null }> {
-  const response = await plainProxyGet(
-    port,
-    "http://ip-api.com/line/?fields=query,countryCode",
-    timeoutMs,
-  );
+  let response: string | null = null;
+  for (const source of EXIT_SOURCES) {
+    response = await plainProxyGet(port, source, timeoutMs);
+    if (response && IPV4.test(response.split(/\r?\n/)[0]?.trim() ?? "")) break;
+    if (response && response.split(/\r?\n/).some((line) => IPV4.test(line.trim()))) break;
+    response = null;
+  }
   if (!response) return { ip: null, country: null };
   //
   // Matched by shape, not by position. The service returns the fields in its own
@@ -129,7 +142,25 @@ async function readExitAddress(
   };
 }
 
-function plainProxyGet(port: number, url: string, timeoutMs: number): Promise<string | null> {
+//
+// Whether a whole request and response cross the tunnel, independent of what
+// the response says. Any well-formed HTTP status line is enough — this is the
+// health question, not the telemetry one.
+//
+async function carriesTraffic(port: number, timeoutMs: number): Promise<boolean> {
+  for (const source of EXIT_SOURCES) {
+    const raw = await plainProxyGet(port, source, timeoutMs, true);
+    if (raw !== null) return true;
+  }
+  return false;
+}
+
+function plainProxyGet(
+  port: number,
+  url: string,
+  timeoutMs: number,
+  headersOnly = false,
+): Promise<string | null> {
   const target = new URL(url);
   return new Promise((resolve) => {
     const socket = connect({ host: "127.0.0.1", port });
@@ -156,6 +187,7 @@ function plainProxyGet(port: number, url: string, timeoutMs: number): Promise<st
       raw += chunk.toString("utf8");
     });
     socket.once("close", () => {
+      if (headersOnly) return finish(/^HTTP\/1\.[01] \d{3}/.test(raw) ? "" : null);
       const split = raw.indexOf("\r\n\r\n");
       finish(split < 0 ? null : raw.slice(split + 4).trim());
     });
@@ -212,12 +244,15 @@ export async function attest(
   // request completed. Treating that as evidence would be exactly the
   // "unknown becomes Protected" this file exists to prevent.
   //
-  // The exit-address read is the weakest thing that proves a full request and a
-  // full response crossed the tunnel, so it — not the CONNECT — is what every
-  // positive observation below is derived from.
+  // So health is a COMPLETED request and response — and it is deliberately
+  // separate from reading the exit address. Those are different claims, and
+  // conflating them made a rate-limited echo service look like a dead tunnel:
+  // a perfectly healthy connection reported BLOCKED, which pauses protected
+  // work for a telemetry failure. Attestation may downgrade the claim; it must
+  // not take down the boundary's verdict on itself.
   //
-  const exit = await readExitAddress(targets.proxyPort, targets.timeoutMs);
-  if (!exit.ip) {
+  const carries = await carriesTraffic(targets.proxyPort, targets.timeoutMs);
+  if (!carries) {
     return {
       proxyReachable: true,
       exitIp: null,
@@ -228,6 +263,7 @@ export async function attest(
       detail: "the tunnel accepted a connection but no request completed through it",
     };
   }
+  const exit = await readExitAddress(targets.proxyPort, targets.timeoutMs);
 
   //
   // IPv6 is measured when the tunnel claims to carry it, and only reported as

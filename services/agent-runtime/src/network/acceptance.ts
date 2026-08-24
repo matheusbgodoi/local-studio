@@ -24,6 +24,8 @@
 //
 
 import { spawnSync } from "node:child_process";
+import path from "node:path";
+import { resolveDataDir } from "../data-dir";
 import { networkService } from "./index";
 import { jailSupported } from "./jail";
 import { resolveSingBoxBinary } from "./sing-box";
@@ -36,7 +38,13 @@ type Check = {
   note: string;
 };
 
-const IP_ECHO = "http://ip-api.com/line/?fields=query";
+//
+// A plain-text echo that answers with nothing but an address. Chosen over the
+// richer ip-api because that one rate-limits, and a rate-limited probe reads as
+// a failed one — which during development turned a healthy tunnel into four
+// FAILs and an alarming report.
+//
+const IP_ECHO = "http://checkip.amazonaws.com/";
 
 function mask(ip: string | null): string {
   if (!ip) return "not measured";
@@ -102,6 +110,12 @@ function probe(
 //
 // A blocked probe is a PASS. This is the half of the suite that proves the
 // absence of a fallback, and "it worked" would be the failure.
+//
+// The command must bypass the proxy environment explicitly. curl honours
+// HTTP_PROXY for http:// URLs, and protection sets it — so a probe that merely
+// omits `--proxy` is not testing the direct path at all. It measured as a leak
+// once the supervisor restarted the tunnel underneath it, which is how the
+// mistake surfaced: the probe reported a breach the boundary had not had.
 //
 function blockedProbe(name: string, command: string, directIp: string | null): Check {
   const output = jailedShell(command, 20_000);
@@ -233,15 +247,48 @@ export async function runAcceptance(): Promise<number> {
   });
 
   //
+  // The two spawn sites whose stdio this repo does NOT own — the SDK's bash tool
+  // and Playwright's pipe transport — can change under a version bump without
+  // anyone here noticing, and a descriptor that crosses the boundary stays
+  // writable because Seatbelt hooks connect and not write. So it is re-measured
+  // rather than assumed: a jailed child must hold no AF_INET/AF_INET6 descriptor
+  // at all.
+  //
+  const strayFds = jailedShell("/usr/sbin/lsof -nP -a -i -p $$ 2>/dev/null | tail -n +2");
+  checks.push({
+    name: "no inherited socket",
+    outcome: strayFds.trim() === "" ? "PASS" : "FAIL",
+    note:
+      strayFds.trim() === ""
+        ? "a jailed child holds no network descriptor at exec"
+        : "a descriptor crossed the boundary",
+  });
+
+  //
   // The most important check in the file. The tunnel is killed with real work
   // in flight, and every path is asked again. All of them must fail, and none
   // of them may come back carrying the direct address.
   //
   const killed = await killTunnel();
   if (killed) {
-    checks.push(blockedProbe("kill switch: curl", curlIp, directIp));
+    //
+    // Deliberately NOT the proxied path: the supervisor re-engages a killed
+    // tunnel, so "the proxy is down" is a race, while "there is no direct path"
+    // is the invariant and stays true either way.
+    //
     checks.push(
-      blockedProbe("kill switch: direct curl", `curl -s -m 10 ${IP_ECHO}`, directIp),
+      blockedProbe(
+        "kill switch: no direct curl",
+        `curl -s -m 10 --noproxy '*' ${IP_ECHO}`,
+        directIp,
+      ),
+    );
+    checks.push(
+      blockedProbe(
+        "kill switch: no direct wget",
+        `env -u HTTP_PROXY -u http_proxy -u ALL_PROXY -u all_proxy curl -s -m 10 ${IP_ECHO}`,
+        directIp,
+      ),
     );
     checks.push(
       blockedProbe(
@@ -298,10 +345,18 @@ function waitForState(wanted: readonly string[], timeoutMs: number): Promise<voi
   });
 }
 
+//
+// Kills OUR tunnel, matched by the config file this runtime wrote, not every
+// sing-box on the machine. A blanket `pkill -f "sing-box run"` also killed
+// unrelated instances — including, while developing this, the peer the harness
+// was measuring against, which then failed every subsequent run for a reason
+// that had nothing to do with the code.
+//
 async function killTunnel(): Promise<boolean> {
   const before = networkService().currentState();
   if (before === "DIRECT" || before === "ERROR") return false;
-  spawnSync("/bin/sh", ["-c", "pkill -f 'sing-box run' || true"], { encoding: "utf8" });
+  const config = path.join(resolveDataDir(), "network", "sing-box.json");
+  spawnSync("/bin/sh", ["-c", `pkill -f ${JSON.stringify(config)} || true`], { encoding: "utf8" });
   await waitForState(["BLOCKED", "ERROR", "STARTING"], 15_000);
   return true;
 }

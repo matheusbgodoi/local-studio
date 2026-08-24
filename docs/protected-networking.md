@@ -177,7 +177,7 @@ mode *working* and protected mode merely *blocking*.
 | page JS, XHR, fetch, WebSockets | inside the Chromium process, therefore inside its jail | kernel |
 | subagents | in-process sessions whose tools spawn through the wrapped sites | kernel |
 | `browser_search`, reader (`fetchReadable`, `fetchPublicDocument`) | CONNECT agent in `proxy-agent.ts`; refused outright when the tunnel is down | **code** |
-| remote (HTTP) MCP connectors | refused while protection is on | **refused** |
+| remote (HTTP) MCP connectors, Google OAuth | `tunnelledFetch` on node:https over the CONNECT agent | **code** |
 | the desktop app's own terminal (Electron PTY) | not confined — see §10.6 | **none** |
 
 The last row is the honest one. See §10.
@@ -265,17 +265,27 @@ the failure mode this design exists to make impossible.
 Stated plainly, surfaced in the status popover as `unconfinedPaths`, and not
 rounded up.
 
-1. **In-process HTTP is routed in code, not confined by the kernel.** The reader
-   and search client run inside the agent-runtime process, which cannot be
-   jailed — it has to keep reaching the local controller and a model backend
-   that may live on Tailscale, and a jail permitting those would permit most of
-   the machine. They are fail-closed the same way (the request goes through the
-   tunnel or is not sent), but that is enforced by code discipline rather than
-   by the kernel.
-2. **A socket connected before the jail and passed in as a file descriptor stays
+1. **In-process HTTP is routed in code, not confined by the kernel.** The
+   reader, the search client, remote MCP connectors and the Google OAuth
+   endpoints all run inside the agent-runtime process, which cannot be jailed —
+   it has to keep reaching the local controller and a model backend that may
+   live on Tailscale, and a jail permitting those would permit most of the
+   machine. They are fail-closed the same way — every socket comes from an Agent
+   whose only factory is the CONNECT tunnel, so with the tunnel down the request
+   throws rather than finding another route — but that is enforced by code
+   discipline rather than by the kernel. Routing the connectors *widened* this
+   category rather than shrinking it: they used to be refused outright, which was
+   safer and less useful.
+2. **A socket connected before the jail and handed in as a descriptor would stay
    writable.** Seatbelt hooks `connect`/`sendto`/`bind`, not `write` on an
-   established socket. This requires a cooperating unjailed helper; the runtime
-   does not pass descriptors into jailed children.
+   established socket. **MEASURED:** no spawn site passes one. The model's bash
+   tool gets fd 0 on /dev/null and fds 1–2 as socketpairs; the PTY gets three
+   descriptors that are all the pty slave; MCP stdio gets three socketpairs;
+   Chromium gets fd 0 on /dev/null and fds 1–4 as anonymous AF_UNIX socketpairs
+   whose only peer is the runtime and which cannot be given an address at all.
+   `assertNoInheritedDescriptors()` rejects the only two shapes that could carry
+   one — the string `inherit` and a numeric fd — and the acceptance run
+   re-checks it, because two of those sites have stdio this repo does not own.
 3. **Chromium runs without its own sandbox — in BOTH modes, and protection is
    not the cause.** playwright-core appends `--no-sandbox` whenever
    `chromiumSandbox !== true`, and this repo has never set it, so Direct mode
