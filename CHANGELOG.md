@@ -7,6 +7,27 @@ and is not repeated here.
 Versioning is `<upstream base>-local.<n>` — see
 [`docs/upstream-updates.md`](docs/upstream-updates.md).
 
+## v2.1.0-local.13 — 2026-08-23
+
+The autonomous control plane, qualified against the final Phase 4 host. Base:
+upstream **2.1.0**. Source only; no binary is published.
+
+- **A task now settles when its evidence closes, not one inference later.** The
+  runtime only adjudicated between turns, and this model does thirty tool calls
+  inside one. A task reported with every criterion satisfied stayed `RUNNING`,
+  its dependents stayed `BLOCKED` with the edges already gone, and the model
+  burned two plan revisions working around a gate that had in fact been met.
+  Readiness is now derived wherever the shape of a plan changes, and the
+  dependency guard asks the dependencies themselves rather than a stored label.
+- **Losing the backend pauses a run instead of ending it.** The machine serving
+  the model dropped off the network mid-run; the drive loop threw `fetch
+  failed` and the run went to `FAILED`, which is terminal — three proved tasks
+  and two checkpoints became unreachable. A lost backend is now the same
+  accident as a lost process and takes the same road: reconcile, keep every
+  proved task, reopen as `PAUSED`. Only an error about the *work* ends a run.
+- [`docs/durable-agentic-runtime.md`](docs/durable-agentic-runtime.md) records
+  the final acceptance run against the released Phase 4 host.
+
 ## v2.1.0-local.12 — 2026-08-22
 
 Base: upstream **2.1.0**. Source only; no binary is published.
