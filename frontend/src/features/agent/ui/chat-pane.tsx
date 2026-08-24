@@ -28,6 +28,7 @@ import {
   skillInvocationText,
 } from "@/features/agent/composer/skill-invocation-commands";
 import { mcpCommandProvider } from "@/features/agent/composer/mcp-commands";
+import { transcriptCommandProvider } from "@/features/agent/composer/transcript-commands";
 import { setSessionConnectors } from "@/features/agent/tools/connector-session-api";
 import {
   createComposerCommandRegistry,
@@ -151,6 +152,7 @@ import {
   type TerminalOwnersSnapshot,
 } from "@/features/agent/ui/use-persistent-terminal-owners";
 import { PersistentTerminals } from "@/features/agent/ui/persistent-terminals";
+import { saveTextFile } from "@/lib/save-text-file";
 import { cx } from "@/ui/utils";
 import { ExtensionUiDialog } from "@/features/agent/ui/extension-ui-dialog";
 import {
@@ -164,19 +166,6 @@ const Timeline = dynamic(
   () => import("@/features/agent/ui/timeline/timeline").then((mod) => mod.Timeline),
   { ssr: false, loading: () => <TimelineFallback /> },
 );
-
-function downloadTextFile(filename: string, content: string): void {
-  if (typeof document === "undefined") return;
-  const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
-}
 
 function EmptyPromptTimeline() {
   return (
@@ -515,7 +504,11 @@ export function ChatPane({
   const exportSession = useCallback(() => {
     if (!activeTab) return;
     const markdown = sessionToMarkdown(activeTab.messages, displayedSessionTitle);
-    downloadTextFile(exportFilenameFromTitle(displayedSessionTitle), markdown);
+    void saveTextFile(
+      exportFilenameFromTitle(displayedSessionTitle),
+      markdown,
+      "text/markdown;charset=utf-8",
+    );
   }, [activeTab, displayedSessionTitle]);
   const canExport = Boolean(
     activeTab?.messages.some((message) => message.role !== "system" && message.text.trim()),
@@ -614,10 +607,18 @@ export function ChatPane({
           openPlugins: () => router.push("/integrations"),
           ...(openTerminalAction ? { openTerminal: openTerminalAction } : {}),
           ...(onForkSession ? { forkSession: onForkSession } : {}),
-          ...(canExport ? { exportSession } : {}),
           goal: goalAction,
           enterGoalMode: () => setGoalModeOn(true),
         }),
+        ...(canExport && activeTab
+          ? [
+              transcriptCommandProvider({
+                messages: () => activeTab.messages,
+                title: () => displayedSessionTitle,
+                notify: noteInTranscript,
+              }),
+            ]
+          : []),
         mcpCommandProvider({
           connectors: tools.connectorCatalogue,
           active: activeConnectors,
@@ -639,13 +640,14 @@ export function ChatPane({
       ]),
     [
       activeConnectors,
+      activeTab,
       applyConnectorSelection,
       applySkill,
       applyTemplate,
       canExport,
       compactSession,
+      displayedSessionTitle,
       goalAction,
-      exportSession,
       noteInTranscript,
       onForkSession,
       openBrowserPanel,

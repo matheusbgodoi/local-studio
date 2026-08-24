@@ -21,6 +21,15 @@ interface Window {
       message?: string;
       progress?: number;
     }>;
+    saveTextFile?(
+      request: import("../desktop/interfaces").SaveTextFileRequest,
+    ): Promise<import("../desktop/interfaces").SaveTextFileResult>;
+    generateSessionTitle?(
+      excerpt: string,
+      locale: string,
+    ): Promise<import("../desktop/interfaces").SessionTitleResult>;
+    getRemoteAccessInfo?(): Promise<import("../desktop/interfaces").RemoteAccessInfo>;
+    copyRemoteAccessToken?(): Promise<{ ok: boolean }>;
     getKittylitterPairingJson?(): Promise<import("../desktop/interfaces").KittylitterPairingResult>;
     copyKittylitterPairingJson?(pairingJson: string): Promise<{
       ok: boolean;

@@ -1,7 +1,26 @@
-import { useCallback, useMemo } from "react";
-import { cleanSessionTitle, type SessionTab } from "@/features/agent/messages";
-import { patchCanonicalSessionPref } from "@/features/agent/messages/prefs";
+import { useCallback, useMemo, useRef } from "react";
+import {
+  cleanSessionTitle,
+  visibleUserTextFromPi,
+  type SessionTab,
+} from "@/features/agent/messages";
+import { loadSessionPrefs, patchCanonicalSessionPref } from "@/features/agent/messages/prefs";
+import { assistantContentCopyText } from "@/features/agent/ui/timeline/activity-grouping";
 import { useProjectsNavSessionPrefs } from "@/features/agent/ui/projects-nav/use-projects-nav-effects";
+import { useMountSubscription } from "@/hooks/use-mount-subscription";
+
+function titleExcerpt(tab: SessionTab | null): string {
+  if (!tab) return "";
+  const user = tab.messages.find((message) => message.role === "user");
+  const assistant = tab.messages.find((message) => message.role === "assistant");
+  if (!user || !assistant) return "";
+  const userText = visibleUserTextFromPi(user.text).trim();
+  const assistantText = (
+    assistant.text.trim() || assistantContentCopyText(assistant.blocks ?? []).trim()
+  ).slice(0, 4000);
+  if (!userText || !assistantText) return "";
+  return `User:\n${userText.slice(0, 1800)}\n\nAssistant:\n${assistantText}`;
+}
 
 export function useChatPaneSessionTitle({
   activeTab,
@@ -38,6 +57,37 @@ export function useChatPaneSessionTitle({
     ? ""
     : sessionPrefTitle || cleanSessionTitle(activeTab?.title) || "";
   const sessionPinned = sessionPrefKeys.some((key) => Boolean(sessionPrefs[key]?.pinned));
+  const generatedFor = useRef(new Set<string>());
+  const excerpt = titleExcerpt(activeTab);
+
+  useMountSubscription(() => {
+    const bridge = window.localStudioDesktop?.generateSessionTitle;
+    const piSessionId = activeTab?.piSessionId;
+    if (!bridge || !activeTab || !piSessionId || running || !excerpt || sessionPrefTitle) return;
+    if (generatedFor.current.has(piSessionId)) return;
+    generatedFor.current.add(piSessionId);
+    const tabId = activeTab.id;
+    const keys = [...sessionPrefKeys];
+    let cancelled = false;
+    void bridge(excerpt, navigator.language || "en-US")
+      .then((result) => {
+        if (cancelled || !result.ok) return;
+        const latest = loadSessionPrefs();
+        if (keys.some((key) => cleanSessionTitle(latest[key]?.title))) return;
+        const title = cleanSessionTitle(result.title);
+        if (!title) return;
+        onRenameSession(tabId, title);
+        patchCanonicalSessionPref(piSessionId, keys, { title });
+      })
+      .catch(() => generatedFor.current.delete(piSessionId))
+      .finally(() => {
+        if (cancelled) generatedFor.current.delete(piSessionId);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab?.id, activeTab?.piSessionId, excerpt, onRenameSession, running, sessionPrefTitle]);
+
   const patchActiveSessionPrefs = useCallback(
     (patch: { title?: string; pinned?: boolean }) => {
       const primary = activeTab?.piSessionId ?? localPrefKey ?? activeTab?.id;
