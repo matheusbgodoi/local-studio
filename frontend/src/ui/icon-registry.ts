@@ -19,7 +19,6 @@ export {
   ReloadIcon,
   StopIcon,
   FileIcon,
-  GlobeIcon,
   GitBranchIcon,
   SitegeistIcon,
   PanelIcon,
