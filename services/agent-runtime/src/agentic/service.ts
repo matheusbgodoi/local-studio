@@ -27,6 +27,7 @@ import { getGlobalSingleton } from "../instances";
 import { piRuntimeManager } from "../pi-runtime";
 import { refreshPiModels } from "../pi-runtime-models";
 import type { AgentModel } from "../../../../shared/agent/models";
+import { networkService } from "../network";
 
 export const AGENTIC_USABLE_CONTEXT_ENV = "LOCAL_STUDIO_AGENTIC_USABLE_CONTEXT";
 
@@ -103,6 +104,8 @@ function createRuntime(): RuntimeState {
 
   return { store, service, loops: new Map(), cancelled: new Set(), capabilities };
 }
+
+const NETWORK_RECOVERY = new WeakSet<object>();
 
 const FALLBACK_OUTPUT_SHARE = 0.2;
 
@@ -208,6 +211,32 @@ export function agenticRuntime() {
       });
     state.loops.set(runId, loop);
   };
+
+  //
+  // A tunnel coming back is the mirror of the backend coming back: the Run was
+  // never wrong about anything, it simply had no route out. So it resumes by
+  // itself, the way it does after a compaction, instead of waiting for the
+  // owner to notice a paused Run and press something.
+  //
+  // Subscribed once per process. The runtime is a global singleton and a second
+  // subscription would start a second loop for every Run.
+  //
+  if (!NETWORK_RECOVERY.has(state)) {
+    NETWORK_RECOVERY.add(state);
+    networkService().onEvent((event) => {
+      if (event !== "vpn.protected" && event !== "vpn.reconnected") return;
+      for (const run of state.store.listUnfinishedRuns()) {
+        if (run.networkPolicy !== "vpn_protected" || run.status !== "PAUSED") continue;
+        state.store.appendEvent({
+          runId: run.id,
+          type: "RUN_RESUMED",
+          summary: "protected network was restored; the run continues",
+        });
+        state.store.updateRun(run.id, { status: "RUNNING" });
+        startLoop(run.id);
+      }
+    });
+  }
 
   //
   // A Run belongs to the chat session that started it. An agent's runtime
