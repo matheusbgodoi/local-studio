@@ -64,7 +64,45 @@ machine. It found two defects in this work: a CONNECT acknowledged before its
 upstream existed was being read as proof of protection, and the exit address was
 parsed positionally from a service that returns fields in its own order.
 
-Docs: [`docs/protected-networking.md`](docs/protected-networking.md).
+`npm run test:network-protection` now runs against a real remote provider and
+every probe is conclusive: fourteen pass and this machine's own address appears
+in none of the protected egress. The four egress probes previously reported
+`INCONCLUSIVE` — the only tunnel available then was a local peer that egressed
+from this same host, so its exit address equalled the direct address by
+construction and a pass could not be told apart from a leak.
+
+**The app can be published to the tailnet**, for a phone to reach it. It binds
+loopback and has always answered unauthenticated, which is correct while
+loopback is the only way in; `npm run remote-access` is the single deliberate
+act that changes it, writing the token, the MagicDNS name to accept and the
+tailnet identity allowed to use it. The host allowlist is passed to the server
+only when a token exists, so the gate and the widening cannot drift apart. The
+serve handler is re-pointed at the live port on every launch — the port is
+persisted but sits in the ephemeral range, and a pinned handler that drifts
+answers 502 to the phone forever with nothing saying why.
+
+A first attempt exempted callers presenting a loopback `Host`, on the assumption
+that `tailscale serve` rewrites it. It does not — it forwards the client's Host
+— and a second tailnet device reached the agent API unauthenticated with
+`curl -H "Host: 127.0.0.1"`. There is no exemption now: the readiness probe, the
+agent runtime and its four tool extensions all authenticate like anything else.
+A browser that arrives without the token gets a page it can pair from rather
+than a bare 401, because a cookie only pairs the container it was set in and on
+iOS a Home Screen app has its own.
+
+**The phone layout works**, measured at 390×844: the navigation drawer sat
+under the composer and left its bottom dead with Send still hit-testable through
+it; a `100dvh` child inside a parent that already reserved the bottom safe area
+left phantom scroll; Send and Attach were below a finger's size; and the service
+worker and manifest shortcut both pointed at a route that does not exist, so
+turning the worker on would have failed to install.
+
+A conversation can be **deleted**, next to the archive that only ever hid one,
+and the desktop raises a **native notification** when a turn finishes or needs an
+answer — the in-app notice used to render underneath the app.
+
+Docs: [`docs/protected-networking.md`](docs/protected-networking.md),
+[`docs/remote-access.md`](docs/remote-access.md).
 
 ## v2.1.0-local.13 — 2026-08-23
 
