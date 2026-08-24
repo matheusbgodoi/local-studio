@@ -218,7 +218,13 @@ function RunInlineBody({ snapshot }: { snapshot: AgenticRunSnapshot }) {
   };
 
   return (
-    <div className="mx-auto w-full max-w-(--composer-w) px-2 pb-1">
+    //
+    // The same width as the composer, and for the same reason it has one: this
+    // sits directly above it and any other measurement reads as a mistake. The
+    // composer is max-w-[calc(var(--composer-w)*0.9)] with sm:w-[90%]; using
+    // --composer-w raw made the strip wider than the box it belongs to.
+    //
+    <div className="mx-auto w-full max-w-[calc(var(--composer-w)*0.9)] pb-1 sm:w-[90%]">
       <div className="rounded-[var(--ui-radius)] border border-(--ui-separator) bg-(--ui-surface) px-3 py-2">
         <div className="flex flex-wrap items-center gap-2">
           <button
