@@ -472,6 +472,15 @@ function ReasoningList({
           />
         ))}
       </div>
+      {/* The level is not a runtime switch: the chat template renders it as a
+          sentence at the very top of the prompt, so changing it moves every
+          token after it and the server has no cached prefix left to reuse. On a
+          long conversation that is a full re-read before the next reply starts,
+          and the wait is otherwise indistinguishable from the app hanging. */}
+      <p className="border-t border-(--border) px-2.5 pb-1 pt-2 text-[length:var(--fs-sm)] leading-snug text-(--dim)">
+        Changing this rewrites the start of the prompt, so the model re-reads the conversation
+        before the next reply. Long chats take a while.
+      </p>
     </div>
   );
 }
