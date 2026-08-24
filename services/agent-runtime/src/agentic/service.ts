@@ -107,6 +107,26 @@ function createRuntime(): RuntimeState {
 
 const NETWORK_RECOVERY = new WeakSet<object>();
 
+//
+// Registers the Run's captured policy — which is what engages the boundary for
+// a Run recovered from disk — and answers whether it may take a turn now.
+//
+function egressPermitted(store: AgenticStore, run: AgenticRun): boolean {
+  const network = networkService();
+  if (run.networkPolicy !== "vpn_protected") return true;
+  network.setRunPolicy(run.id, run.networkPolicy);
+  if (network.mayEgress()) return true;
+  if (run.status !== "PAUSED" && run.status !== "WAITING_USER") {
+    store.updateRun(run.id, { status: "PAUSED" });
+    store.appendEvent({
+      runId: run.id,
+      type: "RUN_INTERRUPTED",
+      summary: `protected network is ${network.currentState().toLowerCase()}; the run is paused until protection is restored`,
+    });
+  }
+  return false;
+}
+
 const FALLBACK_OUTPUT_SHARE = 0.2;
 
 //
@@ -152,6 +172,18 @@ export function agenticRuntime() {
       if (state.cancelled.has(runId)) return;
       const run = state.store.requireRun(runId);
       if (TERMINAL.has(run.status)) return;
+      //
+      // THE GATE HAS TO BE HERE, because this is the loop that actually takes
+      // turns. run-service exposes startRun/resumeRun, but nothing in
+      // production calls them — this drive loop calls scheduler.advance
+      // directly, so a gate anywhere else is a gate on a road with no traffic.
+      // An adversarial review found exactly that.
+      //
+      // A turn runs tools and tools reach the network, so a protected Run may
+      // not take one while the boundary is not carrying traffic. It PAUSES,
+      // the way a lost backend pauses it: nothing about the goal was decided.
+      //
+      if (!egressPermitted(state.store, run)) return;
       const capability = state.capabilities.get(runId) ?? (await resolveCapability(run.modelId));
       const primaryAgent = state.store.listAgents(runId)[0] ?? null;
       const observed = withRuntimeContextWindow(
@@ -208,6 +240,14 @@ export function agenticRuntime() {
       })
       .finally(() => {
         state.loops.delete(runId);
+        //
+        // A finished Run stops asking for protection. Without this the boundary
+        // would stay up for the rest of the process's life after the last
+        // protected Run ended, routing everyone else through a tunnel nobody
+        // had asked for any more.
+        //
+        const status = state.store.getRun(runId)?.status;
+        if (status && TERMINAL.has(status)) networkService().releaseRun(runId);
       });
     state.loops.set(runId, loop);
   };
@@ -227,6 +267,16 @@ export function agenticRuntime() {
       if (event !== "vpn.protected" && event !== "vpn.reconnected") return;
       for (const run of state.store.listUnfinishedRuns()) {
         if (run.networkPolicy !== "vpn_protected" || run.status !== "PAUSED") continue;
+        //
+        // Only Runs this gate paused. A Run paused by crash reconciliation, by
+        // a lost backend, or by the owner was not waiting on the tunnel, and
+        // restoring the tunnel is no reason to start it running again — that
+        // would resume work the owner deliberately stopped.
+        //
+        const last = state.store.listEvents(run.id).at(-1);
+        if (last?.type !== "RUN_INTERRUPTED" || !last.summary.startsWith("protected network is")) {
+          continue;
+        }
         state.store.appendEvent({
           runId: run.id,
           type: "RUN_RESUMED",

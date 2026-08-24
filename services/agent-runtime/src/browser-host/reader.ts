@@ -192,7 +192,8 @@ function requestBoundedUrl(url: string, address: ResolvedHostAddress): Promise<B
   const parsed = new URL(url);
   const request = parsed.protocol === "https:" ? httpsRequest : httpRequest;
   const network = networkService();
-  if (network.protectionDemanded() && !network.mayEgress()) {
+  const protectionOn = network.protectionDemanded();
+  if (protectionOn && !network.mayEgress()) {
     //
     // Refused rather than attempted. This path runs inside the runtime process,
     // outside the jail, so nothing in the kernel would stop it from reaching the
@@ -201,15 +202,41 @@ function requestBoundedUrl(url: string, address: ResolvedHostAddress): Promise<B
     return Promise.reject(new Error("protected network is unavailable; the request was not sent"));
   }
   const agents = network.httpAgents();
+  if (protectionOn && !agents) {
+    //
+    // Protection is on and this runtime cannot divert an in-process socket, so
+    // the request would leave on the machine's own route. Refusing is the only
+    // answer that is not a silent leak.
+    //
+    return Promise.reject(
+      new Error("this runtime cannot route in-process requests through the protected tunnel"),
+    );
+  }
+  //
+  // The address was already vetted as public by publicResolvedAddresses(), and
+  // the request stays pinned to it under protection as well as without.
+  //
+  // The first version of this dropped the pin when tunnelled, on the reasoning
+  // that resolving locally would leak the name to the machine's resolver. That
+  // reopened the SSRF this file exists to prevent: sing-box would re-resolve the
+  // name itself and route a private answer straight out through its
+  // private-direct rule, back into the LAN and loopback. Pinning the CONNECT to
+  // the vetted literal keeps both properties — the tunnel carries it, and it
+  // can only reach the address that was checked.
+  //
+  // Host and servername stay the hostname, so virtual hosting still works and
+  // the certificate is still validated against the name rather than the number.
+  //
+  const pinnedHost = address.family === 6 ? `[${address.address}]` : address.address;
   const options: RequestOptions = {
-    headers: { Accept: ACCEPT, "User-Agent": USER_AGENT },
-    //
-    // Under protection the name is resolved at the far end of the tunnel, so the
-    // pinned lookup is dropped: resolving here would put the query on the
-    // machine's own resolver and tell it where the traffic is going.
-    //
+    headers: { Accept: ACCEPT, "User-Agent": USER_AGENT, Host: parsed.host },
     ...(agents
-      ? { agent: parsed.protocol === "https:" ? agents.https : agents.http }
+      ? {
+          agent: parsed.protocol === "https:" ? agents.https : agents.http,
+          host: pinnedHost,
+          hostname: pinnedHost,
+          servername: parsed.hostname,
+        }
       : { lookup: pinnedLookup(address) }),
   };
 

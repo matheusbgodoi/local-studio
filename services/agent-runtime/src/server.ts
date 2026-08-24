@@ -2,6 +2,7 @@ import { serve } from "@hono/node-server";
 import { agenticRuntime } from "./agentic/service";
 import { startAutomationScheduler } from "./automation-scheduler";
 import { createAgentRuntimeApp } from "./http/app";
+import { networkService } from "./network";
 
 startAutomationScheduler();
 
@@ -23,6 +24,25 @@ serve({ fetch: app.fetch, port, hostname: "127.0.0.1" }, (info) => {
   );
 });
 
+//
+// The tunnel is a child of this process and does not die with it on its own.
+// Left behind it holds the proxy port, and the next start finds the port taken
+// and respawns a tunnel that cannot bind — so shutting it down is not tidiness,
+// it is what keeps the next launch working. SIGTERM is what the desktop shell
+// sends, so the stop has to happen before the exit rather than in the exit
+// handler, where nothing asynchronous would finish.
+//
+const stopNetwork = async (): Promise<void> => {
+  try {
+    await networkService().shutdown();
+  } catch {
+    // a tunnel that will not stop must not keep the process alive
+  }
+};
+
 process.once("exit", () => litterBridgeGateway.dispose());
-process.once("SIGINT", () => process.exit(0));
-process.once("SIGTERM", () => process.exit(0));
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.once(signal, () => {
+    void stopNetwork().then(() => process.exit(0));
+  });
+}

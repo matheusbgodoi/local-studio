@@ -280,6 +280,17 @@ export function resizePtySession(id: string, cols: number, rows: number): boolea
   }
 }
 
+//
+// Every open PTY, closed. A shell started before protection engaged is running
+// outside the jail and would keep serving a protected session from the wrong
+// side of the boundary; the jail cannot be applied to a process that already
+// exists, so the only correct answer is to end it and let the next one start
+// under the policy in force then.
+//
+export function closeAllPtySessions(): void {
+  for (const id of [...sessions.keys()]) closePtySession(id);
+}
+
 export function closePtySession(id: string): void {
   const session = sessions.get(id);
   if (!session) return;

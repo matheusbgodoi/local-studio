@@ -487,7 +487,24 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
         // flipping the toggle rebuilds the runtime rather than leaving a live
         // session on the shell it started with.
         //
-        applyAgentShell(agentDir, networkService().shellShimPath());
+        //
+        // Applied before the session exists, so the first bash call of a
+        // protected turn is already inside the boundary. If the write did not
+        // take, the runtime does NOT start: a session whose shell is the bare
+        // /bin/bash would run every command the model writes outside the jail
+        // while the owner is being shown a padlock, and failing to start is the
+        // only answer to that which is not a lie.
+        //
+        {
+          const network = networkService();
+          const shim = network.shellShimPath();
+          const applied = applyAgentShell(agentDir, shim);
+          if (shim !== null && !applied) {
+            throw new Error(
+              "the agent shell could not be confined to the protected tunnel; the session was not started",
+            );
+          }
+        }
         const extensionUiContext = this.extensionUiContext();
         const recordExtensionEvent = (event: PiEvent) => this.recordEvent(event);
         const captureConnectorApi = (api: ExtensionAPI) => {

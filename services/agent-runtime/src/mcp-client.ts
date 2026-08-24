@@ -2,7 +2,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Tool, ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
-import { protectedEnvironment, protectedSpawn } from "./network";
+import { assertRoutableEgress, protectedEnvironment, protectedSpawn } from "./network";
 
 export type McpToolAnnotations = ToolAnnotations;
 export type McpToolInfo = Tool;
@@ -80,6 +80,15 @@ const transportFor = (target: McpTarget) => {
       stderr: "pipe",
     });
   }
+  //
+  // A remote MCP server is reached with the global fetch, which takes no agent
+  // and therefore cannot be pointed at the tunnel from here. Rather than let a
+  // protected session talk to it over the machine's own route — which is what
+  // used to happen, and which an adversarial review caught — it is refused
+  // while protection is demanded. The status contract names this so the owner
+  // can see it rather than discover it.
+  //
+  assertRoutableEgress(`the remote MCP connector at ${new URL(target.url).host}`);
   return new StreamableHTTPClientTransport(new URL(target.url), {
     requestInit: { headers: target.headers ?? {} },
     fetch: authorizedFetch(target),

@@ -39,3 +39,21 @@ export function protectedEnvironment(): Record<string, string> {
 export function protectedHttpAgents(): ReturnType<NetworkService["httpAgents"]> {
   return networkService().httpAgents();
 }
+
+//
+// For an in-process egress path that has NOT been taught to use the tunnel.
+//
+// Node's global fetch takes no agent, so a caller built on it cannot be routed
+// without either a dependency this package does not declare or a global
+// dispatcher that would drag model inference and controller traffic through the
+// VPN as well. Until such a caller is converted, the honest behaviour is to
+// refuse it while protection is demanded rather than let it out directly — a
+// broken connector is recoverable, a silent leak is not.
+//
+export function assertRoutableEgress(what: string): void {
+  const network = networkService();
+  if (!network.protectionDemanded()) return;
+  throw new Error(
+    `${what} cannot be confined to the protected tunnel, so it was refused while VPN Protected is active`,
+  );
+}

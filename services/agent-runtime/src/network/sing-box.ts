@@ -176,6 +176,16 @@ export function startTunnel(binary: string, options: SingBoxOptions): TunnelProc
   };
   child.stdout?.on("data", capture);
   child.stderr?.on("data", capture);
+  //
+  // A spawn that fails — the binary moved, the file is not executable — emits
+  // `error` and NOT `exit`. Without this listener node raises it as an unhandled
+  // exception and takes the whole agent-runtime down; with it the supervisor
+  // sees a dead tunnel and reports BLOCKED, which is the fail-closed outcome.
+  //
+  child.on("error", (error: Error) => {
+    lastError = redact(error.message);
+    if (child.exitCode === null && child.signalCode === null) child.emit("exit", null, null);
+  });
 
   const stop = async (): Promise<void> => {
     if (child.exitCode !== null || child.signalCode !== null) return;
