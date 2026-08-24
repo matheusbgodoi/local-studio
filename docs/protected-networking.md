@@ -368,34 +368,36 @@ the world sees for a protected workload is the same one it sees when this
 machine talks directly. The direct address is measured **first**, before
 protection exists. Addresses are masked to two octets; no secret is printed.
 
-**MEASURED** on this machine against a real WireGuard tunnel (a local sing-box
-peer), Darwin 27, Apple Silicon:
+**MEASURED** on this machine against the owner's real WireGuard provider,
+Darwin 27, Apple Silicon:
 
 ```
-shell/curl                INCONCLUSIVE  tunnel exits on this host
-python                    INCONCLUSIVE  tunnel exits on this host
-node                      INCONCLUSIVE  tunnel exits on this host
-git/CLI                   INCONCLUSIVE  tunnel exits on this host
-DNS                       PASS  protected
-IPv4                      PASS  protected
-IPv6                      PASS  protected
-jailed DNS denied         PASS  getaddrinfo dies inside the jail
-fail-closed enforced      PASS  macos-seatbelt
-no inherited socket       PASS  a jailed child holds no network descriptor at exec
+shell/curl                   PASS  exit 205.147.x.x
+python                       PASS  exit 205.147.x.x
+node                         PASS  exit 205.147.x.x
+git/CLI                      PASS  exit 205.147.x.x
+jailed DNS denied            PASS  getaddrinfo dies inside the jail
+DNS                          PASS  protected
+IPv4                         PASS  protected
+IPv6                         PASS  protected
+fail-closed enforced         PASS  macos-seatbelt
+no inherited socket          PASS  a jailed child holds no network descriptor at exec
 kill switch: no direct curl  PASS  blocked
 kill switch: no direct wget  PASS  blocked
 kill switch: raw socket      PASS  blocked
-kill switch: state           PASS
+kill switch: state           PASS  STARTING
 
-Direct IP while protected: not assessable — the configured peer exits on this host
+Direct IP while protected: NOT OBSERVED
 ```
 
-`INCONCLUSIVE` is deliberate. Those four probes did reach the internet through
-the WireGuard tunnel, but the local test peer egresses from this same host, so
-the exit address equals the direct address by construction. That is
-indistinguishable from a leak *by address alone*, so it is reported as
-inconclusive rather than as a pass it has not earned. With a remote provider it
-resolves either way.
+Every probe is now conclusive. An earlier run reported the first four as
+`INCONCLUSIVE`, because the only tunnel available then was a local sing-box peer
+that egressed from this same host: the exit address equalled the direct address
+by construction, which is indistinguishable from a leak *by address alone*. That
+was reported as inconclusive rather than as a pass it had not earned. With a real
+remote provider the four resolve, and the addresses differ — which is what
+"Direct IP while protected: NOT OBSERVED" states: this machine's own address
+appeared in none of the protected egress.
 
 Measured separately, by hand, with a live loopback proxy:
 
