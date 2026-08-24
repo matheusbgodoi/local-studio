@@ -18,6 +18,7 @@ import type { SessionId } from "@/features/agent/runtime/types";
 export const COMPUTER_TAB_IDS = [
   "status",
   "tools",
+  "run",
   "side-chat",
   "browser",
   "files",
