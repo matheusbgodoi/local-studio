@@ -343,6 +343,14 @@ being down.
   already told them where the traffic is going. Inside the jail `getaddrinfo`
   is denied outright, so names resolve at the far end or not at all.
 
+  This is now checked by the acceptance run rather than asserted. It briefly
+  stopped being true: allowing unix sockets so Chromium could bind its singleton
+  socket also re-opened `mDNSResponder`, which runs outside the jail on the
+  machine's own route — and the suite kept reporting DNS as protected, because
+  that row came from a request the *runtime* made through the tunnel and the
+  runtime is not jailed. Outbound unix sockets are path-scoped now, and the run
+  asks the jail directly.
+
 ---
 
 ## 13. The acceptance run
@@ -371,11 +379,13 @@ git/CLI                   INCONCLUSIVE  tunnel exits on this host
 DNS                       PASS  protected
 IPv4                      PASS  protected
 IPv6                      PASS  protected
+jailed DNS denied         PASS  getaddrinfo dies inside the jail
 fail-closed enforced      PASS  macos-seatbelt
-kill switch: curl         PASS  blocked
-kill switch: direct curl  PASS  blocked
-kill switch: raw socket   PASS  blocked
-kill switch: state        PASS
+no inherited socket       PASS  a jailed child holds no network descriptor at exec
+kill switch: no direct curl  PASS  blocked
+kill switch: no direct wget  PASS  blocked
+kill switch: raw socket      PASS  blocked
+kill switch: state           PASS
 
 Direct IP while protected: not assessable — the configured peer exits on this host
 ```
