@@ -43,6 +43,7 @@ import {
   unconfinedPaths,
   writeChromiumShim,
   writeProfile,
+  writeShellShim,
   type JailedCommand,
 } from "./jail";
 import { describeProvider, loadProfile, type WireGuardProfile } from "./provider";
@@ -180,6 +181,15 @@ export class NetworkService {
 
   environment(): Record<string, string> {
     return this.protectionDemanded() ? jailEnvironment(PROXY_PORT) : {};
+  }
+
+  //
+  // The shim the agent's `bash` tool is pointed at, or null when protection is
+  // off so the SDK falls back to its own shell resolution untouched.
+  //
+  shellShimPath(): string | null {
+    if (!this.protectionDemanded() || !this.profilePath) return null;
+    return writeShellShim(path.join(this.dataDir, "network"), this.profilePath);
   }
 
   //

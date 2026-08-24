@@ -146,6 +146,13 @@ export function jailEnvironment(proxyPort: number): Record<string, string> {
     all_proxy: socks,
     NO_PROXY: "localhost,127.0.0.1,::1",
     no_proxy: "localhost,127.0.0.1,::1",
+    //
+    // Node's fetch ignores HTTP_PROXY unless this is set. Measured: without it
+    // a jailed `node -e fetch(...)` fails with ENOTFOUND; with it the same call
+    // returns 200 through the tunnel. It changes whether protected mode is
+    // usable from Node, not whether it is safe — the jail is what makes it safe.
+    //
+    NODE_USE_ENV_PROXY: "1",
     LOCAL_STUDIO_NETWORK_POLICY: "vpn_protected",
     LOCAL_STUDIO_EGRESS_PROXY: http,
   };
@@ -191,6 +198,27 @@ export function writeChromiumShim(
   writeFileSync(
     shim,
     `#!/bin/sh\nexec ${SANDBOX_EXEC} -f ${JSON.stringify(profilePath)} ${JSON.stringify(executablePath)} "$@"\n`,
+    { mode: 0o700 },
+  );
+  return shim;
+}
+
+//
+// The model's own `bash` tool does not go through this runtime's PTY service —
+// the SDK spawns the shell itself, and on Unix it hardcodes /bin/bash with no
+// environment override. Its one supported seam is `shellPath` in the agent's
+// settings, so protection points that at a shim that execs sandbox-exec and
+// then the real shell. Same trick as the Chromium shim, and the same reason it
+// holds: exec replaces the process, and the jail is inherited by everything the
+// command goes on to run — curl, git, npm, pip, ssh, a python script.
+//
+export function writeShellShim(profileDirectory: string, profilePath: string): string {
+  mkdirSync(profileDirectory, { recursive: true, mode: 0o700 });
+  const shell = existsSync("/bin/bash") ? "/bin/bash" : "/bin/sh";
+  const shim = path.join(profileDirectory, "shell-jail.sh");
+  writeFileSync(
+    shim,
+    `#!/bin/sh\nexec ${SANDBOX_EXEC} -f ${JSON.stringify(profilePath)} ${shell} "$@"\n`,
     { mode: 0o700 },
   );
   return shim;
