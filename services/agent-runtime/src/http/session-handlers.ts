@@ -1,8 +1,13 @@
+import { rm } from "node:fs/promises";
 import path from "node:path";
 import type { AggregatedSession } from "../../../../shared/agent/session-summary";
 import { listProjectsFromStore, resolveAllowedWorkspace } from "../projects-store";
-import { listArchivedSessionMetadata, setSessionArchived } from "../session-metadata-store";
-import { listSessions, loadSession } from "../sessions-store";
+import {
+  forgetSessionMetadata,
+  listArchivedSessionMetadata,
+  setSessionArchived,
+} from "../session-metadata-store";
+import { findSessionFile, listSessions, loadSession } from "../sessions-store";
 import { errorMessage, jsonError } from "./helpers";
 
 function parseRelativeSince(value: string | null): Date | null {
@@ -182,6 +187,48 @@ export async function handleSessionPatch(request: Request, id: string): Promise<
   }
 }
 
+//
+// Deleting EVERY session at once stays disabled. There is no interface for it,
+// no confirmation that could be proportionate to it, and nothing it does that
+// archiving does not do reversibly.
+//
 export function handleSessionsDelete(): Response {
-  return jsonError("Session deletion is disabled. Archive sessions from the UI instead.", 405);
+  return jsonError("Bulk session deletion is disabled. Delete one session at a time.", 405);
+}
+
+//
+// Deleting ONE session, which is what the owner asked for and what archiving
+// deliberately does not do.
+//
+// This removes the transcript from disk and forgets the metadata that described
+// it. It is irreversible, so it is scoped as narrowly as the code allows: the id
+// must match the Pi session pattern, the workspace must resolve through the same
+// guard every other session route uses, and findSessionFile() must resolve the
+// id to exactly ONE file whose own header agrees with the id and the cwd —
+// an ambiguous match returns null there and nothing is removed.
+//
+export async function handleSessionDelete(request: Request, id: string): Promise<Response> {
+  if (!validSessionId(id)) return jsonError("session id is invalid");
+  const cwdValue = new URL(request.url).searchParams.get("cwd")?.trim() ?? "";
+  if (!cwdValue) return jsonError("cwd is required to delete a session");
+  const resolved = existingWorkspace(cwdValue);
+  if (resolved instanceof Response) return resolved;
+
+  const filepath = findSessionFile(resolved, id);
+  if (!filepath) return jsonError("session not found", 404);
+
+  try {
+    await rm(filepath, { force: true });
+  } catch (error) {
+    return jsonError(
+      error instanceof Error ? error.message : "the session file could not be removed",
+      500,
+    );
+  }
+  //
+  // After the file, never before: metadata forgotten while the transcript
+  // survived would hide a session that still exists.
+  //
+  await forgetSessionMetadata(id);
+  return Response.json({ session: { id, deleted: true } });
 }

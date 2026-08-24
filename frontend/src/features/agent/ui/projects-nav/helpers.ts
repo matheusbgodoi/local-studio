@@ -132,6 +132,22 @@ export function consumeAgentSessionNavTitle(sessionId: string | null | undefined
   }
 }
 
+//
+// Irreversible, unlike archiving: the transcript is removed from disk and the
+// metadata that described it is forgotten. The confirmation lives at the call
+// site rather than here, so this stays a plain client call.
+//
+export async function deleteSession(sessionId: string, project: ProjectEntry): Promise<void> {
+  const response = await fetch(
+    `/api/agent/sessions/${encodeURIComponent(sessionId)}?cwd=${encodeURIComponent(project.path)}`,
+    { method: "DELETE" },
+  );
+  const payload = await safeJson<{ error?: string }>(response);
+  if (!response.ok) {
+    throw new Error(payload.error || "Failed to delete session");
+  }
+}
+
 export async function setSessionArchive(
   sessionId: string,
   project: ProjectEntry,

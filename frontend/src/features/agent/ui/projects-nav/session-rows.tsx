@@ -25,6 +25,7 @@ import {
   patchActiveSessionPref,
   rememberAgentSessionNavTitle,
   setAgentSessionDragData,
+  deleteSession,
   setSessionArchive,
   hrefWithOpenNonce,
 } from "./helpers";
@@ -122,11 +123,7 @@ export function ProjectRow({
         </button>
         <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
           {onTogglePin ? (
-            <PinButton
-              pinned={pinned}
-              onToggle={onTogglePin}
-              target={project.name}
-            />
+            <PinButton pinned={pinned} onToggle={onTogglePin} target={project.name} />
           ) : null}
           {onRemove ? (
             <button
@@ -394,6 +391,28 @@ export function ActiveSessionRow({
                 .then(() => patchSessionPref(threadId, { hidden: undefined, pinned: undefined }))
                 .catch((error) => {
                   console.warn("[agent] failed to archive session", error);
+                });
+            }
+          : undefined
+      }
+      //
+      // Deleting removes the transcript from disk, which archiving deliberately
+      // does not do — so it asks first, names the conversation it is about, and
+      // says that it cannot be undone. Keyed on the pi session id for the same
+      // reason archive is: without a thread there is nothing on disk to remove.
+      //
+      onDelete={
+        session.threadId
+          ? () => {
+              const threadId = session.threadId as string;
+              const confirmed = window.confirm(
+                `Delete "${label}"? This removes the conversation from disk and cannot be undone. Archive keeps it.`,
+              );
+              if (!confirmed) return;
+              void deleteSession(threadId, project)
+                .then(() => patchSessionPref(threadId, { hidden: true, pinned: undefined }))
+                .catch((error) => {
+                  console.warn("[agent] failed to delete session", error);
                 });
             }
           : undefined

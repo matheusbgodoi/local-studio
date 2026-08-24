@@ -60,6 +60,7 @@ import {
   handleAllSessions,
   handleSessionGet,
   handleSessionPatch,
+  handleSessionDelete,
   handleSessionsDelete,
   handleSessionsList,
 } from "./session-handlers";
@@ -92,6 +93,7 @@ export function createAgentRuntimeApp() {
   app.get("/api/agent/sessions/all", (c) => handleAllSessions(c.req.raw));
   app.get("/api/agent/sessions/:id", (c) => handleSessionGet(c.req.raw, c.req.param("id")));
   app.patch("/api/agent/sessions/:id", (c) => handleSessionPatch(c.req.raw, c.req.param("id")));
+  app.delete("/api/agent/sessions/:id", (c) => handleSessionDelete(c.req.raw, c.req.param("id")));
   app.get("/api/agent/automations", () => handleAutomationsList());
   app.post("/api/agent/automations", (c) => handleAutomationCreate(c.req.raw));
   app.patch("/api/agent/automations/:id", (c) =>

@@ -241,6 +241,26 @@ export function listArchivedSessionMetadata(): ArchivedSessionMetadata[] {
     });
 }
 
+//
+// Everything this store remembers about one session, dropped.
+//
+// Archiving is a flag and is meant to be reversible; this is the other thing,
+// and it is used only when the transcript itself is being deleted. Leaving the
+// metadata behind would keep a title, a project and an archive state pointing
+// at a file that no longer exists, and the archived list would render rows the
+// owner can never open.
+//
+export async function forgetSessionMetadata(sessionId: string): Promise<void> {
+  const id = sessionId.trim();
+  if (!id) return;
+  await withStoreLock(() => {
+    const store = readStore();
+    if (!store.sessions[id]) return;
+    delete store.sessions[id];
+    writeStore(store);
+  });
+}
+
 export async function setSessionArchived(
   sessionId: string,
   archived: boolean,
