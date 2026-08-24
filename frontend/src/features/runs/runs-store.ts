@@ -14,6 +14,15 @@ import { cancelRun, listRuns, loadRunSnapshot, resumeRun } from "./runs-api";
 //
 
 const POLL_MS = 2_000;
+//
+// The cadence used when nothing live is selected. A conversation that has no Run
+// yet still has to DISCOVER one — the model can create a Run at any moment, and
+// before this the store stopped polling entirely in that state, so the panel sat
+// on "No durable Run for this conversation" until the page was reloaded. Slower
+// than the live cadence because there is nothing changing to watch, only
+// something to notice.
+//
+const IDLE_POLL_MS = 5_000;
 
 export type RunsSnapshotState = {
   runs: readonly AgenticRun[];
@@ -33,6 +42,7 @@ let state: RunsSnapshotState = {
 
 const listeners = new Set<() => void>();
 let timer: ReturnType<typeof setInterval> | null = null;
+let timerInterval = 0;
 let subscribers = 0;
 let watching: string | null = null;
 
@@ -122,17 +132,26 @@ export async function cancelSelectedRun(runId: string): Promise<void> {
 
 function syncTimer(): void {
   const selected = state.runs.find((run) => run.id === state.selectedId);
-  const wanted = subscribers > 0 && isLive(selected);
-  if (wanted && timer === null) {
-    timer = setInterval(() => {
-      void refreshRuns();
-    }, POLL_MS);
-    return;
-  }
-  if (!wanted && timer !== null) {
+  //
+  // Polling follows SUBSCRIBERS, not selection. Keying it on "a live run is
+  // already selected" meant a chat with no Run never looked again, so a Run
+  // created while that chat was open never appeared.
+  //
+  const wanted = subscribers > 0;
+  const interval = isLive(selected) ? POLL_MS : IDLE_POLL_MS;
+  if (wanted && timerInterval === interval && timer !== null) return;
+  if (timer !== null) {
     clearInterval(timer);
     timer = null;
   }
+  if (!wanted) {
+    timerInterval = 0;
+    return;
+  }
+  timerInterval = interval;
+  timer = setInterval(() => {
+    void refreshRuns();
+  }, interval);
 }
 
 export function subscribeRuns(listener: () => void): () => void {
