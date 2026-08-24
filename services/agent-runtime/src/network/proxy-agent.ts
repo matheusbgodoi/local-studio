@@ -28,6 +28,16 @@ import { Agent as HttpsAgent } from "node:https";
 
 type ConnectionOptions = { host?: string; port?: number; servername?: string };
 
+//
+// A proxy that accepts the TCP connection and then never answers the CONNECT
+// leaves the caller waiting forever: node's request timeout does not arm until a
+// socket has been ASSIGNED, and this handshake happens before that. Measured
+// against such a proxy, fetchReadable never settled — so a browser_search could
+// hang a turn indefinitely. A real sing-box answers in about two milliseconds
+// even when its peer is dead, so this budget is generous.
+//
+const CONNECT_TIMEOUT_MS = 5_000;
+
 function openTunnel(
   proxyHost: string,
   proxyPort: number,
@@ -41,6 +51,9 @@ function openTunnel(
       socket.destroy();
       reject(error);
     };
+    socket.setTimeout(CONNECT_TIMEOUT_MS, () =>
+      fail(new Error("the protected tunnel did not answer CONNECT")),
+    );
     socket.once("error", fail);
     socket.once("connect", () => {
       socket.write(`CONNECT ${host}:${port} HTTP/1.1\r\nHost: ${host}:${port}\r\n\r\n`);
@@ -58,6 +71,12 @@ function openTunnel(
         return fail(new Error("the protected tunnel refused the connection"));
       }
       socket.removeListener("error", fail);
+      //
+      // Cleared once the tunnel is established: from here the request's own
+      // timeout governs, and leaving this armed would kill a slow but healthy
+      // response.
+      //
+      socket.setTimeout(0);
       resolve(socket);
     };
     socket.on("data", onData);

@@ -61,7 +61,7 @@ The tool list is identical in both modes. Only the route differs.
 flowchart TD
     subgraph workload["Agent workload"]
         shell["model bash tool<br/>curl · git · npm · python"]
-        pty["owner terminal (PTY)"]
+        pty["web terminal (PTY)"]
         mcp["local MCP connectors"]
         chrome["Chromium / Playwright"]
     end
@@ -171,12 +171,14 @@ mode *working* and protected mode merely *blocking*.
 | surface | how it is covered | kind |
 |---|---|---|
 | model `bash` tool (`curl`, `git`, `npm`, `pip`, `ssh`, python scripts) | `shellPath` in the agent's own `settings.json` points at a shim that `exec`s `sandbox-exec` | kernel |
-| owner terminal (PTY) | spawn wrapped | kernel |
+| the web app's terminal (agent-runtime PTY) | spawn wrapped | kernel |
 | local MCP stdio connectors | spawn wrapped | kernel |
 | Chromium — headless, headful, `browser_verify` | `executablePath` points at an exec shim; Playwright's `proxy` option supplies `--proxy-server` | kernel |
 | page JS, XHR, fetch, WebSockets | inside the Chromium process, therefore inside its jail | kernel |
 | subagents | in-process sessions whose tools spawn through the wrapped sites | kernel |
 | `browser_search`, reader (`fetchReadable`, `fetchPublicDocument`) | CONNECT agent in `proxy-agent.ts`; refused outright when the tunnel is down | **code** |
+| remote (HTTP) MCP connectors | refused while protection is on | **refused** |
+| the desktop app's own terminal (Electron PTY) | not confined — see §10.6 | **none** |
 
 The last row is the honest one. See §10.
 
@@ -280,7 +282,11 @@ rounded up.
 4. **`sandbox-exec` is formally deprecated by Apple.** It works on Darwin 27 and
    is the same facility Chromium itself uses, but it is not a contract Apple has
    promised to keep.
-5. **No remote provider exit has been verified here.** See §13.
+5. **The desktop app's native terminal is not confined.** `frontend/desktop/logic/pty-manager.ts` spawns a shell in the Electron process, which has no access to the network service — that lives in the agent-runtime, a different process. It is the owner's own interactive terminal, driven by `terminal-panel.tsx`; no agent tool writes into it, and the model's own shell is a different path that *is* jailed. But if the owner types `curl` there while a conversation is protected, that request leaves on the machine's normal route. The web app's terminal, which shares the agent-runtime, is covered.
+
+6. **A jailed helper would not fix §10.1.** Moving the reader and search into a Seatbelt-jailed helper process was prototyped and rejected on measurement, not taste: the jail constrains which socket the helper may open, and says nothing about what it asks the proxy to do once open. A jailed prototype reached a loopback service by sending `CONNECT localtest.me:9911`. Because `getaddrinfo` is denied inside the jail, only the unjailed parent can resolve and vet, so `publicResolvedAddresses()`, the address pin, the byte cap and the per-hop redirect re-vetting all stay code discipline either way — just one IPC boundary further from the socket they guard, at +76ms per hop and one spawn per redirect. See §13.
+
+7. **No remote provider exit has been verified here.** See §13.
 
 ---
 

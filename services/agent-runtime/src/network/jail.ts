@@ -147,6 +147,39 @@ export function jailCommand(profilePath: string, command: JailedCommand): Jailed
 }
 
 //
+// The only stdio shape a protected child may be given.
+//
+// Seatbelt hooks connect/sendto/bind, not write(), so a socket that was already
+// connected before the jail existed stays writable from inside it. There are
+// exactly two ways such a descriptor can cross a spawn: the string "inherit",
+// which hands the child the RUNTIME's own descriptor, and a number, which hands
+// it that exact fd. "pipe" and "ignore" cannot — they always produce a fresh
+// socketpair or /dev/null.
+//
+// This is asserted rather than assumed because the property currently rests on
+// third-party defaults. The MCP SDK's own default is
+// `stdio: ['pipe','pipe', stderr ?? 'inherit']`, and an audit reproduced the
+// leak end to end: with the runtime's stderr connected to a socket, a jailed
+// connector received it as fd 2 and wrote through it, while a fresh connect()
+// from the same process returned EPERM. One deleted keyword was the whole
+// distance between "documented limitation" and "realised leak".
+//
+export const PROTECTED_STDIO = ["pipe", "pipe", "pipe"] as const;
+
+export function assertNoInheritedDescriptors(stdio: readonly unknown[]): void {
+  if (stdio.length > 3) {
+    throw new Error("a protected child was given a descriptor above fd 2; refusing to start it");
+  }
+  for (const slot of stdio) {
+    if (slot !== "pipe" && slot !== "ignore") {
+      throw new Error(
+        `a protected child may only be given "pipe" or "ignore" stdio; got ${String(slot)}`,
+      );
+    }
+  }
+}
+
+//
 // The environment a jailed process should see. These variables are NOT the
 // boundary — a process is free to ignore every one of them and it simply gets
 // EPERM instead of a connection. They exist so that well-behaved tools take the

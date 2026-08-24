@@ -3,6 +3,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Tool, ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { assertRoutableEgress, protectedEnvironment, protectedSpawn } from "./network";
+import { assertNoInheritedDescriptors, PROTECTED_STDIO } from "./network/jail";
 
 export type McpToolAnnotations = ToolAnnotations;
 export type McpToolInfo = Tool;
@@ -72,6 +73,15 @@ const transportFor = (target: McpTarget) => {
     // otherwise "protected" would mean protected except for connectors.
     //
     const jailed = protectedSpawn(target.command, target.args ?? []);
+    //
+    // `stderr: "pipe"` below is not a logging preference, it is the boundary.
+    // The SDK defaults that slot to "inherit", which hands the child the
+    // runtime's own fd 2 — measured, a connector given that inherited a live
+    // TCP socket and wrote through it from inside the jail while its own
+    // connect() returned EPERM. Asserted here so a future edit that "tidies"
+    // the option away fails loudly instead of quietly reopening it.
+    //
+    assertNoInheritedDescriptors(PROTECTED_STDIO);
     return new StdioClientTransport({
       command: jailed.command,
       args: jailed.args,
