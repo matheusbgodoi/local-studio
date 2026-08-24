@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   AppPage,
   Button,
@@ -9,29 +9,28 @@ import {
   PageContainer,
   PageHeader,
   RefreshButton,
-  SegmentedControl,
   Spinner,
   StatusPill,
 } from "@/ui";
-import { RunActivity } from "./run-activity";
-import { RunAgents } from "./run-agents";
+import { useMountSubscription } from "@/hooks/use-mount-subscription";
 import { humanStatus, runTone } from "./run-formatters";
-import { RunOverview } from "./run-overview";
-import { RunTasks } from "./run-tasks";
+import { RunDetail } from "./run-detail";
 import { cancelSelectedRun, refreshRuns, selectRun, resumeSelectedRun } from "./runs-store";
 import { useRuns } from "./use-runs";
 
-type RunsTab = "tasks" | "agents" | "activity";
-
-const TABS = [
-  { id: "tasks", label: "Tasks" },
-  { id: "agents", label: "Agents" },
-  { id: "activity", label: "Activity" },
-] satisfies Array<{ id: RunsTab; label: string }>;
-
 export default function RunsPage() {
   const { runs, snapshot, selectedId, loading, error } = useRuns();
-  const [tab, setTab] = useState<RunsTab>("tasks");
+  const requestedId = useSearchParams().get("run");
+
+  //
+  // A Run is addressable: `/runs?run=<id>` is how the conversation's Run tab
+  // hands its Run to the deep view, and how a reload keeps that choice. It is
+  // applied only when the id itself changes, so clicking another Run in the
+  // list is not fought by a query param that outlived the intent.
+  //
+  useMountSubscription(() => {
+    if (requestedId) selectRun(requestedId);
+  }, [requestedId]);
 
   const canResume =
     snapshot !== null &&
@@ -90,32 +89,29 @@ export default function RunsPage() {
 
             <div className="min-w-0 space-y-4">
               {snapshot ? (
-                <>
-                  <RunOverview snapshot={snapshot} asOfMs={snapshot.run.updatedAtMs} />
-                  <div className="flex flex-wrap items-center gap-2">
-                    <SegmentedControl items={TABS} value={tab} onChange={setTab} size="sm" />
-                    <div className="grow" />
-                    {canResume ? (
-                      <Button
-                        variant="secondary"
-                        onClick={() => void resumeSelectedRun(snapshot.run.id)}
-                      >
-                        Resume
-                      </Button>
-                    ) : null}
-                    {canCancel ? (
-                      <Button
-                        variant="secondary"
-                        onClick={() => void cancelSelectedRun(snapshot.run.id)}
-                      >
-                        Cancel
-                      </Button>
-                    ) : null}
-                  </div>
-                  {tab === "tasks" ? <RunTasks snapshot={snapshot} /> : null}
-                  {tab === "agents" ? <RunAgents snapshot={snapshot} /> : null}
-                  {tab === "activity" ? <RunActivity snapshot={snapshot} /> : null}
-                </>
+                <RunDetail
+                  snapshot={snapshot}
+                  actions={
+                    <>
+                      {canResume ? (
+                        <Button
+                          variant="secondary"
+                          onClick={() => void resumeSelectedRun(snapshot.run.id)}
+                        >
+                          Resume
+                        </Button>
+                      ) : null}
+                      {canCancel ? (
+                        <Button
+                          variant="secondary"
+                          onClick={() => void cancelSelectedRun(snapshot.run.id)}
+                        >
+                          Cancel
+                        </Button>
+                      ) : null}
+                    </>
+                  }
+                />
               ) : (
                 <div className="flex justify-center py-16">
                   <Spinner />
