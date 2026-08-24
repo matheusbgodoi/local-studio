@@ -442,7 +442,60 @@ against `qwen-daily` (window 176128 read live, scheduler budget narrowed to
 succeeded, 312085 input / 37917 output cumulative, one plan revision never
 needed, profile `qwen-daily`/`standard` unchanged, and no manual "continue".
 
-## 15. The end-to-end override
+## 15. The final acceptance run
+
+**MEASURED.** Qualifying the autonomous control plane against the released
+Phase 4 host found two defects nothing offline had reached.
+
+The first is a consequence of how a capable model actually works. It does thirty
+tool calls inside ONE turn, and the runtime only adjudicated between turns: a
+task reported with every acceptance criterion satisfied stayed `RUNNING`, its
+dependents stayed `BLOCKED` with the edges already removed, and the model spent
+two plan revisions routing around a gate that had been met. The design had
+assumed the turn was the unit of work. It is not — the model works
+continuously, and the plan has to move under it. Readiness is now derived
+wherever the shape of a plan changes: on creation, on revision, and the moment a
+task's criteria close.
+
+The second was found by an accident rather than by a test. The machine serving
+the model dropped off the network for about a minute; the drive loop threw
+`fetch failed`, and any throw there marked the run `FAILED`, which is terminal.
+Three proved tasks and two checkpoints became unreachable. Losing the backend is
+the same accident as losing the process — work stopped mid-flight and nothing
+about the goal was decided — so it now takes the crash path: reconcile, keep
+every proved task, reopen as `PAUSED`. Only an error about the work ends a run.
+
+**EVIDENCE.** One ordinary chat prompt against `qwen-daily` (window 200704 read
+live from the released host, scheduler budget narrowed to 12000). The model
+routed to a durable Run by native tool call, wrote an eight-task plan with
+dependencies and acceptance criteria, created its agent, and executed with real
+tools. Measured on the shipped build:
+
+- **3 checkpoint → compact → automatic resume cycles** — 72700 → ~538, 56065 →
+  ~552, 59618 → ~552 tokens — and **4 automatic resumes**, each naming the same
+  task it had been working on. No manual "continue".
+- **38 artifacts.** Tool output over the preview budget became a durable
+  artifact; the model received a reference plus head and tail, and the whole
+  output stayed readable through `read_agentic_artifact`.
+- **`OPERATION_REPEATED`** raised by the ledger on a repeated side effect,
+  without replaying it blind.
+- **Two forced restarts.** The first preserved two proved tasks and reset only
+  the interrupted one; the second preserved three. Both reopened as `PAUSED`
+  and resumed into the same work.
+- **Zero plan revisions.** The run that exposed the settling defect had needed
+  two; after the fix the plan never had to be rewritten.
+- **Independent working contexts.** The chat session and the agent session were
+  measured separately throughout — 121313 against 36449 tokens at one sample —
+  and compacting one never touched the other.
+- **Ordinary chat created no Run.** A plain question answered normally and the
+  run count did not move.
+- **Profiles and vision unchanged** against the final backend: `qwen-daily`
+  (default) and `qwen-uncensored` both correct on the same physical model, and a
+  generated checkerboard described correctly.
+- **Inference concurrency exactly 1** — probes issued during the run queued
+  behind it at the gate rather than decoding alongside it.
+
+## 16. The end-to-end override
 
 `LOCAL_STUDIO_AGENTIC_USABLE_CONTEXT` narrows the **scheduler's** usable
 context for a long run against the real card, so several genuine
