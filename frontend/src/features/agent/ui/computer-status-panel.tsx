@@ -96,13 +96,7 @@ export function ComputerStatusPanel({
 
       <StatusSection title="Workspace">
         <StatusRows
-          rows={workspaceRows(
-            activeProject,
-            focusedSession,
-            gitSummary ?? null,
-            browser.enabled,
-            browser.url,
-          )}
+          rows={workspaceRows(activeProject, focusedSession, gitSummary ?? null, browser.url)}
         />
       </StatusSection>
     </section>
@@ -205,14 +199,13 @@ function workspaceRows(
   activeProject: Project | null,
   session: Session | null,
   gitSummary: GitSummary | null,
-  browserEnabled: boolean,
   browserUrl: string,
 ): StatusRowData[] {
   return [
     { label: "Project", value: activeProject?.name ?? "No project" },
     { label: "Directory", value: activeProject?.path ?? session?.cwd ?? "No directory" },
     { label: "Git", value: formatGitSummary(gitSummary) },
-    { label: "Browser", value: browserEnabled ? browserUrl : "Tool off" },
+    { label: "Browser", value: browserUrl },
   ];
 }
 

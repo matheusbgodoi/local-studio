@@ -142,11 +142,9 @@ function sameWorkspacePaneProps(previous: WorkspacePaneProps, next: WorkspacePan
     previous.models === next.models &&
     previous.modelsLoading === next.modelsLoading &&
     previous.defaultModel === next.defaultModel &&
-    previous.tools.browser.enabled === next.tools.browser.enabled &&
     previous.tools.browser.backend === next.tools.browser.backend &&
     previous.tools.computer.open === next.tools.computer.open &&
     previous.tools.toggleBrowserBackend === next.tools.toggleBrowserBackend &&
-    previous.tools.setBrowserEnabled === next.tools.setBrowserEnabled &&
     previous.tools.closeComputerTab === next.tools.closeComputerTab &&
     previous.tools.setComputerTab === next.tools.setComputerTab &&
     previous.tools.toggleComputerOpen === next.tools.toggleComputerOpen &&
@@ -194,18 +192,8 @@ const WorkspacePane = memo(function WorkspacePane({
           {...reasoning}
         />
       )}
-      browserToolEnabled={tools.browser.enabled}
       browserBackend={tools.browser.backend}
       onToggleBrowserBackend={tools.toggleBrowserBackend}
-      onToggleBrowserTool={() => {
-        if (tools.browser.enabled) {
-          tools.setBrowserEnabled(false);
-          tools.closeComputerTab("browser");
-          return;
-        }
-        tools.setBrowserEnabled(true);
-        tools.setComputerTab("browser");
-      }}
       onPiSessionIdChange={handles.notifySessionsChanged}
       isFocused={view.isFocused}
       onFocus={() => dispatch({ type: "focusPane", paneId: view.paneId })}

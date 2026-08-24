@@ -1,7 +1,7 @@
 // Tool surface types — split into two pieces:
 //
 // 1. UI state (workspace-global): which side panel is open, panel width,
-//    browser tool toggle, browser URL.
+//    which browser backend drives the pane, browser URL.
 // 2. Per-session selection: which skills/templates the composer has armed for
 //    a given session. Lives in a flat map keyed by SessionId so panes /
 //    sessions stay independent of tool choice.
@@ -29,8 +29,9 @@ export type ComputerTab = (typeof COMPUTER_TAB_IDS)[number];
 
 export type BrowserBackend = "embedded" | "sitegeist";
 
+// The browser is a normal capability of every turn, so there is no on/off flag
+// here: only which backend drives it and what it is currently pointed at.
 export type BrowserState = {
-  enabled: boolean;
   backend: BrowserBackend;
   url: string;
   input: string;

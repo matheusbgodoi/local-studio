@@ -167,10 +167,8 @@ function SideChatTab({
             {...reasoning}
           />
         )}
-        browserToolEnabled={tools.browser.enabled}
         browserBackend={tools.browser.backend}
         onToggleBrowserBackend={tools.toggleBrowserBackend}
-        onToggleBrowserTool={tools.toggleBrowser}
         isFocused
         onFocus={() => undefined}
         tabs={[sideChatSession]}
