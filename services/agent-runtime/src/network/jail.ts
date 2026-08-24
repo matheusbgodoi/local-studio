@@ -391,8 +391,8 @@ export function writeShellShim(profileDirectory: string, profilePath: string): s
 //
 export function unconfinedPaths(): string[] {
   return [
-    "the reader and browser_search run in this process and are routed in code, not confined by the kernel",
-    "remote MCP connectors cannot be routed and are refused while protection is on",
-    "a socket connected before the jail and passed in as a descriptor stays writable",
+    "the reader, browser_search, remote MCP connectors and Google sign-in run in this process and are routed in code, not confined by the kernel",
+    "the desktop app's own terminal is the owner's shell and is not confined",
+    "Chromium runs without its own sandbox, as it does in Direct mode; a hostile page cannot dial out, but it can read what this profile still allows",
   ];
 }
