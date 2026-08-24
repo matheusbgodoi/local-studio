@@ -122,6 +122,7 @@ export interface DesktopBridge {
     electronVersion: string;
   }>;
   openExternal(url: string): Promise<boolean>;
+  notify(payload: { title: string; body: string }): Promise<boolean>;
   /** Reveal a file in Finder/Explorer. Returns false when outside the home tree. */
   revealPath(target: string): Promise<boolean>;
   /** Open a file with its default application. False when outside the home tree. */

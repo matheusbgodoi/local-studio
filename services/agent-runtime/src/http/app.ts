@@ -60,9 +60,15 @@ import {
   handleAllSessions,
   handleSessionGet,
   handleSessionPatch,
+  handleSessionDelete,
   handleSessionsDelete,
   handleSessionsList,
 } from "./session-handlers";
+import {
+  handleNetworkPolicy,
+  handleNetworkProvider,
+  handleNetworkStatus,
+} from "./network-handlers";
 
 export function createAgentRuntimeApp() {
   const app = new Hono();
@@ -87,6 +93,7 @@ export function createAgentRuntimeApp() {
   app.get("/api/agent/sessions/all", (c) => handleAllSessions(c.req.raw));
   app.get("/api/agent/sessions/:id", (c) => handleSessionGet(c.req.raw, c.req.param("id")));
   app.patch("/api/agent/sessions/:id", (c) => handleSessionPatch(c.req.raw, c.req.param("id")));
+  app.delete("/api/agent/sessions/:id", (c) => handleSessionDelete(c.req.raw, c.req.param("id")));
   app.get("/api/agent/automations", () => handleAutomationsList());
   app.post("/api/agent/automations", (c) => handleAutomationCreate(c.req.raw));
   app.patch("/api/agent/automations/:id", (c) =>
@@ -94,6 +101,11 @@ export function createAgentRuntimeApp() {
   );
   app.delete("/api/agent/automations/:id", (c) => handleAutomationDelete(c.req.param("id")));
   app.post("/api/agent/automations/:id/run", (c) => handleAutomationRun(c.req.param("id")));
+  app.get("/api/agent/network/status", () => handleNetworkStatus());
+  app.post("/api/agent/network/policy", (c) => handleNetworkPolicy(c.req.raw));
+  app.get("/api/agent/network/provider", (c) => handleNetworkProvider(c.req.raw));
+  app.post("/api/agent/network/provider", (c) => handleNetworkProvider(c.req.raw));
+  app.delete("/api/agent/network/provider", (c) => handleNetworkProvider(c.req.raw));
   app.get("/api/agent/runs", () => handleAgenticRunsList());
   app.post("/api/agent/runs", (c) => handleAgenticRunCreate(c.req.raw));
   app.get("/api/agent/runs/:id", (c) => handleAgenticRunGet(c.req.param("id")));

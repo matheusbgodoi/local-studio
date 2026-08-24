@@ -6,6 +6,7 @@ import {
   GitBranch,
   Globe2,
   MessageSquarePlus,
+  Target,
   TerminalSquare,
 } from "@/ui/icon-registry";
 import type { ToolsContextValue } from "@/features/agent/tools/context";
@@ -42,6 +43,11 @@ const LazyGitDiffPanel = lazy(() =>
     default: GitDiffPanel,
   })),
 );
+const LazyRunSessionPanel = lazy(() =>
+  import("@/features/runs/run-session-panel").then(({ RunSessionPanel }) => ({
+    default: RunSessionPanel,
+  })),
+);
 
 export type SideChatTabsUpdater = Session[] | ((tabs: Session[]) => Session[]);
 
@@ -70,6 +76,7 @@ export function ComputerTabPanel(props: ComputerTabPanelProps) {
   const panels: Record<ComputerTab, ReactNode> = {
     status: <StatusTab {...props} />,
     tools: <ComputerLauncherPanel activeTab={props.tools.computer.tab} {...props} />,
+    run: <RunTab focusedSession={props.focusedSession} />,
     "side-chat": <SideChatTab {...props} />,
     browser: <BrowserTab {...props} />,
     files: <FilesTab cwd={focusedCwd} />,
@@ -167,10 +174,8 @@ function SideChatTab({
             {...reasoning}
           />
         )}
-        browserToolEnabled={tools.browser.enabled}
         browserBackend={tools.browser.backend}
         onToggleBrowserBackend={tools.toggleBrowserBackend}
-        onToggleBrowserTool={tools.toggleBrowser}
         isFocused
         onFocus={() => undefined}
         tabs={[sideChatSession]}
@@ -200,6 +205,18 @@ function BrowserTab({ onNavigateBrowser, tools }: ComputerTabPanelProps) {
   );
 }
 
+// The Run belongs to the focused conversation, never to the panel: when the
+// focus moves the ids move with it, so the panel re-resolves instead of holding
+// on to whatever the previous chat was running.
+function RunTab({ focusedSession }: { focusedSession: Session | null }) {
+  return (
+    <LazyRunSessionPanel
+      sessionId={focusedSession?.id ?? null}
+      piSessionId={focusedSession?.piSessionId ?? null}
+    />
+  );
+}
+
 function FilesTab({ cwd }: { cwd: string | null }) {
   return (
     <section className="flex min-h-0 flex-1 flex-col">
@@ -225,6 +242,13 @@ function ComputerLauncherPanel({
   tools,
 }: ComputerTabPanelProps & { activeTab: ComputerTab }) {
   const cards = [
+    {
+      key: "run",
+      title: "Run",
+      description: "Follow this conversation's durable Run",
+      icon: Target,
+      onClick: () => tools.setComputerTab("run"),
+    },
     {
       key: "files",
       title: "Files",

@@ -25,6 +25,8 @@
     "check:frontend": "npm --prefix frontend run check:quality",
     "check:controller": "cd controller && bun run typecheck && bun run lint && bun run check",
     "check:agent-runtime": "cd services/agent-runtime && bun run check",
+    "test:network-protection": "cd services/agent-runtime && bun run src/network/acceptance.ts",
+    "remote-access": "node scripts/project.mjs remote-access",
     "dev:agent-runtime": "npm --prefix services/agent-runtime run build && node services/agent-runtime/dist/server.js",
     "desktop:build": "cd frontend && npm run desktop:build",
     "desktop:dist": "cd frontend && npm run desktop:dist",

@@ -42,7 +42,7 @@
       "name": "Chat",
       "short_name": "Chat",
       "description": "Open the chat interface",
-      "url": "/chat",
+      "url": "/agent",
       "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
     },
     {

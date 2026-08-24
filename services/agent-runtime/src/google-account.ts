@@ -13,6 +13,7 @@ import {
 } from "./google-workspace-binding";
 import { desktopOAuthVault, type OAuthVault } from "./oauth-vault";
 import type { GoogleAccountView, GoogleConnectionView } from "./google-account-contract";
+import { protectedFetch } from "./network";
 
 export type { GoogleAccountView, GoogleConnectionView } from "./google-account-contract";
 
@@ -94,7 +95,14 @@ export class GoogleAccountError extends Error {
 }
 
 const defaultDependencies: GoogleOAuthDependencies = {
-  fetch,
+  //
+  // Every Google endpoint reached here — the token exchange, the refresh, the
+  // userinfo call, the revoke — runs on the agent's behalf and would otherwise
+  // leave on the machine's own route while a session was protected. Resolved per
+  // call rather than captured, so a connector pooled across a policy change
+  // follows the policy in force now.
+  //
+  fetch: ((input, init) => protectedFetch("the Google account endpoint")(input, init)) as typeof fetch,
   now: Date.now,
   random: randomBytes,
   verifyAccess: verifyGoogleWorkspaceAccess,

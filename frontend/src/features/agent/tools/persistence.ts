@@ -6,10 +6,7 @@ import {
   type ComputerTab,
 } from "@/features/agent/tools/types";
 
-export const BROWSER_TOOL_KEY = "local-studio.agent.browserToolEnabled";
 export const BROWSER_BACKEND_KEY = "local-studio.agent.browserBackend";
-export const BROWSER_TOOL_DEFAULT_OFF_MIGRATION_KEY =
-  "***************************************************";
 export const COMPUTER_BROWSER_OPEN_KEY = "local-studio.agent.computer.browserOpen";
 export const COMPUTER_FILES_OPEN_KEY = "local-studio.agent.computer.filesOpen";
 export const COMPUTER_DEFAULT_CLOSED_STORAGE_ID = "local-studio.agent.computer.defaultCollapsedV2";
@@ -95,10 +92,11 @@ function remove(key: string): void {
 }
 
 export function migrateToolStorage(): void {
-  if (!read(BROWSER_TOOL_DEFAULT_OFF_MIGRATION_KEY)) {
-    write(BROWSER_TOOL_KEY, "0");
-    write(BROWSER_TOOL_DEFAULT_OFF_MIGRATION_KEY, "1");
-  }
+  // The browser used to be a workspace-global on/off switch. It is now a normal
+  // capability of every turn, so the stored flag is dropped at the boundary
+  // rather than read: an install that last saved "0" must not start the browser
+  // out disabled, because "disabled" no longer exists as a state.
+  remove("local-studio.agent.browserToolEnabled");
   if (!read(COMPUTER_DEFAULT_CLOSED_STORAGE_ID)) {
     write(COMPUTER_BROWSER_OPEN_KEY, "0");
     write(COMPUTER_FILES_OPEN_KEY, "0");
@@ -113,7 +111,6 @@ export function migrateToolStorage(): void {
 
 export function loadBrowserState(): BrowserState {
   return {
-    enabled: read(BROWSER_TOOL_KEY) === "1",
     backend: parseBrowserBackend(read(BROWSER_BACKEND_KEY)),
     url: DEFAULT_BROWSER_URL,
     input: DEFAULT_BROWSER_URL,
@@ -125,10 +122,7 @@ export function loadComputerState(): ComputerState {
   const storedTab = read(COMPUTER_TAB_KEY);
   const tab: ComputerTab = isComputerTab(storedTab) ? storedTab : "status";
   const storedTabs = readComputerTabs();
-  const persistedTabs = uniqueComputerTabs([
-    "status",
-    ...(storedTabs.length ? storedTabs : [tab]),
-  ]);
+  const persistedTabs = uniqueComputerTabs(["status", ...(storedTabs.length ? storedTabs : [tab])]);
   const tabs = persistedTabs.includes(tab)
     ? persistedTabs
     : uniqueComputerTabs([...persistedTabs, tab]);
@@ -172,10 +166,6 @@ export function computerPanelVisibility(current: ComputerState, open: boolean): 
     tabs.length === current.tabs.length && tabs.every((tab, index) => tab === current.tabs[index]);
   if (current.open === open && tabsUnchanged) return current;
   return { ...current, open, tabs };
-}
-
-export function writeBrowserEnabled(enabled: boolean): void {
-  write(BROWSER_TOOL_KEY, enabled ? "1" : "0");
 }
 
 function parseBrowserBackend(value: string | null): BrowserBackend {

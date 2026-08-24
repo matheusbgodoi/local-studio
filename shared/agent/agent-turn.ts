@@ -12,6 +12,11 @@ import {
 } from "./agent-image-input";
 import { sanitizeComposerPromptTemplates, sanitizeComposerSkills } from "./composer-refs";
 import { Schema } from "effect";
+import {
+  DEFAULT_NETWORK_POLICY,
+  parseNetworkPolicy,
+  type NetworkPolicy,
+} from "./network-policy";
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -42,10 +47,6 @@ export function stringArray(value: unknown): string[] {
     : [];
 }
 
-export function boolField(record: Record<string, unknown>, key: string): boolean {
-  return record[key] === true;
-}
-
 export type AgentBrowserBackend = "embedded" | "sitegeist";
 export type AgentToolAccess = "read_only" | "full";
 
@@ -74,7 +75,7 @@ export type AgentTurnRequest = {
   cwd?: string;
   piSessionId: string | null;
   toolAccess: AgentToolAccess;
-  browserToolEnabled: boolean;
+  networkPolicy: NetworkPolicy;
   browserSessionId?: string;
   browserBackend?: AgentBrowserBackend;
   skills: ReturnType<typeof sanitizeComposerSkills>;
@@ -164,7 +165,7 @@ export function parseAgentTurnRequest(input: unknown): ParseResult<AgentTurnRequ
       cwd: cwd.value,
       piSessionId: piSessionId.value ?? null,
       toolAccess: body.toolAccess === "full" ? "full" : "read_only",
-      browserToolEnabled: boolField(body, "browserToolEnabled"),
+      networkPolicy: parseNetworkPolicy(body.networkPolicy) ?? DEFAULT_NETWORK_POLICY,
       browserSessionId: browserSessionId.value,
       browserBackend,
       skills: sanitizeComposerSkills(body.skills),

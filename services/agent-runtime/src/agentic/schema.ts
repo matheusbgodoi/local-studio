@@ -41,7 +41,7 @@ export const loadSqlDatabase = (): new (filepath: string) => SqlDatabase => {
 };
 
 export const AGENTIC_STORE_FILENAME = "agentic-runtime.sqlite";
-export const AGENTIC_STORE_VERSION = 2;
+export const AGENTIC_STORE_VERSION = 3;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS agentic_metadata (
@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS agentic_runs (
   model_id TEXT NOT NULL,
   physical_model_id TEXT NOT NULL,
   behavior_profile TEXT,
+  network_policy TEXT NOT NULL DEFAULT 'direct' CHECK (network_policy IN ('direct','vpn_protected')),
   context_window INTEGER NOT NULL,
   usable_limit INTEGER NOT NULL,
   session_id TEXT NOT NULL,
@@ -257,6 +258,13 @@ export function openAgenticDatabase(dataDir: string): { database: SqlDatabase; f
   // forward is the whole job; the only unrecoverable case is a store written
   // by code newer than this, which must not be guessed at.
   //
+  // A table that already exists, however, is left exactly as it was — CREATE
+  // TABLE IF NOT EXISTS cannot add a column to one. Every column introduced
+  // after a table shipped therefore needs an explicit additive step, or an
+  // existing store keeps the old shape and the first INSERT fails on a column
+  // that is not there.
+  //
+  addMissingColumns(database);
   database
     .prepare("INSERT OR IGNORE INTO agentic_metadata(key, value) VALUES ('version', ?)")
     .run(String(AGENTIC_STORE_VERSION));
@@ -284,6 +292,34 @@ export function openAgenticDatabase(dataDir: string): { database: SqlDatabase; f
     }
   }
   return { database, filepath: target };
+}
+
+//
+// Additive only, and idempotent: a column already present is left alone, and
+// nothing here drops, renames or rewrites anything. A NOT NULL column needs a
+// DEFAULT so the rows that predate it get a value — `direct` is the right one,
+// because a Run that was created before this existed was not protected, and
+// backfilling it as protected would claim a guarantee nothing ever provided.
+//
+function addMissingColumns(database: SqlDatabase): void {
+  const additions: ReadonlyArray<{ table: string; column: string; definition: string }> = [
+    {
+      table: "agentic_runs",
+      column: "network_policy",
+      definition:
+        "TEXT NOT NULL DEFAULT 'direct' CHECK (network_policy IN ('direct','vpn_protected'))",
+    },
+  ];
+  for (const addition of additions) {
+    const columns = database.prepare(`PRAGMA table_info(${addition.table})`).all() as Array<{
+      name?: unknown;
+    }>;
+    if (columns.length === 0) continue;
+    if (columns.some((column) => column.name === addition.column)) continue;
+    database.exec(
+      `ALTER TABLE ${addition.table} ADD COLUMN ${addition.column} ${addition.definition}`,
+    );
+  }
 }
 
 export function withTransaction<T>(database: SqlDatabase, task: () => T): T {

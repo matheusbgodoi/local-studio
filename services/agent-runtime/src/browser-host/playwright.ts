@@ -5,6 +5,7 @@ import path from "node:path";
 import { chromium, type BrowserContext } from "playwright-core";
 import { resolveDataDir } from "../data-dir";
 import { getGlobalSingleton } from "../instances";
+import { networkService } from "../network";
 
 const LAUNCH_TIMEOUT_MS = 15_000;
 
@@ -110,13 +111,33 @@ class PlaywrightManager {
       throw new Error("Browser unavailable: no Chromium found — set LOCAL_STUDIO_CHROME_PATH");
     }
     const headless = !this.headful;
+    //
+    // Chromium ignores HTTP_PROXY entirely — it reads the system network
+    // settings or --proxy-server and nothing else — so the environment other
+    // tools follow does nothing for it. Under protection it is launched inside
+    // the same jail as every other child, which is what actually contains it,
+    // and given the proxy flag so that it works rather than merely fails
+    // closed. Both headless and headful take this path, and so does the
+    // relaunch behind browser_verify, because they all go through here.
+    //
+    const network = networkService();
+    const jailArgs = network.chromiumArguments();
     const launch = (userDataDir: string): Promise<BrowserContext> =>
       chromium.launchPersistentContext(userDataDir, {
-        executablePath,
+        executablePath: network.chromiumExecutable(executablePath),
         headless,
         viewport: { width: 1280, height: 800 },
         timeout: LAUNCH_TIMEOUT_MS,
-        args: ["--no-first-run", "--no-default-browser-check", "--disable-dev-shm-usage"],
+        args: [
+          "--no-first-run",
+          "--no-default-browser-check",
+          "--disable-dev-shm-usage",
+          ...jailArgs,
+        ],
+        env: { ...process.env, ...network.environment() } as Record<string, string>,
+        ...(network.proxyEndpoint()
+          ? { proxy: { server: `socks5://${network.proxyEndpoint()}` } }
+          : {}),
       });
     const dataDirectory = browserDataDirectory();
     this.launching = launch(dataDirectory)

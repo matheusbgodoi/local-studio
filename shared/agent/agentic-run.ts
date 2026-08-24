@@ -8,6 +8,7 @@
 //
 
 import { Schema } from "effect";
+import { NetworkPolicySchema } from "./network-policy";
 
 export const AGENTIC_RUN_STATUSES = [
   "CREATED",
@@ -80,6 +81,7 @@ export const AgenticRunSchema = Schema.Struct({
   modelId: Schema.String,
   physicalModelId: Schema.String,
   behaviorProfile: nullableString,
+  networkPolicy: NetworkPolicySchema,
   contextWindow: Schema.Number,
   usableLimit: Schema.Number,
   sessionId: Schema.String,

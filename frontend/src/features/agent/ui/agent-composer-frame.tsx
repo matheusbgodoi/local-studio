@@ -38,7 +38,6 @@ import { CloseIcon } from "@/ui/icons";
 export type AgentComposerFrameProps = {
   attachments: AgentComposerAttachment[];
   banner: ComposerBanner | null;
-  browserToolEnabled: boolean;
   browserBackend: BrowserBackend;
   composerDragActive: boolean;
   contextWindow: number;
@@ -53,6 +52,7 @@ export type AgentComposerFrameProps = {
   mentionRows: MentionRow[];
   modelSupportsVision: boolean;
   modelSelector?: ReactNode;
+  networkControl?: ReactNode;
   onAbortTurn: () => void;
   onAttachFiles: (files: FileList | null) => void;
   onComposerChange: ChangeEventHandler<HTMLTextAreaElement>;
@@ -74,7 +74,6 @@ export type AgentComposerFrameProps = {
   onSubmit: FormEventHandler<HTMLFormElement>;
   onTranscript: (text: string, phase?: TranscriptPhase) => void;
   onToggleBrowserBackend: () => void;
-  onToggleBrowserTool: () => void;
   placeholder: string;
   goalMode?: boolean;
   onExitGoalMode?: () => void;
@@ -95,7 +94,6 @@ export type AgentComposerFrameProps = {
 export function AgentComposerFrame({
   attachments,
   banner,
-  browserToolEnabled,
   browserBackend,
   composerDragActive,
   contextWindow,
@@ -110,6 +108,7 @@ export function AgentComposerFrame({
   mentionRows,
   modelSupportsVision,
   modelSelector,
+  networkControl,
   onAbortTurn,
   onAttachFiles,
   onComposerChange,
@@ -131,7 +130,6 @@ export function AgentComposerFrame({
   onSubmit,
   onTranscript,
   onToggleBrowserBackend,
-  onToggleBrowserTool,
   placeholder,
   goalMode = false,
   onExitGoalMode,
@@ -236,13 +234,12 @@ export function AgentComposerFrame({
           status={status}
           input={input}
           attachmentsCount={attachments.length}
-          browserToolEnabled={browserToolEnabled}
           browserBackend={browserBackend}
           onToggleBrowserBackend={onToggleBrowserBackend}
-          onToggleBrowserTool={onToggleBrowserTool}
           onAbortTurn={onAbortTurn}
           onTranscript={onTranscript}
           modelSelector={modelSelector}
+          networkControl={networkControl}
         />
       </div>
       {showStatusBar ? (

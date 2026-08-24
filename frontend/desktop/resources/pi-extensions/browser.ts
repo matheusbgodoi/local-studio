@@ -7,6 +7,13 @@ type ToolResult = {
 };
 
 const FRONTEND_BASE = process.env.LOCAL_STUDIO_FRONTEND_BASE ?? "http://127.0.0.1:3000";
+// Present only while the app is published; the frontend then requires it of
+// every caller, with no exemption for ones running on this machine.
+const FRONTEND_TOKEN = process.env.LOCAL_STUDIO_FRONTEND_TOKEN;
+const STUDIO_HEADERS: Record<string, string> = {
+  "Content-Type": "application/json",
+  ...(FRONTEND_TOKEN ? { "x-local-studio-token": FRONTEND_TOKEN } : {}),
+};
 const BROWSER_SESSION_ID = process.env.LOCAL_STUDIO_BROWSER_SESSION_ID ?? "";
 const DEFAULT_BROWSER_TOOL_TIMEOUT_MS = 60_000;
 
@@ -44,7 +51,7 @@ async function callBrowserAction(
   if (signal?.aborted) controller.abort();
   const response = await fetch(`${FRONTEND_BASE}/api/agent/browser/${verb}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: STUDIO_HEADERS,
     body: JSON.stringify(
       BROWSER_SESSION_ID ? { ...payload, sessionId: BROWSER_SESSION_ID } : payload,
     ),

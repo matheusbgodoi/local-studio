@@ -41,9 +41,16 @@ function TaskRow({
 }) {
   const outstanding = task.acceptance.filter((criterion) => !criterion.satisfied);
   const dependencies = task.dependencies.map((id) => titleById.get(id) ?? id).filter(Boolean);
+  //
+  // Which task the Run is actually on is the first thing anyone looks for, and
+  // in a narrow column a word at the end of the row is easy to miss — so the
+  // row itself carries the mark, not only its value slot.
+  //
+  const active = task.id === activeTaskId;
 
   return (
     <ListRow
+      className={active ? "bg-(--ui-info)/8 ring-1 ring-inset ring-(--ui-info)/30" : undefined}
       label={task.title}
       status={
         <StatusPill tone={taskTone(task.status)} variant="badge">
@@ -51,8 +58,8 @@ function TaskRow({
         </StatusPill>
       }
       value={
-        task.id === activeTaskId ? (
-          <span className="text-[length:var(--fs-xs)] text-(--ui-info)">current</span>
+        active ? (
+          <span className="text-[length:var(--fs-xs)] font-medium text-(--ui-info)">current</span>
         ) : null
       }
     >

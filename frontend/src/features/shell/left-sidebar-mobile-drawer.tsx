@@ -22,8 +22,11 @@ export function MobileNavigationDrawer({
   onClose: () => void;
   onNewTask: () => void;
 }) {
+  // z-150: above the composer, which sets z-100 on its own frame — at z-50 the
+  // composer floated over this "modal" and its Send button stayed hit-testable
+  // through it. Still below the right-sidebar sheet at z-200, per pwa.css.
   return (
-    <div className="fixed inset-0 z-50 md:hidden" role="dialog" aria-modal="true">
+    <div className="fixed inset-0 z-[150] md:hidden" role="dialog" aria-modal="true">
       <button
         type="button"
         className="absolute inset-0 h-full w-full bg-black/60"

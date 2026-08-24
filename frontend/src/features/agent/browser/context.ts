@@ -1,19 +1,16 @@
 import type { BrowserBackend } from "@/features/agent/tools/types";
 
 type BrowserContextPromptInput = {
-  enabled: boolean;
   backend: BrowserBackend;
   url: string;
   vision: boolean;
 };
 
-export function browserContextPrompt({
-  enabled,
-  backend,
-  url,
-  vision,
-}: BrowserContextPromptInput): string {
-  if (!enabled) return "";
+// The browser is loaded on every turn, so this block is unconditional: the model
+// is always told which backend it has and where the pane is pointed. There is no
+// "off" branch to fall through, and `messages/helpers.ts` still strips the block
+// from replayed user turns exactly as before.
+export function browserContextPrompt({ backend, url, vision }: BrowserContextPromptInput): string {
   const activeUrl = url && url !== "about:blank" ? url : "about:blank";
   return [
     "<browser_context>",

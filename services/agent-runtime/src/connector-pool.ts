@@ -59,6 +59,18 @@ export async function getPooledConnection(connectorId: string): Promise<McpConne
   return connection;
 }
 
+//
+// Every pooled connector process, dropped. A connector started before
+// protection engaged is a live process outside the jail, and it would go on
+// serving protected tool calls from the wrong side of the boundary; one started
+// while protected keeps a jail that no longer applies after the owner returns
+// to Direct. Either way the pool has to be rebuilt, and the next call rebuilds
+// it under the policy in force then.
+//
+export function closeAllPooledConnections(): void {
+  for (const connectorId of [...pool.keys()]) closePooledConnection(connectorId);
+}
+
 export function closePooledConnection(connectorId: string): void {
   const connection = pool.get(connectorId);
   if (!connection) return;

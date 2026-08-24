@@ -16,6 +16,7 @@ import {
 } from "@/features/agent/composer-context";
 import type { Session, SessionId, UpdateSession } from "@/features/agent/runtime/types";
 import type { BrowserBackend, ToolSelection } from "@/features/agent/tools/types";
+import type { NetworkPolicy } from "@shared/agent/network-policy";
 import type {
   AgentQueueAction,
   AgentThinkingLevel,
@@ -43,7 +44,7 @@ export type UseSessionEngineDeps = {
   thinkingLevel: AgentThinkingLevel;
   toolAccess: AgentToolAccess;
   cwd: string;
-  browserToolEnabled: boolean;
+  networkPolicy: NetworkPolicy;
   browserBackend: BrowserBackend;
   onPiSessionIdChange?: (piSessionId: string) => void;
   /** Mutate a single session record. */
@@ -94,7 +95,7 @@ export function useSessionEngine(deps: UseSessionEngineDeps): SessionEngine {
     thinkingLevel,
     toolAccess,
     cwd,
-    browserToolEnabled,
+    networkPolicy,
     browserBackend,
     onPiSessionIdChange,
     updateSession,
@@ -121,7 +122,6 @@ export function useSessionEngine(deps: UseSessionEngineDeps): SessionEngine {
           const selection = selectionForRef.current(sessionId);
           const skills = selection.skills ?? EMPTY_SKILLS;
           const promptTemplates = selection.promptTemplates ?? EMPTY_PROMPT_TEMPLATES;
-          const browserEnabledForTurn = browserToolEnabled;
           const message = selectedContextPrompt(text, skills);
           const contextualQueueReplacement = queueReplacement
             ? selectedContextPrompt(queueReplacement, skills)
@@ -139,7 +139,7 @@ export function useSessionEngine(deps: UseSessionEngineDeps): SessionEngine {
                 mode,
                 queueAction,
                 queueReplacement: contextualQueueReplacement,
-                browserToolEnabled: browserEnabledForTurn,
+                networkPolicy,
                 browserSessionId: runtime,
                 browserBackend,
                 skills,
@@ -175,7 +175,7 @@ export function useSessionEngine(deps: UseSessionEngineDeps): SessionEngine {
       );
     },
     [
-      browserToolEnabled,
+      networkPolicy,
       browserBackend,
       cwd,
       modelId,
@@ -191,7 +191,7 @@ export function useSessionEngine(deps: UseSessionEngineDeps): SessionEngine {
       submitPromptTurn(
         {
           activeTabId,
-          browserToolEnabled,
+          networkPolicy,
           browserBackend,
           cwd,
           modelId,
@@ -210,7 +210,7 @@ export function useSessionEngine(deps: UseSessionEngineDeps): SessionEngine {
       thinkingLevel,
       toolAccess,
       cwd,
-      browserToolEnabled,
+      networkPolicy,
       browserBackend,
       onPiSessionIdChange,
       updateSession,
@@ -418,7 +418,7 @@ export function useSessionEngine(deps: UseSessionEngineDeps): SessionEngine {
                 toolAccess,
                 cwd: cwd.trim() || undefined,
                 piSessionId: session.piSessionId,
-                browserToolEnabled,
+                networkPolicy,
                 browserSessionId: session.id,
                 browserBackend,
                 skills: selectionForRef.current(sessionId).skills ?? EMPTY_SKILLS,
@@ -450,7 +450,7 @@ export function useSessionEngine(deps: UseSessionEngineDeps): SessionEngine {
           ),
         ),
       ),
-    [browserToolEnabled, browserBackend, cwd, loadAndReplay, modelId, thinkingLevel, updateSession],
+    [networkPolicy, browserBackend, cwd, loadAndReplay, modelId, thinkingLevel, updateSession],
   );
 
   const acceptsControl = useCallback(

@@ -28,6 +28,8 @@ import { getProviderHub } from "./provider-hub";
 import { attachGoalDriver } from "./goal-driver";
 import { createGoalPromptExtension } from "./goal-prompt";
 import { createAgenticControlExtension } from "./agentic/control-tools";
+import { networkService } from "./network";
+import { applyAgentShell } from "./network/agent-shell";
 import { sharedInferenceGate } from "./agentic/inference-gate";
 import { findRuntimeSessionForLookup, piStatusFromEvents } from "./pi-runtime-state";
 import { configuredPiSessionDir, findSessionFile } from "./sessions-store";
@@ -478,6 +480,31 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
           : SessionManager.create(resolvedCwd, sessionDir);
         const resuming = Boolean(resumeFile);
         const agentDir = getAgentDir();
+        //
+        // The agent's shell is pointed at the jail shim here, before the session
+        // exists, so the first bash call of a protected turn is already inside
+        // the boundary. `networkPolicy` is in the runtime fingerprint, so
+        // flipping the toggle rebuilds the runtime rather than leaving a live
+        // session on the shell it started with.
+        //
+        //
+        // Applied before the session exists, so the first bash call of a
+        // protected turn is already inside the boundary. If the write did not
+        // take, the runtime does NOT start: a session whose shell is the bare
+        // /bin/bash would run every command the model writes outside the jail
+        // while the owner is being shown a padlock, and failing to start is the
+        // only answer to that which is not a lie.
+        //
+        {
+          const network = networkService();
+          const shim = network.shellShimPath();
+          const applied = applyAgentShell(agentDir, shim);
+          if (shim !== null && !applied) {
+            throw new Error(
+              "the agent shell could not be confined to the protected tunnel; the session was not started",
+            );
+          }
+        }
         const extensionUiContext = this.extensionUiContext();
         const recordExtensionEvent = (event: PiEvent) => this.recordEvent(event);
         const captureConnectorApi = (api: ExtensionAPI) => {

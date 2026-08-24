@@ -27,6 +27,52 @@ function denyResponse(isApi: boolean, status: number, message: string): NextResp
   return new NextResponse(message, { status });
 }
 
+//
+// The 401 a browser gets is a page it can act on, not a dead end.
+//
+// Pairing normally happens by opening a one-time `?token=` URL, but a cookie
+// only pairs the container it was set in — and on iOS a Home Screen web app has
+// its own, separate from Safari. So the app installed from a paired Safari tab
+// still opens to "Unauthorized" with no way forward. This gives every container
+// the same self-service way in: paste the token once, and the existing query
+// pairing takes it from there.
+//
+// No script, and the field is a password input with autocapitalise and
+// autocorrect off — iOS will otherwise capitalise the first character of the
+// token and the paste silently fails.
+//
+function pairingPage(): NextResponse {
+  const html = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Local Studio</title>
+<style>
+  :root { color-scheme: dark }
+  body { margin:0; min-height:100dvh; display:grid; place-items:center;
+         background:#1a1917; color:#e8e6e3;
+         font:16px/1.5 -apple-system, system-ui, sans-serif; padding:24px }
+  form { width:100%; max-width:22rem }
+  h1 { font-size:19px; margin:0 0 8px; font-weight:600 }
+  p { margin:0 0 20px; color:#e8e6e3a0; font-size:14px }
+  input, button { width:100%; box-sizing:border-box; font-size:16px;
+                  border-radius:10px; padding:12px 14px; margin-bottom:10px }
+  input { background:#26241f; color:#e8e6e3; border:1px solid #3a372f }
+  button { background:#e8e6e3; color:#1a1917; border:0; font-weight:600; min-height:44px }
+</style></head>
+<body><form method="GET">
+  <h1>Pair this device</h1>
+  <p>This browser has not been paired yet. Paste the access token to continue.</p>
+  <input name="token" type="password" inputmode="text" autocomplete="current-password"
+         autocapitalize="off" autocorrect="off" spellcheck="false"
+         placeholder="Access token" aria-label="Access token" required autofocus>
+  <button type="submit">Pair</button>
+</form></body></html>`;
+  return new NextResponse(html, {
+    status: 401,
+    headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
+  });
+}
+
 function enforceAccess(request: NextRequest): NextResponse | null {
   const posture = resolveAccessPosture();
   if (posture.kind === "allow") return null;
@@ -55,7 +101,7 @@ function enforceAccess(request: NextRequest): NextResponse | null {
   );
   if (presented && timingSafeStringEqual(presented, posture.token)) return null;
 
-  return denyResponse(isApi, 401, "Unauthorized");
+  return isApi ? denyResponse(true, 401, "Unauthorized") : pairingPage();
 }
 
 export function proxy(request: NextRequest) {

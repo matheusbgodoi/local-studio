@@ -7,6 +7,8 @@
 //
 
 import type { AgenticCapability } from "./capability";
+import { networkService } from "../network";
+import type { NetworkPolicy } from "../../../../shared/agent/network-policy";
 import { computeContextBudget, type ContextBudgetPolicy } from "./context-budget";
 import type { AgenticAgent, AgenticRun, AgenticRunSnapshot } from "./contract";
 import { validatePlan } from "./dag";
@@ -24,6 +26,7 @@ export type StartRunInput = {
   tasks: TaskSeed[];
   agentName?: string;
   agentRole?: string;
+  networkPolicy?: NetworkPolicy;
 };
 
 export type AgenticRunServiceOptions = {
@@ -64,6 +67,12 @@ export function createAgenticRunService(options: AgenticRunServiceOptions) {
       sessionId: input.sessionId,
       piSessionId: input.piSessionId,
       cwd: input.cwd,
+      //
+      // Captured at birth from the conversation that asked for it, and durable
+      // from here on. The owner moving the toggle afterwards starts the NEXT
+      // Run somewhere else; it does not quietly re-route this one.
+      //
+      networkPolicy: input.networkPolicy ?? networkService().sessionPolicy(input.sessionId),
     });
     store.createAgent({
       runId: run.id,
@@ -86,9 +95,55 @@ export function createAgenticRunService(options: AgenticRunServiceOptions) {
     return store.requireRun(run.id);
   };
 
+  //
+  // The one gate every path into the scheduler goes through.
+  //
+  // A Run that captured `vpn_protected` may not take a turn while the boundary
+  // is not carrying traffic — a turn runs tools, and tools reach the network.
+  // The answer is a PAUSE, not a failure: losing a tunnel is the same kind of
+  // accident as losing the model backend, and the goal has not been decided
+  // either way. Nothing here fails a Run, and nothing here lets one out.
+  //
+  const egressGate = (run: AgenticRun): SchedulerStep | null => {
+    if (run.networkPolicy !== "vpn_protected") return null;
+    const network = networkService();
+    network.setRunPolicy(run.id, run.networkPolicy);
+    if (network.mayEgress()) return null;
+    if (run.status !== "PAUSED") {
+      store.updateRun(run.id, { status: "PAUSED" });
+      store.appendEvent({
+        runId: run.id,
+        type: "RUN_INTERRUPTED",
+        summary: `protected network is ${network.currentState().toLowerCase()}; the run is paused until protection is restored`,
+      });
+    }
+    return { kind: "idle", reason: `protected network is ${network.currentState().toLowerCase()}` };
+  };
+
+  //
+  // A Run that has ended stops asking for protection. Without this the boundary
+  // would stay up for the rest of the process's life after the last protected
+  // Run finished, quietly routing everyone else's traffic through a tunnel
+  // nobody asked for any more.
+  //
+  const releaseIfFinished = (runId: string): void => {
+    const status = store.requireRun(runId).status;
+    if (status === "COMPLETED" || status === "FAILED" || status === "CANCELLED") {
+      networkService().releaseRun(runId);
+    }
+  };
+
+  const advance = async (runId: string, capability: AgenticCapability): Promise<SchedulerStep> => {
+    const step = await scheduler.advance(runId, capability);
+    releaseIfFinished(runId);
+    return step;
+  };
+
   const startRun = async (input: StartRunInput): Promise<{ run: AgenticRun; step: SchedulerStep }> => {
     const run = createRun(input);
-    const step = await scheduler.advance(run.id, input.capability);
+    const blocked = egressGate(run);
+    if (blocked) return { run: store.requireRun(run.id), step: blocked };
+    const step = await advance(run.id, input.capability);
     return { run: store.requireRun(run.id), step };
   };
 
@@ -101,7 +156,9 @@ export function createAgenticRunService(options: AgenticRunServiceOptions) {
     if (run.status === "COMPLETED" || run.status === "FAILED" || run.status === "CANCELLED") {
       return { kind: "idle", reason: `run is ${run.status.toLowerCase()}` };
     }
-    return scheduler.advance(runId, options.capabilityFor(run));
+    const blocked = egressGate(run);
+    if (blocked) return blocked;
+    return advance(runId, options.capabilityFor(run));
   };
 
   const snapshot = (runId: string): AgenticRunSnapshot => {
@@ -122,10 +179,29 @@ export function createAgenticRunService(options: AgenticRunServiceOptions) {
     startRun,
     resumeRun,
     snapshot,
-    recover: (): RunRecovery[] => reconcileAllRuns(store),
+    //
+    // RECOVERY ORDER IS THE SECURITY PROPERTY.
+    //
+    // Durable state is read, and every protected Run re-registers its policy,
+    // BEFORE anything can resume. That is what stops the sequence this feature
+    // exists to prevent: app starts, network is open, and only afterwards does
+    // it notice a protected Run was in flight. Registering the policy engages
+    // the boundary, and the boundary is up before the first turn is possible.
+    //
+    // Reconciliation itself leaves every unfinished Run PAUSED, so resuming is
+    // an explicit act that has to pass egressGate() on the way through.
+    //
+    recover: (): RunRecovery[] => {
+      const recovered = reconcileAllRuns(store);
+      const network = networkService();
+      for (const run of store.listUnfinishedRuns()) {
+        if (run.networkPolicy === "vpn_protected") network.setRunPolicy(run.id, run.networkPolicy);
+      }
+      return recovered;
+    },
     onTurnSettled: (runId: string): Promise<SchedulerStep> => {
       const run = store.requireRun(runId);
-      return scheduler.advance(runId, options.capabilityFor(run));
+      return advance(runId, options.capabilityFor(run));
     },
   };
 }

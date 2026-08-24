@@ -6,7 +6,7 @@ import { POPOVER_MENU_CLASS } from "@/ui/popover";
 import { useRouter } from "next/navigation";
 import { useRef, useState, type DragEvent, type MouseEvent } from "react";
 import { useClickOutside } from "@/features/agent/hooks/use-click-outside";
-import { Archive, MoreIcon, PinIcon, PinOffIcon, SquarePen, X } from "@/ui/icon-registry";
+import { Archive, MoreIcon, PinIcon, PinOffIcon, SquarePen, Trash2, X } from "@/ui/icon-registry";
 import type { SessionPref } from "@/features/agent/messages/prefs";
 import { hrefWithOpenNonce, navigateToSessionHref, visibleSessionAge } from "./helpers";
 import { PinButton } from "./nav-chrome";
@@ -23,6 +23,7 @@ type SessionNavRowProps = {
   onOpen?: (href: string) => void;
   onPatchPref: (patch: SessionPref) => void;
   onArchive?: () => void;
+  onDelete?: () => void;
   onRenameCommit?: (title: string) => void;
   onRememberTitle?: () => void;
   onDragStart: (event: DragEvent) => void;
@@ -49,6 +50,7 @@ export function SessionNavRow({
   onOpen,
   onPatchPref,
   onArchive,
+  onDelete,
   onRenameCommit,
   onRememberTitle,
   onDragStart,
@@ -161,6 +163,7 @@ export function SessionNavRow({
         {menuOpen ? (
           <SessionOptionsMenu
             onArchive={onArchive}
+            onDelete={onDelete}
             onClear={() => onPatchPref({ title: undefined, pinned: undefined })}
             onClose={() => setMenuOpen(false)}
             onPin={() => onPatchPref({ pinned: !pref.pinned })}
@@ -351,6 +354,7 @@ function SessionRowContent({
 
 function SessionOptionsMenu({
   onArchive,
+  onDelete,
   onClear,
   onClose,
   onPin,
@@ -359,6 +363,7 @@ function SessionOptionsMenu({
   showClearAction,
 }: {
   onArchive?: () => void;
+  onDelete?: () => void;
   onClear: () => void;
   onClose: () => void;
   onPin: () => void;
@@ -390,6 +395,14 @@ function SessionOptionsMenu({
           <div className="mx-1 my-1 h-px bg-(--border)" />
           <MenuItem Icon={X} danger onClick={run(onClear)}>
             Clear
+          </MenuItem>
+        </>
+      ) : null}
+      {onDelete ? (
+        <>
+          {showClear ? null : <div className="mx-1 my-1 h-px bg-(--border)" />}
+          <MenuItem Icon={Trash2} danger onClick={run(onDelete)}>
+            Delete
           </MenuItem>
         </>
       ) : null}

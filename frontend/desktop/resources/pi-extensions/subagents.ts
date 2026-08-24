@@ -12,6 +12,13 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 const FRONTEND_BASE = process.env.LOCAL_STUDIO_FRONTEND_BASE ?? "http://127.0.0.1:3000";
+// Present only while the app is published; the frontend then requires it of
+// every caller, with no exemption for ones running on this machine.
+const FRONTEND_TOKEN = process.env.LOCAL_STUDIO_FRONTEND_TOKEN;
+const STUDIO_HEADERS: Record<string, string> = {
+  "Content-Type": "application/json",
+  ...(FRONTEND_TOKEN ? { "x-local-studio-token": FRONTEND_TOKEN } : {}),
+};
 const RUN_TIMEOUT_MS = 15 * 60_000;
 
 type ToolResult = {
@@ -62,7 +69,7 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
       try {
         const response = await fetch(`${FRONTEND_BASE}/api/agent/subagents`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: STUDIO_HEADERS,
           body: JSON.stringify({
             parentPiSessionId: sessionId,
             name: args.name ?? "Subagent",

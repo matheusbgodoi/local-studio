@@ -115,11 +115,45 @@ Details: [`docs/durable-agentic-runtime.md`](docs/durable-agentic-runtime.md).
 ### Lazy tools
 
 Skills load on demand and MCP connectors are armed per chat session rather than
-per installation, so a fresh session carries neither in its tool schemas. With
-the Browser toggle off, no `browser_*` schema reaches the model at all.
+per installation, so a fresh session carries neither in its tool schemas.
 
 Details: [`docs/status-and-usage.md`](docs/status-and-usage.md) and
 [`docs/web-search.md`](docs/web-search.md).
+
+### VPN Protected, in place of the Browser toggle
+
+There used to be a per-conversation Browser toggle. It answered the wrong
+question: turning the browser off never removed the agent's internet, because
+`bash`, `curl`, Python, Node, `git`, `npm`, an API and any MCP connector were all
+still there. It described a tool list while appearing to describe a route.
+
+The browser is now an ordinary capability, always available, and the model picks
+between it and the shell on the merits — open-ended search wants the browser, a
+known JSON endpoint wants `curl`, a dynamic page wants Playwright. The control
+that replaced it, in the chat's own session controls, is about routing:
+
+- **Direct** — the machine's normal route.
+- **VPN Protected** — agent workloads have no permitted direct path to the
+  public internet, and losing the tunnel blocks public egress rather than
+  falling back to it.
+
+The boundary is a macOS Seatbelt jail with exactly one permitted destination —
+the loopback port sing-box listens on — so fail-closed is structural rather than
+a rule that could be misconfigured. It covers the model's shell and everything
+it starts, the owner's terminal, local MCP connectors and Chromium (headless,
+headful and `browser_verify`). A tunnel is a WireGuard config from any provider;
+no vendor API is involved and no key ever leaves the runtime process.
+
+A VPN moves where packets leave from. It does not touch cookies, logins,
+fingerprints or tokens, and nothing here claims otherwise.
+
+A Run captures its conversation's policy at birth and keeps it until it ends.
+Because the agent-runtime is one process shared by every conversation, isolation
+is conservative rather than per-session: while any workload is protected, all
+agent traffic is, and the interface says so.
+
+Details, including what is *not* covered:
+[`docs/protected-networking.md`](docs/protected-networking.md).
 
 ---
 

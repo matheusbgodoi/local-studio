@@ -110,18 +110,6 @@ export function FileIcon(props: IconProps) {
   );
 }
 
-export function GlobeIcon(props: IconProps) {
-  return (
-    <Svg {...props}>
-      <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" strokeWidth="1.4" />
-      <ellipse cx="8" cy="8" rx="3" ry="6.5" fill="none" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M1.5 8h13" fill="none" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M2.3 5h11.4" fill="none" stroke="currentColor" strokeWidth="1.2" />
-      <path d="M2.3 11h11.4" fill="none" stroke="currentColor" strokeWidth="1.2" />
-    </Svg>
-  );
-}
-
 export function GitBranchIcon(props: IconProps) {
   return (
     <Svg {...props}>

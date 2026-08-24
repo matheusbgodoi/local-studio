@@ -9,6 +9,7 @@ import {
 } from "@/features/agent/tools/selection-persistence";
 import type { ComposerSkillRef } from "@/features/agent/composer-context";
 import { isAgentThinkingLevel } from "@/features/agent/contracts";
+import { parseNetworkPolicy } from "@shared/agent/network-policy";
 import type {
   PaneId,
   PaneState,
@@ -93,6 +94,10 @@ export function normalizePersistedTab(value: unknown): Session | null {
     error: "",
     startedAt: typeof tab.startedAt === "string" ? tab.startedAt : undefined,
     thinkingLevel: isAgentThinkingLevel(tab.thinkingLevel) ? tab.thinkingLevel : undefined,
+    // Restored through the shared validator, so a hand-edited or stale record
+    // cannot resurrect a policy value this build does not know: anything that is
+    // not a current policy comes back as undefined, which reads as "direct".
+    networkPolicy: parseNetworkPolicy(tab.networkPolicy) ?? undefined,
     input: typeof tab.input === "string" ? tab.input : "",
     queue: Array.isArray(tab.queue) ? tab.queue : undefined,
     activeAssistantId: undefined,
@@ -229,6 +234,7 @@ export function sessionMetaForPersistence(
     cwd: tab.cwd,
     modelId: tab.modelId,
     thinkingLevel: tab.thinkingLevel,
+    networkPolicy: tab.networkPolicy,
     title: cleanSessionTitle(tab.title) || "New session",
     startedAt: tab.startedAt,
     tokenStats: tab.tokenStats,

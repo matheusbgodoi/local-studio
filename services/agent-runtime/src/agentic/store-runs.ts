@@ -13,6 +13,7 @@ import type { AcceptanceCriterion, AgenticEvent, AgenticRun, AgenticTask } from 
 import { toEvent, toRun, toTask } from "./rows";
 import { buildPatch, type AgenticStoreContext } from "./store-context";
 import { withTransaction } from "./schema";
+import type { NetworkPolicy } from "../../../../shared/agent/network-policy";
 
 export type CreateRunInput = {
   goal: string;
@@ -24,6 +25,7 @@ export type CreateRunInput = {
   sessionId: string;
   piSessionId: string | null;
   cwd: string;
+  networkPolicy: NetworkPolicy;
 };
 
 export type TaskSeed = {
@@ -95,13 +97,15 @@ export function createRunStore(context: AgenticStoreContext) {
       const at = ms();
       context.run(
         `INSERT INTO agentic_runs(id, goal, status, model_id, physical_model_id, behavior_profile,
-           context_window, usable_limit, session_id, pi_session_id, cwd, created_at_ms, updated_at_ms)
-         VALUES (?,?,'CREATED',?,?,?,?,?,?,?,?,?,?)`,
+           network_policy, context_window, usable_limit, session_id, pi_session_id, cwd,
+           created_at_ms, updated_at_ms)
+         VALUES (?,?,'CREATED',?,?,?,?,?,?,?,?,?,?,?)`,
         id,
         input.goal,
         input.modelId,
         input.physicalModelId,
         input.behaviorProfile,
+        input.networkPolicy,
         input.contextWindow,
         input.usableLimit,
         input.sessionId,

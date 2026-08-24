@@ -16,6 +16,7 @@ export type AgentRuntimeHandle = {
 
 type StartAgentRuntimeOptions = {
   frontendUrl: string;
+  frontendToken?: string | null;
   preferredPort?: number;
 };
 
@@ -120,6 +121,7 @@ export async function startAgentRuntime(
       LOCAL_STUDIO_RESOURCES_PATH: process.resourcesPath,
       LOCAL_STUDIO_AGENT_CWD: process.env.LOCAL_STUDIO_AGENT_CWD || app.getPath("home"),
       LOCAL_STUDIO_FRONTEND_BASE: options.frontendUrl,
+      ...(options.frontendToken ? { LOCAL_STUDIO_FRONTEND_TOKEN: options.frontendToken } : {}),
       LOCAL_STUDIO_LITTER_BRIDGE_SECRET: litterBridgeSecret,
     },
   });

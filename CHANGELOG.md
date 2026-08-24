@@ -7,6 +7,103 @@ and is not repeated here.
 Versioning is `<upstream base>-local.<n>` — see
 [`docs/upstream-updates.md`](docs/upstream-updates.md).
 
+## v2.1.0-local.14 — 2026-08-24
+
+The Browser toggle is gone and a network policy takes its place. Base:
+upstream `v2.1.0`.
+
+**The toggle answered the wrong question.** Turning the browser off never
+removed the agent's internet — `bash`, `curl`, Python, Node, `git`, `npm`, an
+API and any MCP connector were all still there — so it described a tool list
+while appearing to describe a route. The browser is now an ordinary capability,
+always loaded, and the model chooses between it and the shell on the merits.
+
+**VPN Protected replaces it**, in the chat's own session controls rather than in
+settings. Direct is the machine's normal route; Protected means an agent
+workload has no permitted direct path to the public internet, and losing the
+tunnel blocks public egress instead of falling back to it.
+
+**The boundary is a macOS Seatbelt jail**, not a proxy variable. A jailed
+process may reach exactly one destination — the loopback port sing-box listens
+on — the jail is inherited across `exec`, it cannot be widened from inside, and
+it needs no privilege. Fail-closed is therefore structural: when the tunnel
+dies there is no second path, because none was ever permitted. sing-box TUN was
+rejected (needs root, and `IP_BOUND_IF` walks around the routing table); a pf
+group rule was rejected (blind to ICMP, and setuid binaries create sockets it
+cannot see). Both were measured here before being ruled out.
+
+Covered by the jail: the model's `bash` tool and everything it starts, the
+owner's terminal, local MCP stdio connectors, and Chromium in headless, headful
+and `browser_verify`. Covered in code and fail-closed the same way, but not by
+the kernel: the in-process reader and `browser_search`. That distinction is
+surfaced in the status popover rather than rounded up.
+
+**Enforcement and attestation are separate.** `failClosed` is read from whether
+the jail exists, never from a probe — an exit-IP lookup is telemetry, not a
+firewall. Observations are three-valued so an unmeasured field says
+`unavailable` rather than borrowing the good news next to it.
+
+**A Run keeps the policy it was born with**, as a durable column, through
+compaction, resume, restart and crash recovery. Moving the toggle starts the
+next Run somewhere else; it does not re-route one in flight. A lost tunnel
+pauses a protected Run the way a lost backend does, and a restored one resumes
+it. On boot, protected Runs re-register before anything can resume, so the
+boundary is up before the first turn is possible.
+
+**Isolation is conservative and says so.** The agent-runtime is one process
+shared by every conversation, so while any workload is protected all agent
+traffic is. A Direct conversation temporarily using the VPN is acceptable; a
+protected workload occasionally using the direct route is not.
+
+The Run a conversation started is now also followable from the chat's right
+sidebar, reusing the existing Runs store and components. The global `/runs`
+page is unchanged.
+
+`npm run test:network-protection` is an acceptance run against the real
+machine. It found two defects in this work: a CONNECT acknowledged before its
+upstream existed was being read as proof of protection, and the exit address was
+parsed positionally from a service that returns fields in its own order.
+
+`npm run test:network-protection` now runs against a real remote provider and
+every probe is conclusive: fourteen pass and this machine's own address appears
+in none of the protected egress. The four egress probes previously reported
+`INCONCLUSIVE` — the only tunnel available then was a local peer that egressed
+from this same host, so its exit address equalled the direct address by
+construction and a pass could not be told apart from a leak.
+
+**The app can be published to the tailnet**, for a phone to reach it. It binds
+loopback and has always answered unauthenticated, which is correct while
+loopback is the only way in; `npm run remote-access` is the single deliberate
+act that changes it, writing the token, the MagicDNS name to accept and the
+tailnet identity allowed to use it. The host allowlist is passed to the server
+only when a token exists, so the gate and the widening cannot drift apart. The
+serve handler is re-pointed at the live port on every launch — the port is
+persisted but sits in the ephemeral range, and a pinned handler that drifts
+answers 502 to the phone forever with nothing saying why.
+
+A first attempt exempted callers presenting a loopback `Host`, on the assumption
+that `tailscale serve` rewrites it. It does not — it forwards the client's Host
+— and a second tailnet device reached the agent API unauthenticated with
+`curl -H "Host: 127.0.0.1"`. There is no exemption now: the readiness probe, the
+agent runtime and its four tool extensions all authenticate like anything else.
+A browser that arrives without the token gets a page it can pair from rather
+than a bare 401, because a cookie only pairs the container it was set in and on
+iOS a Home Screen app has its own.
+
+**The phone layout works**, measured at 390×844: the navigation drawer sat
+under the composer and left its bottom dead with Send still hit-testable through
+it; a `100dvh` child inside a parent that already reserved the bottom safe area
+left phantom scroll; Send and Attach were below a finger's size; and the service
+worker and manifest shortcut both pointed at a route that does not exist, so
+turning the worker on would have failed to install.
+
+A conversation can be **deleted**, next to the archive that only ever hid one,
+and the desktop raises a **native notification** when a turn finishes or needs an
+answer — the in-app notice used to render underneath the app.
+
+Docs: [`docs/protected-networking.md`](docs/protected-networking.md),
+[`docs/remote-access.md`](docs/remote-access.md).
+
 ## v2.1.0-local.13 — 2026-08-23
 
 The autonomous control plane, qualified against the final Phase 4 host. Base:

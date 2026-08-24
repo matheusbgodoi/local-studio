@@ -1,7 +1,7 @@
 const CACHE_NAME = 'local-studio-v9';
 const STATIC_ASSETS = [
   '/',
-  '/chat',
+  '/agent',
   '/recipes',
   '/logs',
   '/manifest.json',
