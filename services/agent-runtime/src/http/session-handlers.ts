@@ -7,7 +7,12 @@ import {
   listArchivedSessionMetadata,
   setSessionArchived,
 } from "../session-metadata-store";
-import { findSessionFile, listSessions, loadSession } from "../sessions-store";
+import {
+  findSessionFile,
+  listSessions,
+  loadSession,
+  moveSessionToWorkspace,
+} from "../sessions-store";
 import { errorMessage, jsonError } from "./helpers";
 import { networkService } from "../network";
 
@@ -185,6 +190,35 @@ export async function handleSessionPatch(request: Request, id: string): Promise<
     return Response.json({ session: { id, ...archiveState } });
   } catch (error) {
     return jsonError(errorMessage(error, "Failed to update session archive"), 500);
+  }
+}
+
+//
+// Moving a conversation between projects.
+//
+// Separate from PATCH deliberately. PATCH is the archive route: it requires an
+// `archived` boolean and its whole contract is that flag. A move is a different
+// operation on different data — it relocates the transcript on disk — and
+// folding it into the archive body would make one request able to do two
+// unrelated things by accident.
+//
+export async function handleSessionMove(request: Request, id: string): Promise<Response> {
+  if (!validSessionId(id)) return jsonError("session id is invalid");
+  const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+  const fromValue = typeof body?.from === "string" ? body.from.trim() : "";
+  const toValue = typeof body?.to === "string" ? body.to.trim() : "";
+  if (!fromValue || !toValue) return jsonError("from and to are required");
+
+  const from = existingWorkspace(fromValue);
+  if (from instanceof Response) return from;
+  const to = existingWorkspace(toValue);
+  if (to instanceof Response) return to;
+
+  try {
+    moveSessionToWorkspace(from, to, id);
+    return Response.json({ session: { id, cwd: to } });
+  } catch (error) {
+    return jsonError(errorMessage(error, "Failed to move session"), 400);
   }
 }
 

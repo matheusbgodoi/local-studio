@@ -25,6 +25,7 @@ export function ArchivedChatsSettings() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [restoringId, setRestoringId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const loadArchivedSessions = useCallback(async () => {
     setLoading(true);
     setError("");
@@ -70,6 +71,36 @@ export function ArchivedChatsSettings() {
       setRestoringId(null);
     }
   };
+  //
+  // Archiving deliberately leaves the transcript on disk; this is the only place
+  // that removes it, so it asks first, names the conversation, and says it
+  // cannot be undone. The cwd goes in the query string because the runtime
+  // resolves the session file inside a workspace, not by id alone.
+  //
+  const remove = async (session: Session) => {
+    const label = cleanSessionTitle(session.firstUserMessage) || session.id;
+    const confirmed = window.confirm(
+      `Delete "${label}"? This removes the conversation from disk and cannot be undone.`,
+    );
+    if (!confirmed) return;
+    setDeletingId(session.id);
+    setError("");
+    try {
+      const query = session.projectPath ? `?cwd=${encodeURIComponent(session.projectPath)}` : "";
+      const response = await fetch(
+        `/api/agent/sessions/${encodeURIComponent(session.id)}${query}`,
+        { method: "DELETE" },
+      );
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(payload.error || "Failed to delete chat");
+      setSessions((current) => current.filter((row) => row.id !== session.id));
+      window.dispatchEvent(new Event(SESSIONS_CHANGED_EVENT));
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Failed to delete chat");
+    } finally {
+      setDeletingId(null);
+    }
+  };
   const archiveRows: SettingsFactRow[] = error
     ? [
         {
@@ -100,12 +131,20 @@ export function ArchivedChatsSettings() {
           mono: true,
           status: { label: "archived", tone: "info" },
           actions: (
-            <SettingsButton
-              onClick={() => void unarchive(session)}
-              disabled={restoringId === session.id}
-            >
-              {restoringId === session.id ? "Restoring" : "Restore"}
-            </SettingsButton>
+            <div className="flex items-center gap-1.5">
+              <SettingsButton
+                onClick={() => void unarchive(session)}
+                disabled={restoringId === session.id || deletingId === session.id}
+              >
+                {restoringId === session.id ? "Restoring" : "Restore"}
+              </SettingsButton>
+              <SettingsButton
+                onClick={() => void remove(session)}
+                disabled={restoringId === session.id || deletingId === session.id}
+              >
+                {deletingId === session.id ? "Deleting" : "Delete"}
+              </SettingsButton>
+            </div>
           ),
           children: (
             <div className="text-[length:var(--fs-md)] text-(--dim)/55">

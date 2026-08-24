@@ -148,6 +148,33 @@ export async function deleteSession(sessionId: string, project: ProjectEntry): P
   }
 }
 
+//
+// A conversation's project is where its transcript lives on disk, not a field
+// beside it, so this is its own route rather than a variation of the archive
+// PATCH — see handleSessionMove. Both ends are sent because the runtime has to
+// find the file under the source project before it can put it under the target.
+//
+// There is no separate "remove from project": the Chats project is where a
+// conversation with no project of its own lives, so moving there is what taking
+// it out means.
+//
+export async function moveSessionToProject(
+  sessionId: string,
+  from: ProjectEntry,
+  to: ProjectEntry,
+): Promise<void> {
+  const response = await fetch(`/api/agent/sessions/${encodeURIComponent(sessionId)}/project`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ from: from.path, to: to.path }),
+  });
+  const payload = await safeJson<{ error?: string }>(response);
+  if (!response.ok) {
+    throw new Error(payload.error || "Failed to move session");
+  }
+  window.dispatchEvent(new Event(SESSIONS_CHANGED_EVENT));
+}
+
 export async function setSessionArchive(
   sessionId: string,
   project: ProjectEntry,

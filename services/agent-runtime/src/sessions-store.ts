@@ -2,11 +2,16 @@ import {
   closeSync,
   createReadStream,
   existsSync,
+  mkdirSync,
   openSync,
+  readFileSync,
   readSync,
   realpathSync,
   readdirSync,
+  renameSync,
   statSync,
+  unlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -413,6 +418,63 @@ export function findSessionFile(cwd: string, sessionId: string): string | null {
     }
   }
   return matches.values().next().value ?? null;
+}
+
+//
+// Move a conversation from one project to another.
+//
+// A session's project is not a field that can be re-pointed: it is WHERE the
+// transcript lives. `sessionsDirsForCwd` derives the directory from the cwd, and
+// `findSessionFile` additionally requires the file's own first-line header to
+// name that same cwd. So a move is a file move plus a header rewrite, and doing
+// only one of the two leaves a conversation that no project can list.
+//
+// Refuses rather than guesses: an id that does not resolve to exactly one file
+// under the source project (findSessionFile returns null when ambiguous), or a
+// destination that already holds a file by that name, is left untouched.
+//
+// The rewrite goes to a temporary file in the DESTINATION directory and is then
+// renamed into place, so a crash mid-write cannot leave a half-written
+// transcript where a whole one is expected. The source is removed only after
+// that rename succeeds; the reverse order could lose the conversation.
+//
+export function moveSessionToWorkspace(
+  sourceCwd: string,
+  targetCwd: string,
+  sessionId: string,
+): void {
+  if (sessionCwdMatches(sourceCwd, targetCwd)) return;
+  const source = findSessionFile(sourceCwd, sessionId);
+  if (!source) throw new Error("session not found in this project");
+
+  const targetDir = sessionsDirsForCwd(targetCwd)[0];
+  if (!targetDir) throw new Error("the destination project has no session directory");
+  const destination = path.join(targetDir, path.basename(source));
+  if (existsSync(destination)) throw new Error("the destination already has a session by that name");
+
+  const raw = readFileSync(source, "utf8");
+  const newline = raw.indexOf("\n");
+  if (newline < 0) throw new Error("the session file has no header line");
+  const header = JSON.parse(raw.slice(0, newline)) as Record<string, unknown>;
+  if (header.type !== "session" || header.id !== sessionId) {
+    throw new Error("the session file header does not describe this session");
+  }
+  header.cwd = path.resolve(targetCwd);
+
+  mkdirSync(targetDir, { recursive: true });
+  const temporary = `${destination}.moving-${process.pid}`;
+  try {
+    writeFileSync(temporary, JSON.stringify(header) + raw.slice(newline), "utf8");
+    renameSync(temporary, destination);
+  } catch (error) {
+    try {
+      unlinkSync(temporary);
+    } catch {
+      // nothing to clean up
+    }
+    throw error;
+  }
+  unlinkSync(source);
 }
 
 export type LoadSessionOptions = {
