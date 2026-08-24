@@ -245,7 +245,20 @@ export class NetworkService {
   //
   chromiumExecutable(executablePath: string): string {
     if (!this.protectionDemanded() || !this.profilePath) return executablePath;
-    return writeChromiumShim(path.join(this.dataDir, "network"), this.profilePath, executablePath);
+    return writeChromiumShim(
+      path.join(this.dataDir, "network"),
+      this.profilePath,
+      executablePath,
+      this.jailOptions(),
+    );
+  }
+
+  private jailOptions(): JailOptions {
+    return {
+      proxyPort: PROXY_PORT,
+      profileDirectory: path.join(this.dataDir, "network"),
+      writableRoots: [this.dataDir, process.env.LOCAL_STUDIO_AGENT_CWD ?? ""],
+    };
   }
 
   chromiumArguments(): string[] {
@@ -329,11 +342,7 @@ export class NetworkService {
     const runtimeDirectory = path.join(this.dataDir, "network");
     mkdirSync(runtimeDirectory, { recursive: true, mode: 0o700 });
 
-    this.profilePath = writeProfile({
-      proxyPort: PROXY_PORT,
-      profileDirectory: runtimeDirectory,
-      writableRoots: [this.dataDir, process.env.LOCAL_STUDIO_AGENT_CWD ?? ""],
-    });
+    this.profilePath = writeProfile(this.jailOptions());
 
     this.generation += 1;
     this.state = "STARTING";

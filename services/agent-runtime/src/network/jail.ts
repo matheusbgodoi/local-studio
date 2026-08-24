@@ -44,6 +44,7 @@
 //
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 
 export const JAIL_MECHANISM = "macos-seatbelt";
@@ -267,16 +268,96 @@ export function chromiumJailArguments(): string[] {
 // through the proxy, returns ERR_NAME_NOT_RESOLVED without it, and returns
 // ERR_PROXY_CONNECTION_FAILED — never a direct load — once the tunnel is killed.
 //
+//
+// Everything a browser has no business reading.
+//
+// Chromium runs without its own sandbox (see chromiumJailArguments), so a page
+// that achieves code execution in a renderer inherits this process's filesystem
+// rights. Measured with sandbox_check against live renderers: under the shared
+// profile it could read ~/Documents, ~/Library/Keychains and the rest of the
+// home directory, and it could still post what it read through the one
+// permitted destination. The egress boundary was never going to stop that —
+// it is a theft primitive, not an egress one.
+//
+// So the browser gets its own, tighter profile. This is NOT equivalent to
+// Chromium's native sandbox and must not be described as such: it is one coarse
+// deny-list for the whole browser rather than per-process allow-lists, it does
+// not deny fork, it does not touch Mojo or renderer-to-browser IPC, and headful
+// still needs the window server. What it removes is the specific primitive
+// above.
+//
+const BROWSER_DENIED_READS = [
+  "~/.ssh",
+  "~/.aws",
+  "~/.gnupg",
+  "~/.kube",
+  "~/.docker",
+  "~/.config",
+  "~/.netrc",
+  "~/.npmrc",
+  "~/Library/Keychains",
+  "~/Library/Cookies",
+  "~/Library/Messages",
+  "~/Library/Application Support/Google/Chrome",
+  "~/Library/Application Support/Firefox",
+  "~/Library/Application Support/BraveSoftware",
+  "~/Documents",
+  "~/Desktop",
+];
+
+function buildChromiumProfile(options: JailOptions, executablePath: string): string {
+  const home = homedir();
+  const denied = BROWSER_DENIED_READS.map(
+    (entry) => `  (subpath ${JSON.stringify(path.join(home, entry.slice(2)))})`,
+  ).join("\n");
+  //
+  // Derived from the resolved binary rather than hardcoded, so it follows an
+  // owner-supplied LOCAL_STUDIO_CHROME_PATH. Chromium execs its own helpers, so
+  // its install root has to stay executable; nothing else does.
+  //
+  const installRoot = chromiumInstallRoot(executablePath);
+  return `${buildProfile(options)}
+(deny file-read*
+${denied}
+)
+
+(deny process-exec*)
+(allow process-exec* (subpath ${JSON.stringify(installRoot)}))
+(allow process-exec (literal ${JSON.stringify(SANDBOX_EXEC)}))
+`;
+}
+
+//
+// The .app bundle, or the directory holding a bare binary. Chromium's helpers
+// live beside it either way.
+//
+function chromiumInstallRoot(executablePath: string): string {
+  const resolved = path.resolve(executablePath);
+  const app = resolved.indexOf(".app/");
+  return app > 0 ? resolved.slice(0, app + 4) : path.dirname(resolved);
+}
+
 export function writeChromiumShim(
   profileDirectory: string,
   profilePath: string,
   executablePath: string,
+  options?: JailOptions,
 ): string {
   mkdirSync(profileDirectory, { recursive: true, mode: 0o700 });
+  //
+  // The browser runs under its own profile when one can be built, and falls
+  // back to the shared jail otherwise. Both confine egress identically; only
+  // the filesystem and exec denials differ.
+  //
+  let applied = profilePath;
+  if (options) {
+    applied = path.join(profileDirectory, `chromium-${options.proxyPort}.sb`);
+    writeFileSync(applied, buildChromiumProfile(options, executablePath), { mode: 0o600 });
+  }
   const shim = path.join(profileDirectory, "chromium-jail.sh");
   writeFileSync(
     shim,
-    `#!/bin/sh\nexec ${SANDBOX_EXEC} -f ${shellQuote(profilePath)} ${shellQuote(executablePath)} "$@"\n`,
+    `#!/bin/sh\nexec ${SANDBOX_EXEC} -f ${shellQuote(applied)} ${shellQuote(executablePath)} "$@"\n`,
     { mode: 0o700 },
   );
   return shim;
