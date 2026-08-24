@@ -11,6 +11,18 @@ import { formatElapsed, formatTokens, humanStatus, runTone } from "./run-formatt
 // compaction is supposed to lower; the lifetime spend, which never moves down;
 // and how many times memory was rewritten.
 //
+//
+// The value type is sized for the wide row. In the narrow grid a column is
+// about a hundred pixels, and the same type turns "83.1K / 128.0K" into three
+// stacked lines, so it steps down until there is room for it again.
+//
+const STAT = [
+  "border-r-0 px-0",
+  "[&>dd]:text-[length:var(--fs-base)] [&>dd]:leading-snug",
+  "@2xl:border-r @2xl:pr-4 @2xl:pl-5 @2xl:first:pl-0 @2xl:last:border-r-0",
+  "@2xl:[&>dd]:text-[length:var(--fs-xl)] @2xl:[&>dd]:leading-none",
+].join(" ");
+
 export function RunOverview({
   snapshot,
   asOfMs,
@@ -26,7 +38,7 @@ export function RunOverview({
   const cumulative = run.cumulativeInputTokens + run.cumulativeOutputTokens;
 
   return (
-    <Card className="p-4">
+    <Card className="@container p-4">
       <div className="flex flex-wrap items-center gap-2">
         <StatusPill tone={runTone(run.status)} variant="badge">
           {humanStatus(run.status)}
@@ -43,15 +55,22 @@ export function RunOverview({
         <ProgressBar progress={tasks.length === 0 ? 0 : (done / tasks.length) * 100} />
       </div>
 
-      <div className="mt-4 flex flex-wrap">
-        <Stat label="Elapsed" value={formatElapsed(run.createdAtMs, asOfMs)} />
+      {/*
+        Two columns when the card is narrow — a side panel — and the original
+        divided row once it has the width for it. The dividers only make sense
+        in the row, so they are dropped in the grid.
+      */}
+      <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 @2xl:flex @2xl:flex-wrap @2xl:gap-0">
+        <Stat className={STAT} label="Elapsed" value={formatElapsed(run.createdAtMs, asOfMs)} />
         <Stat
+          className={STAT}
           label="Context"
           value={`${formatTokens(activeContext)} / ${formatTokens(contextLimit)}`}
         />
-        <Stat label="Session" value={`${formatTokens(cumulative)} cumulative`} />
-        <Stat label="Compactions" value={String(run.compactionCount)} />
+        <Stat className={STAT} label="Session" value={`${formatTokens(cumulative)} cumulative`} />
+        <Stat className={STAT} label="Compactions" value={String(run.compactionCount)} />
         <Stat
+          className={STAT}
           label="Model"
           value={
             run.behaviorProfile
@@ -59,7 +78,7 @@ export function RunOverview({
               : run.physicalModelId
           }
         />
-        <Stat label="Window" value={formatTokens(run.contextWindow)} />
+        <Stat className={STAT} label="Window" value={formatTokens(run.contextWindow)} />
         {isProtectedPolicy(run.networkPolicy) ? <RunNetworkStat /> : null}
       </div>
 
