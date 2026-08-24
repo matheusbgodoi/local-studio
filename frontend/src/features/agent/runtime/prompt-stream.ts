@@ -16,6 +16,7 @@ import type {
   AgentToolAccess,
 } from "@/features/agent/contracts";
 import type { BrowserBackend, ToolSelection } from "@/features/agent/tools/types";
+import type { NetworkPolicy } from "@shared/agent/network-policy";
 import * as api from "@/features/agent/runtime/api";
 import type { RuntimeStatus } from "@/features/agent/runtime/api";
 import { sessionRuntimeController } from "@/features/agent/runtime/session-runtime-controller";
@@ -35,7 +36,8 @@ export type SubmitArgs = {
   userText: string;
   images?: AgentImageInput[];
   attachments?: ChatMessageAttachment[];
-  browserToolEnabled?: boolean;
+  /** Overrides the session's policy for this one turn; omitted means "use it". */
+  networkPolicy?: NetworkPolicy;
   skills?: ComposerSkillRef[];
   promptTemplates?: ComposerPromptTemplateRef[];
   targetSessionId?: SessionId;
@@ -43,7 +45,7 @@ export type SubmitArgs = {
 
 export type PromptStreamDeps = {
   activeTabId: SessionId;
-  browserToolEnabled: boolean;
+  networkPolicy: NetworkPolicy;
   browserBackend: BrowserBackend;
   cwd: string;
   modelId: string;
@@ -57,7 +59,7 @@ export type PromptStreamDeps = {
 
 type PromptTurnContext = {
   assistantId: string;
-  browserEnabledForTurn: boolean;
+  networkPolicyForTurn: NetworkPolicy;
   promptTemplates: ComposerPromptTemplateRef[];
   runtime: string;
   selected: Session;
@@ -108,7 +110,7 @@ function createPromptTurnContext(
 
   return {
     assistantId: newId("assistant"),
-    browserEnabledForTurn: args.browserToolEnabled ?? deps.browserToolEnabled,
+    networkPolicyForTurn: args.networkPolicy ?? deps.networkPolicy,
     promptTemplates,
     // The session id is the opaque runtime key the server addresses this
     // session by.
@@ -241,7 +243,7 @@ function promptTurnRequest(
     piSessionId:
       deps.tabsRef.current.find((tab) => tab.id === context.sessionId)?.piSessionId ??
       context.selected.piSessionId,
-    browserToolEnabled: context.browserEnabledForTurn,
+    networkPolicy: context.networkPolicyForTurn,
     browserSessionId: context.runtime,
     browserBackend: deps.browserBackend,
     skills: context.skills,

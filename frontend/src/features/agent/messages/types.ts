@@ -100,6 +100,8 @@ export type SessionTab = {
   cwd?: string;
   modelId?: string;
   thinkingLevel?: import("@/features/agent/contracts").AgentThinkingLevel;
+  // Per-conversation network boundary choice; see `Session.networkPolicy`.
+  networkPolicy?: import("@shared/agent/network-policy").NetworkPolicy;
   title: string;
   messages: ChatMessage[];
   status: import("@/features/agent/runtime/types").SessionStatus;

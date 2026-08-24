@@ -53,6 +53,29 @@ function piSessionIdOf(tab: { piSessionId?: string | null } | null | undefined):
   return tab?.piSessionId ?? null;
 }
 
+// Per-conversation, like the reasoning level and for the same reasons: the owner
+// picks it for THIS chat, two panes may disagree, and it has to survive a reload
+// — so it lives on the session record the pane store already persists, not in
+// workspace-global storage. Absent means "direct".
+function sessionNetworkPolicy(tab: SessionTab | null): NetworkPolicy {
+  return tab?.networkPolicy ?? DEFAULT_NETWORK_POLICY;
+}
+
+function networkControlFor(
+  tab: SessionTab | null,
+  policy: NetworkPolicy,
+  onPolicyChange: (policy: NetworkPolicy) => void,
+) {
+  return (
+    <AgentNetworkControl
+      sessionId={tab?.id ?? null}
+      policy={policy}
+      disabled={!tab}
+      onPolicyChange={onPolicyChange}
+    />
+  );
+}
+
 function subagentChipsFor(piSessionId: string | null | undefined) {
   if (!piSessionId) return null;
   return <SubagentChips piSessionId={piSessionId} />;
@@ -104,6 +127,8 @@ import { useTools } from "@/features/agent/tools/context";
 import type { GitSummary, Project } from "@/features/agent/projects/types";
 import type { BrowserBackend } from "@/features/agent/tools/types";
 import type { AgentThinkingLevel } from "@/features/agent/contracts";
+import { DEFAULT_NETWORK_POLICY, type NetworkPolicy } from "@shared/agent/network-policy";
+import { AgentNetworkControl } from "@/features/agent/ui/agent-network-control";
 import { pickThinkingLevel } from "@/features/agent/messages/thinking-level-pref";
 import {
   browserThinkingStorage,
@@ -241,10 +266,8 @@ type Props = {
   gitBranch?: string | null;
   gitSummary?: GitSummary | null;
   onInitGit?: () => void;
-  browserToolEnabled: boolean;
   browserBackend: BrowserBackend;
   onToggleBrowserBackend: () => void;
-  onToggleBrowserTool: () => void;
   isFocused: boolean;
   onFocus: () => void;
   onPiSessionIdChange?: (sessionId: string) => void;
@@ -290,10 +313,8 @@ export function ChatPane({
   gitBranch,
   gitSummary,
   onInitGit,
-  browserToolEnabled,
   browserBackend,
   onToggleBrowserBackend,
-  onToggleBrowserTool,
   isFocused,
   onFocus,
   onPiSessionIdChange,
@@ -449,6 +470,14 @@ export function ChatPane({
     reasoningDisabled: Boolean(running),
     onSelectReasoning: selectThinkingLevel,
   });
+  const networkPolicy = sessionNetworkPolicy(activeTab);
+  // The runtime is told only after IT accepted the change (the control refuses
+  // to flip on a 409), so what is written here is always a policy the boundary
+  // has already agreed to.
+  const networkControl = networkControlFor(activeTab, networkPolicy, (policy) => {
+    if (!activeTab) return;
+    updateTab(activeTab.id, (session) => ({ ...session, networkPolicy: policy }));
+  });
 
   const engine = useSessionEngine({
     tabs,
@@ -457,7 +486,7 @@ export function ChatPane({
     thinkingLevel,
     toolAccess: "full",
     cwd,
-    browserToolEnabled,
+    networkPolicy,
     browserBackend,
     onPiSessionIdChange: handlePiSessionIdChange,
     updateSession: updateTab,
@@ -474,6 +503,10 @@ export function ChatPane({
   });
   const openComputerStatus = useCallback(() => {
     tools.setComputerTab("status");
+    tools.setComputerOpen(true);
+  }, [tools]);
+  const openBrowserPanel = useCallback(() => {
+    tools.setComputerTab("browser");
     tools.setComputerOpen(true);
   }, [tools]);
   const [diffDrawerOpen, setDiffDrawerOpen] = useState(false);
@@ -513,13 +546,12 @@ export function ChatPane({
         displayText: text,
         userText: text,
         targetSessionId: activeTab.id,
-        browserToolEnabled,
         // `skills` is left to the session's current selection on purpose: it
         // feeds runtimeOptionsFingerprint, and overriding it here would restart
         // the runtime for this turn and again for the next one.
       });
     },
-    [activeTab, browserToolEnabled, engine, modelId],
+    [activeTab, engine, modelId],
   );
   const activeConnectors = useMemo(
     () => tools.selectionFor(activeTab?.id).connectors ?? [],
@@ -578,7 +610,7 @@ export function ChatPane({
         builtinCommandProvider({
           compact: () => void compactSession(),
           openStatus: openComputerStatus,
-          toggleBrowserTool: onToggleBrowserTool,
+          openBrowser: openBrowserPanel,
           openPlugins: () => router.push("/integrations"),
           ...(openTerminalAction ? { openTerminal: openTerminalAction } : {}),
           ...(onForkSession ? { forkSession: onForkSession } : {}),
@@ -616,7 +648,7 @@ export function ChatPane({
       exportSession,
       noteInTranscript,
       onForkSession,
-      onToggleBrowserTool,
+      openBrowserPanel,
       openComputerStatus,
       openTerminalAction,
       router,
@@ -655,7 +687,6 @@ export function ChatPane({
     useChatPaneSendFlow({
       activeTab,
       attachments,
-      browserToolEnabled,
       clearAttachments,
       cwd,
       engine,
@@ -781,7 +812,6 @@ export function ChatPane({
         <AgentComposerFrame
           attachments={attachments}
           banner={composerVisual.banner}
-          browserToolEnabled={browserToolEnabled}
           browserBackend={browserBackend}
           composerDragActive={composerDragActive}
           contextWindow={effectiveContextWindow}
@@ -819,8 +849,8 @@ export function ChatPane({
           onSteerQueued={(queueId) => void steerQueued(queueId)}
           onSubmit={handleComposerSubmit}
           onTranscript={handleTranscript}
+          networkControl={networkControl}
           onToggleBrowserBackend={onToggleBrowserBackend}
-          onToggleBrowserTool={onToggleBrowserTool}
           placeholder={goalModeApi.goalPlaceholder ?? composerVisual.placeholder}
           drawer={
             <SessionProjectDrawer

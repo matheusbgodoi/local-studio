@@ -29,7 +29,6 @@ import {
 type UseChatPaneSendFlowOptions = {
   activeTab: SessionTab | null;
   attachments: ChatAttachment[];
-  browserToolEnabled: boolean;
   clearAttachments: () => void;
   cwd: string;
   engine: SessionEngine;
@@ -47,7 +46,6 @@ type UseChatPaneSendFlowOptions = {
 export function useChatPaneSendFlow({
   activeTab,
   attachments,
-  browserToolEnabled,
   clearAttachments,
   cwd,
   engine,
@@ -66,7 +64,7 @@ export function useChatPaneSendFlow({
   const abortSubmitInFlightRef = useRef<SessionSubmitGuard>(new Set());
 
   const buildPromptArgs = useCallback(
-    (sessionId: string, rawText: string, effectiveBrowserEnabled = browserToolEnabled) => {
+    (sessionId: string, rawText: string) => {
       const text = rawText.trim();
       const attachedText = attachmentPrompt(attachments, { modelSupportsVision });
       const attachmentSummary =
@@ -78,7 +76,6 @@ export function useChatPaneSendFlow({
       const selection = tools.selectionFor(sessionId);
       const contextText = selectedContextPrompt(text, selection.skills);
       const browserContextText = browserContextPrompt({
-        enabled: effectiveBrowserEnabled,
         backend: tools.browser.backend,
         url: tools.browser.url,
         vision: modelSupportsVision,
@@ -112,12 +109,11 @@ export function useChatPaneSendFlow({
         userText,
         images,
         attachments: messageAttachments,
-        browserToolEnabled: effectiveBrowserEnabled,
         skills: selection.skills,
         promptTemplates: selection.promptTemplates,
       };
     },
-    [attachments, browserToolEnabled, modelId, modelSupportsVision, tools],
+    [attachments, modelId, modelSupportsVision, tools],
   );
 
   const submitPrompt = useCallback(
@@ -127,7 +123,7 @@ export function useChatPaneSendFlow({
       if ((!rawText.trim() && attachments.length === 0) || !modelId || readingAttachments) {
         return Promise.resolve();
       }
-      const args = buildPromptArgs(targetId, rawText, browserToolEnabled);
+      const args = buildPromptArgs(targetId, rawText);
       const currentSelection = tools.selectionFor(targetId);
       if (currentSelection.skills.length > 0) {
         tools.setSelection(targetId, { ...currentSelection, skills: [] });
@@ -140,7 +136,6 @@ export function useChatPaneSendFlow({
     [
       activeTab,
       attachments.length,
-      browserToolEnabled,
       buildPromptArgs,
       clearAttachments,
       engine,
