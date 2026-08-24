@@ -2,6 +2,8 @@
 
 import { Card, ProgressBar, Stat, StatusPill } from "@/ui";
 import type { AgenticRunSnapshot } from "@shared/agent/agentic-run";
+import { isProtectedPolicy } from "@shared/agent/network-policy";
+import { RunNetworkStat } from "./run-network-badge";
 import { formatElapsed, formatTokens, humanStatus, runTone } from "./run-formatters";
 
 //
@@ -58,6 +60,7 @@ export function RunOverview({
           }
         />
         <Stat label="Window" value={formatTokens(run.contextWindow)} />
+        {isProtectedPolicy(run.networkPolicy) ? <RunNetworkStat /> : null}
       </div>
 
       {run.recoveryState ? (

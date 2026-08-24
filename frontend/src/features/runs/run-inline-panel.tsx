@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { StatusPill } from "@/ui";
 import type { AgenticRunSnapshot, AgenticTask } from "@shared/agent/agentic-run";
+import { isProtectedPolicy } from "@shared/agent/network-policy";
+import { RunNetworkBadge } from "./run-network-badge";
 import { eventLabel, formatTokens, humanStatus, runTone } from "./run-formatters";
 import { useSessionRun } from "./use-session-run";
 
@@ -94,6 +96,7 @@ function RunInlineBody({ snapshot }: { snapshot: AgenticRunSnapshot }) {
               {eventLabel(latest.type)}: {latest.summary}
             </span>
           ) : null}
+          {isProtectedPolicy(run.networkPolicy) ? <RunNetworkBadge /> : null}
           <div className="grow" />
           <span className="font-mono">
             {formatTokens(agent?.activeContextTokens ?? 0)} /{" "}
