@@ -4,6 +4,7 @@ import type { DesktopBridge, DictationBridgeEvent } from "./interfaces";
 const bridge: DesktopBridge = {
   getRuntime: () => ipcRenderer.invoke("desktop:get-runtime"),
   openExternal: (url) => ipcRenderer.invoke("desktop:open-external", url),
+  notify: (payload) => ipcRenderer.invoke("desktop:notify", payload),
   revealPath: (target) => ipcRenderer.invoke("desktop:reveal-path", target),
   openPath: (target) => ipcRenderer.invoke("desktop:open-path", target),
   getUpdateStatus: () => ipcRenderer.invoke("desktop:get-update-status"),

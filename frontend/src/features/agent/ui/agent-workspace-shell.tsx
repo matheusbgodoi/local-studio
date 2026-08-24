@@ -19,6 +19,7 @@ import { useWorkspace, type WorkspaceHandles } from "@/features/agent/ui/use-wor
 import { renderWorkspacePane } from "@/features/agent/ui/render-workspace-pane";
 import { useAgentWorkspaceNavigationEffects } from "@/features/agent/ui/agent-workspace-navigation";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
+import { startRunNotifications } from "@/features/runs/run-notifications";
 import { POPOVER_SURFACE_CLASS } from "@/ui/popover";
 import { cx } from "@/ui/utils";
 import { collectLeaves } from "@/features/agent/workspace/layout";
@@ -81,6 +82,14 @@ export function AgentWorkspaceShell({
   handles,
   compact = false,
 }: AgentWorkspaceShellProps) {
+  //
+  // Native notifications for a Run finishing or needing an answer. Mounted here
+  // because the shell is the one component that exists for the whole session;
+  // the watcher itself is module-level and rides the Runs store, so this adds no
+  // polling and no second source of truth.
+  //
+  useMountSubscription(() => startRunNotifications(), []);
+
   const projects = useProjects();
   const tools = useTools();
   const searchParams = useSearchParams();
@@ -291,7 +300,18 @@ function WorkspaceTopBar({
 }) {
   if (!error && !setupWarning) return null;
   return (
-    <div className="pointer-events-none absolute bottom-3 right-3 z-30 flex max-w-[26rem] flex-col items-end gap-2">
+    //
+    // Anchored to the VIEWPORT and above every other layer.
+    //
+    // It was `absolute z-30`, which put it behind two different things at once:
+    // absolute positioned it inside whatever pane happened to be its nearest
+    // positioned ancestor, so it was clipped by that pane's bounds, and z-30 is
+    // below the composer and far below the popovers at z-[300] and z-[999] — so
+    // a notice about the controller being unreachable rendered underneath the
+    // UI it was trying to warn about. The container stays pointer-events-none;
+    // each banner re-enables them for its own dismiss button.
+    //
+    <div className="pointer-events-none fixed bottom-3 right-3 z-[1000] flex max-w-[26rem] flex-col items-end gap-2">
       {error ? (
         <WorkspaceBanner tone="error" onDismiss={onClearError}>
           {humanizeWorkspaceNotice(error)}

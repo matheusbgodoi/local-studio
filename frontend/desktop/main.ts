@@ -5,6 +5,7 @@ import {
   dialog,
   globalShortcut,
   ipcMain,
+  Notification,
   shell,
   type BrowserWindow,
 } from "electron";
@@ -281,6 +282,32 @@ function registerIpcHandlers(): void {
     chromeVersion: process.versions.chrome,
     electronVersion: process.versions.electron,
   }));
+
+  //
+  // A native notification for the two moments the owner actually wants pulled
+  // out of whatever else they are doing: the agent finished, or it needs an
+  // answer it cannot proceed without. Nothing routine is sent here — the
+  // renderer decides when, and only fires while the window is not focused, so
+  // a notification never duplicates something already on screen.
+  //
+  // Clicking it brings the window forward, which is the only useful action.
+  //
+  ipcMain.handle("desktop:notify", (_, payload: unknown) => {
+    if (!Notification.isSupported()) return false;
+    const record = payload as { title?: unknown; body?: unknown } | null;
+    const title = typeof record?.title === "string" ? record.title.slice(0, 120) : "";
+    const body = typeof record?.body === "string" ? record.body.slice(0, 300) : "";
+    if (!title) return false;
+    const notification = new Notification({ title, body, silent: false });
+    notification.on("click", () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    });
+    notification.show();
+    return true;
+  });
 
   ipcMain.handle("desktop:open-external", async (_, url: string) => {
     if (!isHttpUrl(url)) return false;
