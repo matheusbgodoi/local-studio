@@ -276,9 +276,24 @@ rounded up.
    writable.** Seatbelt hooks `connect`/`sendto`/`bind`, not `write` on an
    established socket. This requires a cooperating unjailed helper; the runtime
    does not pass descriptors into jailed children.
-3. **Chromium runs `--no-sandbox` under protection.** Its own Seatbelt sandbox
-   cannot initialise inside ours. This trades Chromium's defence against hostile
-   page content for the egress boundary.
+3. **Chromium runs without its own sandbox — in BOTH modes, and protection is
+   not the cause.** playwright-core appends `--no-sandbox` whenever
+   `chromiumSandbox !== true`, and this repo has never set it, so Direct mode
+   runs an unsandboxed Chromium too. What protection adds is that the choice
+   cannot be reversed while jailed: Chromium applies a Seatbelt profile to each
+   child, and the kernel refuses any second profile whose compiled blob differs
+   from the one already applied. Measured against libsandbox directly — compile
+   succeeds inside our jail, `sandbox_apply` returns EPERM, and a byte-identical
+   re-apply returns 0 as a no-op. It is a refusal to nest, not a missing rule,
+   so no allow widens it. In Direct mode it *could* be reversed by setting
+   `chromiumSandbox: true`; that is a separate change and is not made here.
+
+   The consequence, measured with `sandbox_check` on live processes: a hostile
+   page that achieves code execution in a renderer can read the home directory
+   and exec, in both modes. The jail stops it reaching the network directly; it
+   does not stop it reading, and it can still post what it reads through the
+   permitted tunnel. Chromium's own sandbox is what would stop the reading, and
+   it is off.
 4. **`sandbox-exec` is formally deprecated by Apple.** It works on Darwin 27 and
    is the same facility Chromium itself uses, but it is not a contract Apple has
    promised to keep.

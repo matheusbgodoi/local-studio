@@ -78,6 +78,15 @@ export function jailSupported(): boolean {
 }
 
 //
+// `deny network*` denies UNIX-DOMAIN sockets as well as IP ones, which is a
+// trap: Chrome's ProcessSingleton binds a unix socket in TMPDIR before it does
+// anything else, so the full Chromium — which is what
+// `chromium.executablePath()` actually resolves to here — aborted at startup
+// under protection, and the per-pid profile fallback failed the same way. A
+// unix socket is not a route to anywhere; it has no address family that can
+// leave the machine. Allowing it costs nothing at the boundary, and IP egress
+// was re-measured unchanged either side of the change.
+//
 // `remote ip` in a Seatbelt profile accepts only `*` or `localhost` as a host —
 // a literal address or a CIDR is rejected at parse time — but the port is
 // honoured, and a port is all that is needed here. Pinning the exact port
@@ -115,6 +124,9 @@ export function buildProfile(options: JailOptions): string {
 (allow network-outbound (remote ip "localhost:${options.proxyPort}"))
 (allow network-bind (local ip "localhost:*"))
 (allow network-inbound (local ip "localhost:*"))
+(allow network-bind (local unix-socket))
+(allow network-outbound (remote unix-socket))
+(allow network-inbound (local unix-socket))
 
 (deny file-write*)
 (allow file-write*
@@ -216,11 +228,21 @@ export function jailEnvironment(proxyPort: number): Record<string, string> {
 }
 
 //
-// Chromium runs its own Seatbelt sandbox, and a nested sandbox_apply inside our
-// jail fails — its GPU and renderer children crash on startup. Running it with
-// --no-sandbox is therefore required to keep the browser working under
-// protection, and that is a real trade: it removes Chromium's own defence
-// against hostile page content while keeping the egress boundary.
+// Chromium runs unsandboxed here, and protection is NOT what causes that.
+//
+// playwright-core appends --no-sandbox whenever `chromiumSandbox !== true`, and
+// browser-host/playwright.ts has never set it — so Direct mode runs an
+// unsandboxed Chromium too. This flag is a duplicate of Playwright's own, kept
+// because it states the intent at the point it matters.
+//
+// What protection DOES add is that the choice cannot be reversed while jailed.
+// Chromium re-applies a Seatbelt profile to each child, and the kernel refuses
+// any second profile whose compiled blob differs from the one already applied —
+// measured directly against libsandbox: compile succeeds inside our jail,
+// sandbox_apply returns EPERM, and a byte-identical re-apply returns 0 as a
+// no-op. It is a kernel refusal to nest, not a missing rule, so no allow can
+// widen it and no Chromium flag recovers a real renderer sandbox: --single-process
+// boots but puts page JS in the browser process, which is less isolation.
 //
 // The proxy itself is set through Playwright's own `proxy` option, which emits
 // --proxy-server for us; only --no-sandbox has to be added by hand. Chromium
