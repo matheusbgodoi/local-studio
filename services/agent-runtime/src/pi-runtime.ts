@@ -376,6 +376,10 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     return [...this.desiredConnectors];
   }
 
+  getActiveToolNames(): string[] {
+    return this.runtime?.session.getActiveToolNames() ?? [];
+  }
+
   private async syncConnectorTools(): Promise<ConnectorSelectionResult> {
     const errors: Record<string, string> = {};
     const plan = planConnectorSelection(
@@ -915,6 +919,11 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     // Tool registrations live in the runtime being disposed; the DESIRED set
     // survives so the next ensureStarted re-activates the same connectors.
     this.connectorApi = null;
+    for (const connectorId of this.registeredConnectorTools.keys()) {
+      if (releaseConnector(connectorId, this.connectorHolderKey)) {
+        closePooledConnection(connectorId);
+      }
+    }
     this.registeredConnectorTools.clear();
     const runtime = this.runtime;
     this.runtime = null;

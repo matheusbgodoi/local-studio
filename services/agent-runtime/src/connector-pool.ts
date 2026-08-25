@@ -37,7 +37,10 @@ async function enabledConnector(connectorId: string): Promise<ConnectorConfig> {
   return connector;
 }
 
-function allowedTools(connector: ConnectorConfig, tools: McpToolInfo[]): McpToolInfo[] {
+export function allowedConnectorTools(
+  connector: ConnectorConfig,
+  tools: McpToolInfo[],
+): McpToolInfo[] {
   if (!connector.allowTools) return tools;
   const allow = new Set(connector.allowTools);
   return tools.filter((tool) => allow.has(tool.name));
@@ -82,7 +85,7 @@ export async function listConnectorTools(connectorId: string): Promise<McpToolIn
   const connector = await enabledConnector(connectorId);
   try {
     const connection = await getPooledConnection(connectorId);
-    return allowedTools(connector, await connection.listTools());
+    return allowedConnectorTools(connector, await connection.listTools());
   } catch (error) {
     closePooledConnection(connectorId);
     throw error;

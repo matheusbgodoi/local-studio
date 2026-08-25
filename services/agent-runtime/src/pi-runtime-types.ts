@@ -106,6 +106,8 @@ export interface PiAgentSession {
    *  restarts the runtime and never writes connectors.json. */
   setConnectorSelection(connectorIds: string[]): Promise<ConnectorSelectionResult>;
   getConnectorSelection(): string[];
+  /** Tool schemas that will be sent on the next model turn. */
+  getActiveToolNames(): string[];
   stop(): Promise<void>;
   readonly status: PiAgentStatus;
   getEventsAfter(seq: number): LoggedPiEvent[];

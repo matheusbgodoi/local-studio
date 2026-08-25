@@ -226,6 +226,8 @@ function RequiredConnections({
   const visible = connectors.filter(
     (connector) => connector.enabled || selected.includes(connector.id),
   );
+  const knownIds = new Set(connectors.map((connector) => connector.id));
+  const missingIds = selected.filter((id) => !knownIds.has(id));
   const toggle = (id: string, enabled: boolean) => {
     onChange(enabled ? [...new Set([...selected, id])] : selected.filter((entry) => entry !== id));
   };
@@ -242,7 +244,7 @@ function RequiredConnections({
           </p>
         </div>
       </div>
-      {visible.length > 0 ? (
+      {visible.length > 0 || missingIds.length > 0 ? (
         <div className="divide-y divide-(--ui-separator) rounded-[var(--ui-radius)] border border-(--ui-separator)">
           {visible.map((connector) => (
             <div
@@ -251,7 +253,6 @@ function RequiredConnections({
             >
               <Checkbox
                 checked={selected.includes(connector.id)}
-                disabled={!connector.enabled}
                 onChange={(checked) => toggle(connector.id, checked)}
                 label={connector.name}
                 className="min-w-0 flex-1 items-center"
@@ -260,6 +261,21 @@ function RequiredConnections({
               <span className="shrink-0 text-[length:var(--fs-xs)] text-(--ui-muted)">
                 {connector.enabled ? connector.transport : "disabled"}
               </span>
+            </div>
+          ))}
+          {missingIds.map((id) => (
+            <div
+              key={id}
+              className="flex min-h-11 items-center gap-3 px-3 py-2 text-[length:var(--fs-sm)]"
+            >
+              <Checkbox
+                checked
+                onChange={(checked) => toggle(id, checked)}
+                label={id}
+                className="min-w-0 flex-1 items-center"
+                labelClassName="truncate text-[length:var(--fs-sm)] text-(--ui-fg)"
+              />
+              <span className="shrink-0 text-[length:var(--fs-xs)] text-(--ui-muted)">missing</span>
             </div>
           ))}
         </div>

@@ -11,7 +11,8 @@ import { piRuntimeManager } from "./pi-runtime";
 import { lastAssistantResult } from "./session-text";
 import { listProjectsFromStore } from "./projects-store";
 import { listConnectors } from "./connectors-service";
-import { probeConnector } from "./connector-pool";
+import { allowedConnectorTools, probeConnector } from "./connector-pool";
+import { qualifiedConnectorToolName } from "./connector-session-tools";
 import { isPersonalConnectorId } from "../../../shared/agent/personal-connectors";
 import type { PiAgentSession } from "./pi-runtime-types";
 
@@ -41,12 +42,22 @@ export function automationRunError(lastError: string | null, summary: string): s
   return summary.trim() ? null : "Automation completed without an assistant response.";
 }
 
-async function preflightRequiredConnectors(automation: Automation): Promise<string[]> {
-  if (automation.requiredConnectorIds.length === 0) return [];
+type RequiredConnectorPlan = {
+  personal: string[];
+  connectorNames: Map<string, string>;
+  toolNames: Map<string, string[]>;
+};
+
+async function preflightRequiredConnectors(automation: Automation): Promise<RequiredConnectorPlan> {
+  const plan: RequiredConnectorPlan = {
+    personal: [],
+    connectorNames: new Map(),
+    toolNames: new Map(),
+  };
+  if (automation.requiredConnectorIds.length === 0) return plan;
   const configured = new Map(
     (await listConnectors()).map((connector) => [connector.id, connector]),
   );
-  const personal: string[] = [];
   for (const id of automation.requiredConnectorIds) {
     const connector = configured.get(id);
     if (!connector) throw new Error(`Required connection "${id}" is not configured.`);
@@ -55,12 +66,18 @@ async function preflightRequiredConnectors(automation: Automation): Promise<stri
     if (!probe.ok) {
       throw new Error(`Required connection "${connector.name}" is unavailable.`);
     }
-    if (probe.tools.length === 0) {
-      throw new Error(`Required connection "${connector.name}" reported no tools.`);
+    const tools = allowedConnectorTools(connector, probe.tools);
+    if (tools.length === 0) {
+      throw new Error(`Required connection "${connector.name}" has no allowed tools.`);
     }
-    if (isPersonalConnectorId(id)) personal.push(id);
+    plan.connectorNames.set(id, connector.name);
+    plan.toolNames.set(
+      id,
+      tools.map((tool) => qualifiedConnectorToolName(id, tool.name)),
+    );
+    if (isPersonalConnectorId(id)) plan.personal.push(id);
   }
-  return personal;
+  return plan;
 }
 
 export async function runAutomationNow(id: string): Promise<Automation | null> {
@@ -71,13 +88,22 @@ export async function runAutomationNow(id: string): Promise<Automation | null> {
   const runtimeSessionId = `automation:${id}:${Date.now()}`;
   let session: PiAgentSession | null = null;
   try {
-    const personalConnectors = await preflightRequiredConnectors(automation);
+    const connectorPlan = await preflightRequiredConnectors(automation);
     session = piRuntimeManager.getSessionForLookup(runtimeSessionId, null).session;
     await session.ensureStarted(automation.modelId, automation.cwd || undefined, null, {});
-    const connectorSelection = await session.setConnectorSelection(personalConnectors);
+    const connectorSelection = await session.setConnectorSelection(connectorPlan.personal);
     const connectorErrors = Object.values(connectorSelection.errors);
-    if (connectorErrors.length > 0) {
+    const missingPersonal = connectorPlan.personal.filter(
+      (connectorId) => !connectorSelection.active.includes(connectorId),
+    );
+    if (connectorErrors.length > 0 || missingPersonal.length > 0) {
       throw new Error("A required connection could not be activated for this automation.");
+    }
+    const activeTools = new Set(session.getActiveToolNames());
+    for (const [connectorId, toolNames] of connectorPlan.toolNames) {
+      if (toolNames.every((name) => activeTools.has(name))) continue;
+      const connectorName = connectorPlan.connectorNames.get(connectorId) ?? connectorId;
+      throw new Error(`Required connection "${connectorName}" did not activate its tools.`);
     }
     await session.prompt(runPrompt(automation), () => {}, {
       inferencePriority: "background",
