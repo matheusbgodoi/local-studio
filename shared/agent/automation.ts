@@ -34,6 +34,7 @@ export const AutomationSchema = Schema.Struct({
   prompt: Schema.String,
   modelId: Schema.String,
   cwd: Schema.String,
+  requiredConnectorIds: Schema.Array(Schema.String),
   schedule: AutomationScheduleSchema,
   status: Schema.Literals(["active", "paused"]),
   nextRunAt: Schema.NullOr(Schema.String),

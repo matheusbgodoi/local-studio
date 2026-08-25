@@ -41,7 +41,7 @@ export const loadSqlDatabase = (): new (filepath: string) => SqlDatabase => {
 };
 
 export const AGENTIC_STORE_FILENAME = "agentic-runtime.sqlite";
-export const AGENTIC_STORE_VERSION = 6;
+export const AGENTIC_STORE_VERSION = 7;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS agentic_metadata (
@@ -269,37 +269,6 @@ export function openAgenticDatabase(dataDir: string): { database: SqlDatabase; f
   // that is not there.
   //
   const addedColumns = addMissingColumns(database);
-  if (addedColumns.has("agentic_runs.current_for_conversation")) {
-    database.exec(`
-      UPDATE agentic_runs AS candidate
-      SET current_for_conversation = 1
-      WHERE candidate.archived_at_ms IS NULL
-        AND candidate.pi_session_id IS NOT NULL
-        AND 1 = (
-          SELECT COUNT(*) FROM agentic_runs AS peer
-          WHERE peer.archived_at_ms IS NULL
-            AND peer.pi_session_id = candidate.pi_session_id
-        );
-      UPDATE agentic_runs AS candidate
-      SET current_for_conversation = 1
-      WHERE candidate.archived_at_ms IS NULL
-        AND candidate.pi_session_id IS NULL
-        AND 1 = (
-          SELECT COUNT(*) FROM agentic_runs AS peer
-          WHERE peer.archived_at_ms IS NULL
-            AND peer.pi_session_id IS NULL
-            AND peer.session_id = candidate.session_id
-        );
-    `);
-  }
-  database.exec(`
-    CREATE UNIQUE INDEX IF NOT EXISTS agentic_runs_current_pi
-      ON agentic_runs(pi_session_id)
-      WHERE current_for_conversation = 1 AND pi_session_id IS NOT NULL;
-    CREATE UNIQUE INDEX IF NOT EXISTS agentic_runs_current_session
-      ON agentic_runs(session_id)
-      WHERE current_for_conversation = 1 AND pi_session_id IS NULL;
-  `);
   database
     .prepare("INSERT OR IGNORE INTO agentic_metadata(key, value) VALUES ('version', ?)")
     .run(String(AGENTIC_STORE_VERSION));
@@ -312,6 +281,14 @@ export function openAgenticDatabase(dataDir: string): { database: SqlDatabase; f
     throw new Error(
       `Agentic runtime store was written by a newer build (version ${String(stored?.value)})`,
     );
+  }
+  if (
+    storedVersion < AGENTIC_STORE_VERSION ||
+    addedColumns.has("agentic_runs.current_for_conversation")
+  ) {
+    migrateCurrentConversation(database);
+  } else {
+    installCurrentConversationIndexes(database);
   }
   if (storedVersion < AGENTIC_STORE_VERSION) {
     database
@@ -327,6 +304,43 @@ export function openAgenticDatabase(dataDir: string): { database: SqlDatabase; f
     }
   }
   return { database, filepath: target };
+}
+
+function installCurrentConversationIndexes(database: SqlDatabase): void {
+  database.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS agentic_runs_current_pi
+      ON agentic_runs(pi_session_id)
+      WHERE current_for_conversation = 1 AND pi_session_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS agentic_runs_current_session
+      ON agentic_runs(session_id)
+      WHERE current_for_conversation = 1;
+  `);
+}
+
+function migrateCurrentConversation(database: SqlDatabase): void {
+  withTransaction(database, () => {
+    database.exec(`
+      DROP INDEX IF EXISTS agentic_runs_current_pi;
+      DROP INDEX IF EXISTS agentic_runs_current_session;
+      UPDATE agentic_runs SET current_for_conversation = 0;
+      UPDATE agentic_runs AS candidate
+      SET current_for_conversation = 1
+      WHERE candidate.archived_at_ms IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM agentic_runs AS peer
+          WHERE peer.archived_at_ms IS NULL
+            AND peer.id <> candidate.id
+            AND (
+              peer.session_id = candidate.session_id
+              OR (
+                candidate.pi_session_id IS NOT NULL
+                AND peer.pi_session_id = candidate.pi_session_id
+              )
+            )
+        );
+    `);
+    installCurrentConversationIndexes(database);
+  });
 }
 
 //

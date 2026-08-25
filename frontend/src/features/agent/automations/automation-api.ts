@@ -5,6 +5,10 @@ import {
   type Automation,
 } from "@shared/agent/automation";
 import type { AutomationDraft } from "./automation-model";
+import {
+  ConnectorsResponseSchema,
+  type ConnectorView,
+} from "@local-studio/agent-runtime/connector-contract";
 
 const AgentModelSchema = Schema.Struct({
   id: Schema.String,
@@ -25,6 +29,7 @@ const DeleteResponseSchema = Schema.Struct({
 });
 
 export type AutomationModel = typeof AgentModelSchema.Type;
+export type AutomationConnector = ConnectorView;
 
 async function errorMessage(response: Response): Promise<string> {
   const fallback = `Request failed with HTTP ${response.status}`;
@@ -70,6 +75,13 @@ export function listAutomationModels(): Effect.Effect<AutomationModel[], Error> 
   return Effect.map(
     requestJson("/api/agent/models", Schema.decodeUnknownSync(AgentModelsResponseSchema)),
     ({ models }) => [...models],
+  );
+}
+
+export function listAutomationConnectors(): Effect.Effect<AutomationConnector[], Error> {
+  return Effect.map(
+    requestJson("/api/agent/connectors", Schema.decodeUnknownSync(ConnectorsResponseSchema)),
+    ({ connectors }) => [...connectors],
   );
 }
 

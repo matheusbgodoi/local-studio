@@ -2,11 +2,11 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { Button, FormField, Input, Select, Textarea } from "@/ui";
-import { Clock, Pause, Play, Plus, Trash2, X } from "@/ui/icon-registry";
+import { Button, Checkbox, FormField, Input, Select, Textarea } from "@/ui";
+import { Clock, Plug, Pause, Play, Plus, Trash2, X } from "@/ui/icon-registry";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 import type { Automation, AutomationSchedule } from "@shared/agent/automation";
-import type { AutomationModel } from "./automation-api";
+import type { AutomationConnector, AutomationModel } from "./automation-api";
 import {
   NEW_AUTOMATION_DRAFT,
   draftFromAutomation,
@@ -52,6 +52,7 @@ export function AutomationEditor({
   automation,
   creating,
   models,
+  connectors,
   action,
   error,
   onClose,
@@ -63,6 +64,7 @@ export function AutomationEditor({
   automation: Automation | null;
   creating: boolean;
   models: readonly AutomationModel[];
+  connectors: readonly AutomationConnector[];
   action: EditorAction;
   error: string;
   onClose: () => void;
@@ -183,6 +185,14 @@ export function AutomationEditor({
             </FormField>
           </div>
 
+          <RequiredConnections
+            connectors={connectors}
+            selected={draft.requiredConnectorIds}
+            onChange={(requiredConnectorIds) =>
+              setDraft((current) => ({ ...current, requiredConnectorIds }))
+            }
+          />
+
           {!creating && automation?.runs.length ? <RunHistory automation={automation} /> : null}
 
           {error ? <EditorError error={error} /> : null}
@@ -201,6 +211,64 @@ export function AutomationEditor({
         </div>
       </form>
     </section>
+  );
+}
+
+function RequiredConnections({
+  connectors,
+  selected,
+  onChange,
+}: {
+  connectors: readonly AutomationConnector[];
+  selected: readonly string[];
+  onChange: (ids: string[]) => void;
+}) {
+  const visible = connectors.filter(
+    (connector) => connector.enabled || selected.includes(connector.id),
+  );
+  const toggle = (id: string, enabled: boolean) => {
+    onChange(enabled ? [...new Set([...selected, id])] : selected.filter((entry) => entry !== id));
+  };
+  return (
+    <div className="border-t border-(--ui-separator) pt-5">
+      <div className="mb-3 flex items-start gap-2">
+        <Plug className="mt-0.5 h-4 w-4 shrink-0 text-(--ui-muted)" />
+        <div>
+          <h3 className="text-[length:var(--fs-base)] font-medium text-(--ui-fg)">
+            Required connections
+          </h3>
+          <p className="mt-0.5 text-[length:var(--fs-xs)] leading-5 text-(--ui-muted)">
+            The task will stop before contacting the model if any selected tool is unavailable.
+          </p>
+        </div>
+      </div>
+      {visible.length > 0 ? (
+        <div className="divide-y divide-(--ui-separator) rounded-[var(--ui-radius)] border border-(--ui-separator)">
+          {visible.map((connector) => (
+            <div
+              key={connector.id}
+              className="flex min-h-11 items-center gap-3 px-3 py-2 text-[length:var(--fs-sm)]"
+            >
+              <Checkbox
+                checked={selected.includes(connector.id)}
+                disabled={!connector.enabled}
+                onChange={(checked) => toggle(connector.id, checked)}
+                label={connector.name}
+                className="min-w-0 flex-1 items-center"
+                labelClassName="truncate text-[length:var(--fs-sm)] text-(--ui-fg)"
+              />
+              <span className="shrink-0 text-[length:var(--fs-xs)] text-(--ui-muted)">
+                {connector.enabled ? connector.transport : "disabled"}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-[length:var(--fs-sm)] text-(--ui-muted)">
+          No enabled connections. Add one in Configure → Integrations.
+        </p>
+      )}
+    </div>
   );
 }
 

@@ -99,23 +99,15 @@ export function createRunStore(context: AgenticStoreContext) {
     withTransaction(database, () => {
       const id = `run_${randomUUID()}`;
       const at = ms();
-      if (input.piSessionId) {
-        context.run(
-          `UPDATE agentic_runs SET current_for_conversation = 0, updated_at_ms = ?
-           WHERE current_for_conversation = 1
-             AND (pi_session_id = ? OR (pi_session_id IS NULL AND session_id = ?))`,
-          at,
-          input.piSessionId,
-          input.sessionId,
-        );
-      } else {
-        context.run(
-          `UPDATE agentic_runs SET current_for_conversation = 0, updated_at_ms = ?
-           WHERE current_for_conversation = 1 AND session_id = ?`,
-          at,
-          input.sessionId,
-        );
-      }
+      context.run(
+        `UPDATE agentic_runs SET current_for_conversation = 0, updated_at_ms = ?
+         WHERE current_for_conversation = 1
+           AND (session_id = ? OR (? IS NOT NULL AND pi_session_id = ?))`,
+        at,
+        input.sessionId,
+        input.piSessionId,
+        input.piSessionId,
+      );
       context.run(
         `INSERT INTO agentic_runs(id, goal, status, model_id, physical_model_id, model_display_name, behavior_profile,
            network_policy, context_window, usable_limit, session_id, pi_session_id, current_for_conversation, cwd,
@@ -144,21 +136,26 @@ export function createRunStore(context: AgenticStoreContext) {
     sessionId: string | null;
     piSessionId: string | null;
   }): AgenticRun | null => {
+    const currentForSession = (): AgenticRun | null => {
+      if (!input.sessionId) return null;
+      const rows = all(
+        `SELECT * FROM agentic_runs
+         WHERE current_for_conversation = 1 AND archived_at_ms IS NULL AND session_id = ?`,
+        input.sessionId,
+      );
+      return rows.length === 1 && rows[0] ? toRun(rows[0]) : null;
+    };
     if (input.piSessionId) {
       const row = one(
         `SELECT * FROM agentic_runs
          WHERE current_for_conversation = 1 AND archived_at_ms IS NULL AND pi_session_id = ?`,
         input.piSessionId,
       );
-      return row ? toRun(row) : null;
+      const exact = row ? toRun(row) : null;
+      if (exact && (!input.sessionId || exact.sessionId === input.sessionId)) return exact;
+      return currentForSession();
     }
-    if (!input.sessionId) return null;
-    const rows = all(
-      `SELECT * FROM agentic_runs
-       WHERE current_for_conversation = 1 AND archived_at_ms IS NULL AND session_id = ?`,
-      input.sessionId,
-    );
-    return rows.length === 1 && rows[0] ? toRun(rows[0]) : null;
+    return currentForSession();
   };
 
   const updateRun = (id: string, patch: Partial<AgenticRun>): AgenticRun => {

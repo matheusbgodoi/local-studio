@@ -10,6 +10,10 @@ import { getGlobalSingleton } from "./instances";
 import { piRuntimeManager } from "./pi-runtime";
 import { lastAssistantResult } from "./session-text";
 import { listProjectsFromStore } from "./projects-store";
+import { listConnectors } from "./connectors-service";
+import { probeConnector } from "./connector-pool";
+import { isPersonalConnectorId } from "../../../shared/agent/personal-connectors";
+import type { PiAgentSession } from "./pi-runtime-types";
 
 const TICK_MS = 30_000;
 
@@ -37,15 +41,44 @@ export function automationRunError(lastError: string | null, summary: string): s
   return summary.trim() ? null : "Automation completed without an assistant response.";
 }
 
+async function preflightRequiredConnectors(automation: Automation): Promise<string[]> {
+  if (automation.requiredConnectorIds.length === 0) return [];
+  const configured = new Map(
+    (await listConnectors()).map((connector) => [connector.id, connector]),
+  );
+  const personal: string[] = [];
+  for (const id of automation.requiredConnectorIds) {
+    const connector = configured.get(id);
+    if (!connector) throw new Error(`Required connection "${id}" is not configured.`);
+    if (!connector.enabled) throw new Error(`Required connection "${connector.name}" is disabled.`);
+    const probe = await probeConnector(connector);
+    if (!probe.ok) {
+      throw new Error(`Required connection "${connector.name}" is unavailable.`);
+    }
+    if (probe.tools.length === 0) {
+      throw new Error(`Required connection "${connector.name}" reported no tools.`);
+    }
+    if (isPersonalConnectorId(id)) personal.push(id);
+  }
+  return personal;
+}
+
 export async function runAutomationNow(id: string): Promise<Automation | null> {
   const scheduler = state();
   const automation = await getAutomation(id);
   if (!automation || scheduler.running.has(id)) return null;
   scheduler.running.add(id);
   const runtimeSessionId = `automation:${id}:${Date.now()}`;
+  let session: PiAgentSession | null = null;
   try {
-    const { session } = piRuntimeManager.getSessionForLookup(runtimeSessionId, null);
+    const personalConnectors = await preflightRequiredConnectors(automation);
+    session = piRuntimeManager.getSessionForLookup(runtimeSessionId, null).session;
     await session.ensureStarted(automation.modelId, automation.cwd || undefined, null, {});
+    const connectorSelection = await session.setConnectorSelection(personalConnectors);
+    const connectorErrors = Object.values(connectorSelection.errors);
+    if (connectorErrors.length > 0) {
+      throw new Error("A required connection could not be activated for this automation.");
+    }
     await session.prompt(runPrompt(automation), () => {}, {
       inferencePriority: "background",
     });
@@ -57,7 +90,6 @@ export async function runAutomationNow(id: string): Promise<Automation | null> {
     const error = automationRunError(status.lastError ?? result.error, result.text);
     const projectId =
       listProjectsFromStore().find((project) => project.path === status.cwd)?.id ?? null;
-    void session.stop().catch(() => undefined);
     return await recordAutomationRun(
       id,
       {
@@ -86,6 +118,7 @@ export async function runAutomationNow(id: string): Promise<Automation | null> {
       nextRunAt(automation.schedule, new Date()).toISOString(),
     );
   } finally {
+    await session?.stop().catch(() => undefined);
     scheduler.running.delete(id);
   }
 }

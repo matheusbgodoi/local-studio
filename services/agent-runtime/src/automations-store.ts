@@ -67,6 +67,18 @@ function normalizeRun(value: unknown): AutomationRun | null {
   };
 }
 
+function normalizeConnectorIds(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) return [];
+  return [
+    ...new Set(
+      value
+        .filter((entry): entry is string => typeof entry === "string")
+        .map((entry) => entry.trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
 function normalizeAutomation(value: unknown): Automation {
   const record = isRecord(value) ? value : {};
   const now = new Date().toISOString();
@@ -86,6 +98,7 @@ function normalizeAutomation(value: unknown): Automation {
     prompt: typeof record.prompt === "string" ? record.prompt : "",
     modelId: typeof record.modelId === "string" ? record.modelId : "",
     cwd: typeof record.cwd === "string" ? record.cwd : "",
+    requiredConnectorIds: normalizeConnectorIds(record.requiredConnectorIds),
     schedule: normalizeSchedule(record.schedule),
     status: record.status === "paused" ? "paused" : "active",
     nextRunAt: typeof record.nextRunAt === "string" ? record.nextRunAt : null,
@@ -162,6 +175,7 @@ export async function createAutomation(input: {
   prompt: string;
   modelId: string;
   cwd: string;
+  requiredConnectorIds: unknown;
   schedule: unknown;
 }): Promise<Automation> {
   const id = `auto-${randomUUID().slice(0, 8)}`;
@@ -174,6 +188,7 @@ export async function createAutomation(input: {
       prompt: input.prompt,
       modelId: input.modelId,
       cwd: input.cwd,
+      requiredConnectorIds: normalizeConnectorIds(input.requiredConnectorIds),
       schedule,
       status: "active",
       nextRunAt: nextRunAt(schedule, new Date()).toISOString(),
@@ -188,7 +203,12 @@ export async function createAutomation(input: {
 
 export async function patchAutomation(
   id: string,
-  patch: Partial<Pick<Automation, "name" | "prompt" | "modelId" | "cwd" | "status" | "unread">> & {
+  patch: Partial<
+    Pick<
+      Automation,
+      "name" | "prompt" | "modelId" | "cwd" | "requiredConnectorIds" | "status" | "unread"
+    >
+  > & {
     schedule?: unknown;
     nextRunAt?: string | null;
     lastRun?: AutomationRun | null;
@@ -197,11 +217,14 @@ export async function patchAutomation(
 ): Promise<Automation | null> {
   const existing = await getAutomation(id);
   if (!existing) return null;
-  const { schedule: rawSchedule, ...rest } = patch;
+  const { schedule: rawSchedule, requiredConnectorIds, ...rest } = patch;
   const schedule = rawSchedule === undefined ? undefined : normalizeSchedule(rawSchedule);
   const next = await store.write(
     {
       ...rest,
+      ...(requiredConnectorIds === undefined
+        ? {}
+        : { requiredConnectorIds: normalizeConnectorIds(requiredConnectorIds) }),
       ...(schedule ? { schedule } : {}),
       ...(schedule || patch.status === "active"
         ? { nextRunAt: nextRunAt(schedule ?? existing.schedule, new Date()).toISOString() }
