@@ -73,11 +73,13 @@ export const toRun = (row: Row): AgenticRun => ({
   physicalModelId: text(row.physical_model_id),
   modelDisplayName: nullableText(row.model_display_name),
   behaviorProfile: nullableText(row.behavior_profile),
-  networkPolicy: (parseNetworkPolicy(row.network_policy) ?? DEFAULT_NETWORK_POLICY) as NetworkPolicy,
+  networkPolicy: (parseNetworkPolicy(row.network_policy) ??
+    DEFAULT_NETWORK_POLICY) as NetworkPolicy,
   contextWindow: int(row.context_window),
   usableLimit: int(row.usable_limit),
   sessionId: text(row.session_id),
   piSessionId: nullableText(row.pi_session_id),
+  currentForConversation: int(row.current_for_conversation) === 1,
   cwd: text(row.cwd),
   planRevision: int(row.plan_revision),
   activeTaskId: nullableText(row.active_task_id),
@@ -89,7 +91,10 @@ export const toRun = (row: Row): AgenticRun => ({
   resultSummary: nullableText(row.result_summary),
   failureReason: nullableText(row.failure_reason),
   recoveryState: nullableText(row.recovery_state),
-  archivedAtMs: row.archived_at_ms === null || row.archived_at_ms === undefined ? null : int(row.archived_at_ms),
+  archivedAtMs:
+    row.archived_at_ms === null || row.archived_at_ms === undefined
+      ? null
+      : int(row.archived_at_ms),
   createdAtMs: int(row.created_at_ms),
   updatedAtMs: int(row.updated_at_ms),
 });

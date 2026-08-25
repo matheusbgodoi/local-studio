@@ -87,6 +87,7 @@ export const AgenticRunSchema = Schema.Struct({
   usableLimit: Schema.Number,
   sessionId: Schema.String,
   piSessionId: nullableString,
+  currentForConversation: Schema.Boolean,
   cwd: Schema.String,
   planRevision: Schema.Number,
   activeTaskId: nullableString,
@@ -221,6 +222,9 @@ export const AgenticRunSnapshotSchema = Schema.Struct({
 });
 
 export const AgenticRunsResponseSchema = Schema.Struct({ runs: Schema.Array(AgenticRunSchema) });
+export const AgenticCurrentRunResponseSchema = Schema.Struct({
+  run: Schema.NullOr(AgenticRunSchema),
+});
 export const AgenticRunResponseSchema = Schema.Struct({
   ok: Schema.Boolean,
   run: AgenticRunSchema,

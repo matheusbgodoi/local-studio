@@ -41,7 +41,7 @@ export const loadSqlDatabase = (): new (filepath: string) => SqlDatabase => {
 };
 
 export const AGENTIC_STORE_FILENAME = "agentic-runtime.sqlite";
-export const AGENTIC_STORE_VERSION = 5;
+export const AGENTIC_STORE_VERSION = 6;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS agentic_metadata (
@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS agentic_runs (
   usable_limit INTEGER NOT NULL,
   session_id TEXT NOT NULL,
   pi_session_id TEXT,
+  current_for_conversation INTEGER NOT NULL DEFAULT 0 CHECK (current_for_conversation IN (0,1)),
   cwd TEXT NOT NULL,
   plan_revision INTEGER NOT NULL DEFAULT 0,
   active_task_id TEXT,
@@ -267,7 +268,38 @@ export function openAgenticDatabase(dataDir: string): { database: SqlDatabase; f
   // existing store keeps the old shape and the first INSERT fails on a column
   // that is not there.
   //
-  addMissingColumns(database);
+  const addedColumns = addMissingColumns(database);
+  if (addedColumns.has("agentic_runs.current_for_conversation")) {
+    database.exec(`
+      UPDATE agentic_runs AS candidate
+      SET current_for_conversation = 1
+      WHERE candidate.archived_at_ms IS NULL
+        AND candidate.pi_session_id IS NOT NULL
+        AND 1 = (
+          SELECT COUNT(*) FROM agentic_runs AS peer
+          WHERE peer.archived_at_ms IS NULL
+            AND peer.pi_session_id = candidate.pi_session_id
+        );
+      UPDATE agentic_runs AS candidate
+      SET current_for_conversation = 1
+      WHERE candidate.archived_at_ms IS NULL
+        AND candidate.pi_session_id IS NULL
+        AND 1 = (
+          SELECT COUNT(*) FROM agentic_runs AS peer
+          WHERE peer.archived_at_ms IS NULL
+            AND peer.pi_session_id IS NULL
+            AND peer.session_id = candidate.session_id
+        );
+    `);
+  }
+  database.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS agentic_runs_current_pi
+      ON agentic_runs(pi_session_id)
+      WHERE current_for_conversation = 1 AND pi_session_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS agentic_runs_current_session
+      ON agentic_runs(session_id)
+      WHERE current_for_conversation = 1 AND pi_session_id IS NULL;
+  `);
   database
     .prepare("INSERT OR IGNORE INTO agentic_metadata(key, value) VALUES ('version', ?)")
     .run(String(AGENTIC_STORE_VERSION));
@@ -304,7 +336,8 @@ export function openAgenticDatabase(dataDir: string): { database: SqlDatabase; f
 // because a Run that was created before this existed was not protected, and
 // backfilling it as protected would claim a guarantee nothing ever provided.
 //
-function addMissingColumns(database: SqlDatabase): void {
+function addMissingColumns(database: SqlDatabase): Set<string> {
+  const added = new Set<string>();
   const additions: ReadonlyArray<{ table: string; column: string; definition: string }> = [
     {
       table: "agentic_runs",
@@ -316,6 +349,11 @@ function addMissingColumns(database: SqlDatabase): void {
       table: "agentic_runs",
       column: "archived_at_ms",
       definition: "INTEGER",
+    },
+    {
+      table: "agentic_runs",
+      column: "current_for_conversation",
+      definition: "INTEGER NOT NULL DEFAULT 0 CHECK (current_for_conversation IN (0,1))",
     },
     { table: "agentic_runs", column: "model_display_name", definition: "TEXT" },
     { table: "agentic_agents", column: "model_display_name", definition: "TEXT" },
@@ -329,7 +367,9 @@ function addMissingColumns(database: SqlDatabase): void {
     database.exec(
       `ALTER TABLE ${addition.table} ADD COLUMN ${addition.column} ${addition.definition}`,
     );
+    added.add(`${addition.table}.${addition.column}`);
   }
+  return added;
 }
 
 export function withTransaction<T>(database: SqlDatabase, task: () => T): T {

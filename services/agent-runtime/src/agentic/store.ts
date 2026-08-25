@@ -47,7 +47,12 @@ export function createAgenticStore(dataDir: string, now: () => Date = () => new 
     if (!TERMINAL_RUN_STATUSES.has(run.status)) {
       throw new Error("Only completed, failed or cancelled Runs can be archived.");
     }
-    return runStore.updateRun(runId, { archivedAtMs: archived ? context.ms() : null });
+    return withTransaction(database, () =>
+      runStore.updateRun(runId, {
+        archivedAtMs: archived ? context.ms() : null,
+        ...(archived ? { currentForConversation: false } : {}),
+      }),
+    );
   };
 
   const deleteRun = (runId: string): void => {
@@ -65,6 +70,7 @@ export function createAgenticStore(dataDir: string, now: () => Date = () => new 
     try {
       if (quarantined) queueDeleteCleanup(dataDir, [quarantineDir]);
       withTransaction(database, () => {
+        context.run("UPDATE agentic_runs SET current_for_conversation = 0 WHERE id = ?", runId);
         for (const table of RUN_CHILD_TABLES) {
           context.run(`DELETE FROM ${table} WHERE run_id = ?`, runId);
         }
