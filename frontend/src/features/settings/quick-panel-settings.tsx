@@ -52,7 +52,7 @@ function isMac(): boolean {
 
 /** Map a keydown to an Electron accelerator, or null if it isn't a usable
  * combo (needs at least one modifier plus a non-modifier key). */
-function acceleratorFromEvent(event: KeyboardEvent): string | null {
+export function acceleratorFromEvent(event: KeyboardEvent): string | null {
   if (MODIFIER_CODES.has(event.code)) return null;
 
   const modifiers: string[] = [];
@@ -95,7 +95,7 @@ function hotkeyParts(accelerator: string): string[] {
     .map((part) => (mac ? (MAC_KEY_GLYPHS[part] ?? part) : (GENERIC_KEY_LABELS[part] ?? part)));
 }
 
-function HotkeyKeys({ accelerator }: { accelerator: string }) {
+export function HotkeyKeys({ accelerator }: { accelerator: string }) {
   return (
     <span className="inline-flex items-center gap-1">
       {hotkeyParts(accelerator).map((part, index) => (
