@@ -61,6 +61,11 @@ const serverCapabilitiesDetail = (logsSupported: boolean, openapiSupported: bool
     .filter(Boolean)
     .join(" · ");
 
+const availableConfigureSection = (
+  section: ConfigureSectionId,
+  rigsSupported: boolean,
+): ConfigureSectionId => (section === "rig" && !rigsSupported ? "overview" : section);
+
 function OverviewRow({
   icon,
   title,
@@ -108,16 +113,21 @@ function OverviewRow({
 }
 
 export default function ConfigurePage() {
+  const { controllerKey } = useControllerCapabilities();
+  return <ConfigurePageForController key={controllerKey} controllerKey={controllerKey} />;
+}
+
+function ConfigurePageForController({ controllerKey }: { controllerKey: string }) {
   const { capabilities, loading: capabilitiesLoading } = useControllerCapabilities();
   const rigsSupported = capabilities.features.rigs === "supported";
   const logsSupported = capabilities.features.logs === "supported";
   const openapiSupported = capabilities.features.openapi === "supported";
   const recipesCapability = capabilities.features.recipes;
-  const state = useConfigure(capabilities.features.rigs);
+  const state = useConfigure(capabilities.features.rigs, controllerKey);
   const searchParams = useSearchParams();
   const requestedSection = configureSectionFromHash(searchParams.get("section") ?? "");
   const [section, setSection] = useState<ConfigureSectionId>(requestedSection);
-  const activeSection = section === "rig" && !rigsSupported ? "overview" : section;
+  const activeSection = availableConfigureSection(section, rigsSupported);
   const sections = visibleConfigureSections(rigsSupported);
 
   useMountSubscription(() => {

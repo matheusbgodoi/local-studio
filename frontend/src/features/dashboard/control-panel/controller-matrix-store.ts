@@ -14,6 +14,7 @@ import {
   normalizeControllerUrl,
   type SavedController,
 } from "@/lib/api/controllers";
+import { normalizeOpenAIModels, type AgentModel } from "@shared/agent/models";
 
 const POLL_INTERVAL_MS = 5_000;
 const POLL_REQUEST = { timeout: 4_000, retries: 0 } as const;
@@ -180,13 +181,19 @@ async function pollController(
     backendUrlOverride: controller.url,
   });
   try {
-    const status = await api.getStatus(POLL_REQUEST);
+    const [status, models] = await Promise.all([
+      api.getStatus(POLL_REQUEST),
+      api
+        .getOpenAIModels(POLL_REQUEST)
+        .then(normalizeOpenAIModels)
+        .catch(() => [] as AgentModel[]),
+    ]);
     pollFailures.delete(controller.url);
     return row({
       authRequired: false,
       controller,
       index,
-      modelName: modelNameFor(status.process),
+      modelName: modelNameFor(status.process, models),
       online: true,
       running: status.running,
     });
@@ -207,13 +214,12 @@ async function pollController(
 }
 
 function modelNameFor(
-  process: { served_model_name?: string | null; model_path?: string | null } | null,
+  process: { served_model_name?: string | null } | null,
+  models: AgentModel[],
 ): string | null {
   const served = process?.served_model_name?.trim();
-  if (served) return served;
-  const path = process?.model_path?.trim();
-  if (!path) return null;
-  return path.replace(/\/+$/, "").split("/").pop() || path;
+  if (!served) return null;
+  return models.find((model) => model.id === served)?.displayName?.trim() || null;
 }
 
 function isAuthRequiredError(error: unknown): boolean {

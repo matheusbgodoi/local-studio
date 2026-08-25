@@ -138,22 +138,16 @@ function nullableText(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-/**
- * The picker's rows, or nothing.
- *
- * A row with no id cannot be sent as `?model=`, and a row whose label the host could not
- * resolve falls back to the id — which is what a retired alias honestly is. Order is the
- * host's: served first, then by the name the reader sees, which is the chat's own order.
- */
 function normalizeFilterModels(value: unknown): UsageFilterModel[] {
   return array(value).flatMap((entry) => {
     const id = text(entry.id, "");
-    if (id === "") return [];
+    const label = text(entry.label, "").trim();
+    if (id === "" || label === "") return [];
     const aliases = strings(entry.aliases);
     return [
       {
         id,
-        label: text(entry.label, id),
+        label,
         aliases: aliases.includes(id) ? aliases : [id, ...aliases],
         // Retirement is asserted only when the host says so. A host that never learned
         // about `served` leaves it undefined, and every model would read as retired.

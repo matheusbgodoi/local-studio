@@ -1,10 +1,10 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { CapabilityState } from "@local-studio/contracts/capabilities";
 import api from "@/lib/api/client";
 import type { RigNodePayload } from "@/lib/api/rigs";
-import { readPageCache, writePageCache } from "@/lib/page-data-cache";
+import { readPageCache, scopedPageCacheKey, writePageCache } from "@/lib/page-data-cache";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 import type { Rig, RigsPayload } from "@/lib/types";
 
@@ -26,31 +26,51 @@ export interface ConfigureState {
   deleteNode: (rigId: string, nodeId: string) => Promise<void>;
 }
 
-export function useConfigure(rigsCapability: CapabilityState): ConfigureState {
+export function useConfigure(
+  rigsCapability: CapabilityState,
+  controllerKey: string,
+): ConfigureState {
+  const rigsCacheKey = scopedPageCacheKey(controllerKey, RIGS_CACHE_KEY);
   const [rigsPayload, setRigsPayload] = useState<RigsPayload | null>(() =>
-    rigsCapability === "supported" ? readPageCache<RigsPayload>(RIGS_CACHE_KEY) : null,
+    rigsCapability === "supported" ? readPageCache<RigsPayload>(rigsCacheKey) : null,
   );
   const [loading, setLoading] = useState(
     rigsCapability === "unknown" || (rigsCapability === "supported" && rigsPayload === null),
   );
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const activeRef = useRef(false);
+  const requestSequence = useRef(0);
+
+  useMountSubscription(() => {
+    activeRef.current = true;
+    return () => {
+      activeRef.current = false;
+      requestSequence.current += 1;
+    };
+  }, [controllerKey]);
 
   const reload = useCallback(async () => {
     if (rigsCapability !== "supported") return;
+    const requestId = ++requestSequence.current;
     setRefreshing(true);
     setError(null);
     try {
       const rigs = await api.getRigs();
-      writePageCache(RIGS_CACHE_KEY, rigs);
+      if (!activeRef.current || requestId !== requestSequence.current) return;
+      writePageCache(rigsCacheKey, rigs);
       setRigsPayload(rigs);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (activeRef.current && requestId === requestSequence.current) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (activeRef.current && requestId === requestSequence.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
-  }, [rigsCapability]);
+  }, [rigsCacheKey, rigsCapability]);
 
   useMountSubscription(() => {
     if (rigsCapability === "supported") {
@@ -63,17 +83,21 @@ export function useConfigure(rigsCapability: CapabilityState): ConfigureState {
     setError(null);
   }, [reload, rigsCapability]);
 
-  const applyRig = useCallback((rig: Rig) => {
-    setRigsPayload((current) => {
-      if (!current) return current;
-      const rigs = current.rigs.some((entry) => entry.id === rig.id)
-        ? current.rigs.map((entry) => (entry.id === rig.id ? rig : entry))
-        : [...current.rigs, rig];
-      const next = { ...current, rigs };
-      writePageCache(RIGS_CACHE_KEY, next);
-      return next;
-    });
-  }, []);
+  const applyRig = useCallback(
+    (rig: Rig) => {
+      if (!activeRef.current) return;
+      setRigsPayload((current) => {
+        if (!current) return current;
+        const rigs = current.rigs.some((entry) => entry.id === rig.id)
+          ? current.rigs.map((entry) => (entry.id === rig.id ? rig : entry))
+          : [...current.rigs, rig];
+        const next = { ...current, rigs };
+        writePageCache(rigsCacheKey, next);
+        return next;
+      });
+    },
+    [rigsCacheKey],
+  );
 
   const createRig = useCallback(
     async (name: string) => {
