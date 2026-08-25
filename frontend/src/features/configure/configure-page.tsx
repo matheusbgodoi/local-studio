@@ -112,6 +112,7 @@ export default function ConfigurePage() {
   const rigsSupported = capabilities.features.rigs === "supported";
   const logsSupported = capabilities.features.logs === "supported";
   const openapiSupported = capabilities.features.openapi === "supported";
+  const recipesCapability = capabilities.features.recipes;
   const state = useConfigure(capabilities.features.rigs);
   const searchParams = useSearchParams();
   const requestedSection = configureSectionFromHash(searchParams.get("section") ?? "");
@@ -187,8 +188,18 @@ export default function ConfigurePage() {
               <OverviewRow
                 icon={<Boxes className="h-5 w-5" />}
                 title="Models"
-                description="Find weights, create serving profiles, and manage downloads."
-                detail="Get · serve · download"
+                description={
+                  recipesCapability === "supported"
+                    ? "Browse models and the serving recipes exposed by this controller."
+                    : "Inspect the models reported by the active controller."
+                }
+                detail={
+                  recipesCapability === "supported"
+                    ? "Models · serving recipes"
+                    : recipesCapability === "unsupported"
+                      ? "Served model inventory"
+                      : "Capabilities not reported"
+                }
                 onOpen={() => window.location.assign("/models")}
               />
               <OverviewRow

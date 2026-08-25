@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState, type ReactNode } from "react";
-import { ExternalLink, RefreshCw } from "@/ui/icon-registry";
+import { RefreshCw } from "@/ui/icon-registry";
 import { AppPage, Button, Checkbox, KeyValueRow, StatusPill, Tabs } from "@/ui";
 import { useLogs } from "@/features/logs/use-logs";
 import { useControllerCapabilities } from "@/hooks/controller-capabilities-store";
@@ -266,7 +266,7 @@ function BackendsGroup({ realtime }: { realtime: RealtimeStatusSnapshot }) {
         backends.map(([name, info]) => <BackendRow key={name} name={name} info={info} />)
       ) : (
         <div className="text-[length:var(--fs-sm)] text-(--color-foreground-subtlest)">
-          Detecting…
+          {realtime.statusLoading ? "Detecting…" : "Not reported by this controller."}
         </div>
       )}
     </StatusGroup>
@@ -531,16 +531,8 @@ function DocsPanel() {
   return (
     <div className="min-h-0 p-4">
       <section className="flex h-full min-h-[32rem] flex-col overflow-hidden rounded-lg border border-(--color-card-border) bg-(--color-card)">
-        <div className="flex min-h-10 items-center justify-between border-b border-(--color-card-border) px-3 text-xs">
+        <div className="flex min-h-10 items-center border-b border-(--color-card-border) px-3 text-xs">
           <span className="text-(--color-foreground-subtle)">OpenAPI reference</span>
-          <a
-            href="/api/proxy/api/docs"
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1 text-(--color-foreground-subtle) hover:text-(--fg)"
-          >
-            Open <ExternalLink className="h-3 w-3" />
-          </a>
         </div>
         <OpenApiPanel />
       </section>
