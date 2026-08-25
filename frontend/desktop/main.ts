@@ -94,6 +94,7 @@ const dictationTargets = new Map<number, Map<string, number>>();
 let dictationTargetSequence = 0;
 let activeDictationTarget: DictationTarget | null = null;
 let pendingDictationWindowId: number | null = null;
+let pendingDictationTimer: NodeJS.Timeout | null = null;
 
 const HEALTH_CHECK_INTERVAL_MS = 5_000;
 const HEALTH_CHECK_TIMEOUT_MS = 4_000;
@@ -350,6 +351,11 @@ function startDictationFromShortcut(): void {
     target = latestDictationTarget(panel);
     if (!target) {
       pendingDictationWindowId = panel.webContents.id;
+      if (pendingDictationTimer) clearTimeout(pendingDictationTimer);
+      pendingDictationTimer = setTimeout(() => {
+        pendingDictationTimer = null;
+        pendingDictationWindowId = null;
+      }, 10_000);
       return;
     }
   }
@@ -360,6 +366,8 @@ function startDictationFromShortcut(): void {
 
 function stopDictationFromShortcut(): void {
   pendingDictationWindowId = null;
+  if (pendingDictationTimer) clearTimeout(pendingDictationTimer);
+  pendingDictationTimer = null;
   const target = activeDictationTarget;
   activeDictationTarget = null;
   if (target) sendDictationRequest(target, "stop");
@@ -388,14 +396,23 @@ function registerDictationTarget(sender: WebContents, ownerId: string, enabled: 
       dictationTargets.set(senderId, owners);
       sender.once("destroyed", () => {
         dictationTargets.delete(senderId);
-        if (activeDictationTarget?.sender.id === senderId) activeDictationTarget = null;
-        if (pendingDictationWindowId === senderId) pendingDictationWindowId = null;
+        if (activeDictationTarget?.sender.id === senderId) {
+          stopDictation("cancel");
+          activeDictationTarget = null;
+        }
+        if (pendingDictationWindowId === senderId) {
+          pendingDictationWindowId = null;
+          if (pendingDictationTimer) clearTimeout(pendingDictationTimer);
+          pendingDictationTimer = null;
+        }
       });
     }
     owners.set(ownerId, ++dictationTargetSequence);
     if (pendingDictationWindowId === senderId) {
       const target = { sender, ownerId };
       pendingDictationWindowId = null;
+      if (pendingDictationTimer) clearTimeout(pendingDictationTimer);
+      pendingDictationTimer = null;
       if (sendDictationRequest(target, "start")) activeDictationTarget = target;
     }
     return;
@@ -841,6 +858,10 @@ async function shutdown(): Promise<void> {
   shutdownPromise = (async () => {
     appState = "stopping";
     stopFrontendHealthMonitor();
+    pendingDictationWindowId = null;
+    if (pendingDictationTimer) clearTimeout(pendingDictationTimer);
+    pendingDictationTimer = null;
+    stopDictation("cancel");
     stopDictationShortcut();
     globalShortcut.unregisterAll();
     killAllPtys();
