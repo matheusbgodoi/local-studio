@@ -1,4 +1,10 @@
 import type { DesktopUpdateSnapshot } from "./types";
+import type {
+  DictationShortcutMode,
+  DictationShortcutRequest,
+  DictationShortcutResult,
+  DictationShortcutState,
+} from "./dictation-shortcut-contract";
 
 export interface ProjectEntry {
   id: string;
@@ -59,6 +65,21 @@ export interface QuickPanelBridge {
   focusMainAndNavigate(projectId: string, sessionId?: string): Promise<void>;
   getHotkey(): Promise<QuickPanelHotkeyState>;
   setHotkey(hotkey: string): Promise<QuickPanelHotkeyResult>;
+}
+
+export type {
+  DictationShortcutMode,
+  DictationShortcutRequest,
+  DictationShortcutResult,
+  DictationShortcutState,
+} from "./dictation-shortcut-contract";
+
+export interface DictationShortcutBridge {
+  get(): Promise<DictationShortcutState>;
+  set(input: { mode: DictationShortcutMode; hotkey: string }): Promise<DictationShortcutResult>;
+  registerTarget(ownerId: string, active: boolean): Promise<void>;
+  reportRecording(ownerId: string, recording: boolean): Promise<void>;
+  onRequest(listener: (request: DictationShortcutRequest) => void): () => void;
 }
 
 export interface ControllerDeployResultPayload {
@@ -170,5 +191,6 @@ export interface DesktopBridge {
   copyKittylitterPairingJson(pairingJson: string): Promise<KittylitterCopyResult>;
   terminal: PtyBridge;
   quickPanel: QuickPanelBridge;
+  dictationShortcut: DictationShortcutBridge;
   controllerDeploy: ControllerDeployBridge;
 }

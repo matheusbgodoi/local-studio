@@ -70,6 +70,22 @@ const bridge: DesktopBridge = {
     getHotkey: () => ipcRenderer.invoke("desktop:quick-panel-get-hotkey"),
     setHotkey: (hotkey) => ipcRenderer.invoke("desktop:quick-panel-set-hotkey", hotkey),
   },
+  dictationShortcut: {
+    get: () => ipcRenderer.invoke("desktop:dictation-shortcut-get"),
+    set: (input) => ipcRenderer.invoke("desktop:dictation-shortcut-set", input),
+    registerTarget: (ownerId, active) =>
+      ipcRenderer.invoke("desktop:dictation-shortcut-register-target", ownerId, active),
+    reportRecording: (ownerId, recording) =>
+      ipcRenderer.invoke("desktop:dictation-shortcut-report-recording", ownerId, recording),
+    onRequest: (listener) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        request: Parameters<typeof listener>[0],
+      ) => listener(request);
+      ipcRenderer.on("desktop:dictation-shortcut-request", handler);
+      return () => ipcRenderer.removeListener("desktop:dictation-shortcut-request", handler);
+    },
+  },
   controllerDeploy: {
     start: (options) => ipcRenderer.invoke("desktop:controller-deploy", options),
     onLog: (listener) => {

@@ -7,7 +7,8 @@ import {
   ipcMain,
   Notification,
   shell,
-  type BrowserWindow,
+  BrowserWindow,
+  type WebContents,
 } from "electron";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
@@ -44,10 +45,12 @@ import {
   normalizeKittylitterPairingJson,
 } from "./logic/kittylitter-pairing";
 import {
+  getQuickPanelWindow,
   hideQuickPanel,
   resetQuickPanel,
   resizeQuickPanelToHome,
   resizeQuickPanelToThread,
+  showQuickPanel,
   toggleQuickPanel,
 } from "./logic/quick-panel-window";
 import { getStoredQuickPanelHotkey, setStoredQuickPanelHotkey } from "./logic/desktop-settings";
@@ -61,6 +64,15 @@ import {
   resizePty,
   writePty,
 } from "./logic/pty-manager";
+import {
+  dictationShortcutHotkey,
+  dictationShortcutMode,
+  getDictationShortcutState,
+  initializeDictationShortcut,
+  setDictationShortcut,
+  stopDictationShortcut,
+} from "./logic/dictation-shortcut";
+import type { DictationShortcutMode as DictationMode } from "./dictation-shortcut-contract";
 
 let appState: DesktopAppState = "starting";
 let mainWindow: BrowserWindow | null = null;
@@ -75,6 +87,13 @@ let titleGenerationQueue: Promise<void> = Promise.resolve();
 let quitAfterShutdown = false;
 let relaunchAfterShutdown = false;
 const expectedFrontendStopPids = new Set<number>();
+
+type DictationTarget = { sender: WebContents; ownerId: string };
+
+const dictationTargets = new Map<number, Map<string, number>>();
+let dictationTargetSequence = 0;
+let activeDictationTarget: DictationTarget | null = null;
+let pendingDictationWindowId: number | null = null;
 
 const HEALTH_CHECK_INTERVAL_MS = 5_000;
 const HEALTH_CHECK_TIMEOUT_MS = 4_000;
@@ -287,6 +306,107 @@ function resolveHomeConfinedPath(target: unknown): string | null {
   return null;
 }
 
+function latestDictationTarget(window: BrowserWindow | null): DictationTarget | null {
+  if (!window || window.isDestroyed()) return null;
+  const owners = dictationTargets.get(window.webContents.id);
+  if (!owners?.size) return null;
+  let ownerId = "";
+  let sequence = -1;
+  for (const [candidate, candidateSequence] of owners) {
+    if (candidateSequence > sequence) {
+      ownerId = candidate;
+      sequence = candidateSequence;
+    }
+  }
+  return ownerId ? { sender: window.webContents, ownerId } : null;
+}
+
+function currentDictationTarget(): DictationTarget | null {
+  const focused = BrowserWindow.getFocusedWindow();
+  const focusedTarget = latestDictationTarget(focused);
+  if (focusedTarget) return focusedTarget;
+  if (mainWindow?.isVisible() && !mainWindow.isMinimized()) {
+    const mainTarget = latestDictationTarget(mainWindow);
+    if (mainTarget) return mainTarget;
+  }
+  const panel = getQuickPanelWindow();
+  return panel?.isVisible() ? latestDictationTarget(panel) : null;
+}
+
+function sendDictationRequest(target: DictationTarget, action: "start" | "stop"): boolean {
+  if (target.sender.isDestroyed()) return false;
+  if (!dictationTargets.get(target.sender.id)?.has(target.ownerId)) return false;
+  target.sender.send("desktop:dictation-shortcut-request", {
+    ownerId: target.ownerId,
+    action,
+  });
+  return true;
+}
+
+function startDictationFromShortcut(): void {
+  let target = currentDictationTarget();
+  if (!target && frontendServer) {
+    const panel = showQuickPanel(frontendServer.runtime.url);
+    target = latestDictationTarget(panel);
+    if (!target) {
+      pendingDictationWindowId = panel.webContents.id;
+      return;
+    }
+  }
+  if (!target || !sendDictationRequest(target, "start")) return;
+  pendingDictationWindowId = null;
+  activeDictationTarget = target;
+}
+
+function stopDictationFromShortcut(): void {
+  pendingDictationWindowId = null;
+  const target = activeDictationTarget;
+  activeDictationTarget = null;
+  if (target) sendDictationRequest(target, "stop");
+}
+
+function onDictationShortcut(pressed: boolean): void {
+  if (dictationShortcutMode() === "toggle") {
+    if (activeDictationTarget || pendingDictationWindowId !== null) stopDictationFromShortcut();
+    else startDictationFromShortcut();
+    return;
+  }
+  if (pressed) {
+    if (!activeDictationTarget && pendingDictationWindowId === null) startDictationFromShortcut();
+  } else {
+    stopDictationFromShortcut();
+  }
+}
+
+function registerDictationTarget(sender: WebContents, ownerId: string, enabled: boolean): void {
+  if (!ownerId || ownerId.length > 160) return;
+  const senderId = sender.id;
+  let owners = dictationTargets.get(senderId);
+  if (enabled) {
+    if (!owners) {
+      owners = new Map();
+      dictationTargets.set(senderId, owners);
+      sender.once("destroyed", () => {
+        dictationTargets.delete(senderId);
+        if (activeDictationTarget?.sender.id === senderId) activeDictationTarget = null;
+        if (pendingDictationWindowId === senderId) pendingDictationWindowId = null;
+      });
+    }
+    owners.set(ownerId, ++dictationTargetSequence);
+    if (pendingDictationWindowId === senderId) {
+      const target = { sender, ownerId };
+      pendingDictationWindowId = null;
+      if (sendDictationRequest(target, "start")) activeDictationTarget = target;
+    }
+    return;
+  }
+  owners?.delete(ownerId);
+  if (!owners?.size) dictationTargets.delete(senderId);
+  if (activeDictationTarget?.sender.id === senderId && activeDictationTarget.ownerId === ownerId) {
+    activeDictationTarget = null;
+  }
+}
+
 function registerIpcHandlers(): void {
   ipcMain.handle("desktop:get-runtime", async () => ({
     platform: process.platform,
@@ -477,6 +597,57 @@ function registerIpcHandlers(): void {
     return { ok: true };
   });
 
+  ipcMain.handle("desktop:dictation-shortcut-get", () => getDictationShortcutState());
+  ipcMain.handle("desktop:dictation-shortcut-set", async (_, input: unknown) => {
+    if (!input || typeof input !== "object") {
+      return {
+        ...(await getDictationShortcutState()),
+        ok: false,
+        error: "Shortcut settings are invalid.",
+      };
+    }
+    const candidate = input as { mode?: unknown; hotkey?: unknown };
+    if (
+      (candidate.mode !== "toggle" && candidate.mode !== "hold") ||
+      typeof candidate.hotkey !== "string"
+    ) {
+      return {
+        ...(await getDictationShortcutState()),
+        ok: false,
+        error: "Shortcut settings are invalid.",
+      };
+    }
+    return setDictationShortcut(
+      { mode: candidate.mode as DictationMode, hotkey: candidate.hotkey },
+      quickPanelHotkey ?? DESKTOP_CONFIG.quickPanel.hotkey,
+    );
+  });
+  ipcMain.handle(
+    "desktop:dictation-shortcut-register-target",
+    (event, ownerId: unknown, enabled: unknown) => {
+      if (typeof ownerId === "string" && typeof enabled === "boolean") {
+        registerDictationTarget(event.sender, ownerId, enabled);
+      }
+    },
+  );
+  ipcMain.handle(
+    "desktop:dictation-shortcut-report-recording",
+    (event, ownerId: unknown, recording: unknown) => {
+      if (typeof ownerId !== "string" || typeof recording !== "boolean") return;
+      if (recording && dictationTargets.get(event.sender.id)?.has(ownerId)) {
+        activeDictationTarget = { sender: event.sender, ownerId };
+        return;
+      }
+      if (
+        !recording &&
+        activeDictationTarget?.sender.id === event.sender.id &&
+        activeDictationTarget.ownerId === ownerId
+      ) {
+        activeDictationTarget = null;
+      }
+    },
+  );
+
   ipcMain.handle("desktop:list-projects", async () => listProjectsWithMeta());
 
   ipcMain.handle("desktop:add-project", async (_, directoryPath: string) => {
@@ -630,6 +801,9 @@ function setQuickPanelHotkey(hotkey: unknown): { ok: boolean; hotkey: string; er
     return { ok: false, hotkey: current, error: "Hotkey must be a non-empty string" };
   }
   const next = hotkey.trim();
+  if (next === dictationShortcutHotkey()) {
+    return { ok: false, hotkey: current, error: "That hotkey is assigned to dictation." };
+  }
   if (next === quickPanelHotkey) {
     setStoredQuickPanelHotkey(next);
     return { ok: true, hotkey: next };
@@ -667,6 +841,7 @@ async function shutdown(): Promise<void> {
   shutdownPromise = (async () => {
     appState = "stopping";
     stopFrontendHealthMonitor();
+    stopDictationShortcut();
     globalShortcut.unregisterAll();
     killAllPtys();
     await stopFrontendServer(frontendServer);
@@ -750,6 +925,10 @@ async function run(): Promise<void> {
   try {
     await bootstrap();
     registerQuickPanelHotkey();
+    await initializeDictationShortcut(
+      onDictationShortcut,
+      quickPanelHotkey ?? DESKTOP_CONFIG.quickPanel.hotkey,
+    );
   } catch (error) {
     log.error(`Failed to bootstrap desktop app: ${String(error)}`);
     // Surface the failure instead of vanishing from the dock with no feedback
