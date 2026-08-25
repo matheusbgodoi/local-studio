@@ -285,12 +285,8 @@ export function useRecipesContentModel() {
 
   const handleEvictModel = useCallback(async () => {
     if (!lifecycleSupported) return;
-    try {
-      await api.evict();
-      await loadRecipes();
-    } catch (e) {
-      alert("Failed to evict: " + (e as Error).message);
-    }
+    await api.evict();
+    await loadRecipes();
   }, [lifecycleSupported, loadRecipes]);
 
   const handleToggleRecipeMenu = useCallback((recipeId: string) => {

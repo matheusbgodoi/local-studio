@@ -48,7 +48,7 @@ type Props = {
   onCloseRecipeModal: () => void;
   onCancelDelete: () => void;
   onConfirmDelete: () => void;
-  onEvictModel: () => void;
+  onEvictModel: () => Promise<void> | void;
   table: RecipesTableProps;
 };
 

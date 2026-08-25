@@ -9,6 +9,7 @@ import { POPOVER_MENU_CLASS, POPOVER_SEPARATOR_CLASS } from "@/ui/popover";
 import { ModelRow, ModelStatus, type ModelStatusTone } from "./model-page";
 import { engineNodeStyle, formatBackendLabel } from "@/features/recipes/recipe-labels";
 import { visionModeOverrideLabel } from "@/features/recipes/recipe-vision";
+import { ModelStopConfirm } from "@/features/dashboard/model-stop-confirm";
 
 type Props = {
   recipe: RecipeWithStatus;
@@ -20,7 +21,7 @@ type Props = {
   onTogglePin: (recipeId: string) => void;
   onToggleMenu: (recipeId: string) => void;
   onLaunch: (recipeId: string) => void;
-  onStop: () => void;
+  onStop: () => Promise<void> | void;
   onEdit: (recipe: RecipeWithStatus) => void;
   onRequestDelete: (recipeId: string) => void;
   onAttachAgents: (recipe: RecipeWithStatus) => void;
@@ -47,14 +48,19 @@ function LifecycleAction({
   disabled: boolean;
   title: string;
   onLaunch: () => void;
-  onStop: () => void;
+  onStop: () => Promise<void> | void;
 }) {
   if (!supported) return null;
   if (status === "running") {
     return (
-      <ModelButton onClick={onStop} tone="danger" title="Stop">
-        <Square className="h-3 w-3" />
-      </ModelButton>
+      <ModelStopConfirm
+        onStop={onStop}
+        trigger={({ open, stopping }) => (
+          <ModelButton onClick={open} tone="danger" title="Unload model" disabled={stopping}>
+            <Square className="h-3 w-3" />
+          </ModelButton>
+        )}
+      />
     );
   }
   return (

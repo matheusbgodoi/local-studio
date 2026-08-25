@@ -15,6 +15,7 @@ import { visionModeOverrideLabel } from "@/features/recipes/recipe-vision";
 import type { RecipesTableProps } from "./types";
 import { RecipesTable } from "./recipes-table";
 import { displayNameForModel, useServedModels } from "@/hooks/served-models-store";
+import { ModelStopConfirm } from "@/features/dashboard/model-stop-confirm";
 
 type Props = {
   loading: boolean;
@@ -26,7 +27,7 @@ type Props = {
   runningRecipeId: string | null;
   runningRecipeName: string | null;
   launchProgressMessage: string | null;
-  onEvictModel: () => void;
+  onEvictModel: () => Promise<void> | void;
   onNewRecipe: () => void;
   table: RecipesTableProps;
 };
@@ -43,14 +44,19 @@ function ActiveStopAction({
 }: {
   running: boolean;
   supported: boolean;
-  onStop: () => void;
+  onStop: () => Promise<void> | void;
 }) {
   if (!running || !supported) return null;
   return (
-    <ModelButton onClick={onStop} tone="danger">
-      <Square className="h-3 w-3" />
-      Stop
-    </ModelButton>
+    <ModelStopConfirm
+      onStop={onStop}
+      trigger={({ open, stopping }) => (
+        <ModelButton onClick={open} tone="danger" disabled={stopping}>
+          <Square className="h-3 w-3" />
+          {stopping ? "Unloading" : "Unload model"}
+        </ModelButton>
+      )}
+    />
   );
 }
 
