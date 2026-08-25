@@ -1,5 +1,7 @@
 import { useCallback, useState } from "react";
 import { StatusPill } from "@/ui";
+import { Schema } from "effect";
+import { SetupChecksResponseSchema, type SetupCheck } from "../../../../shared/agent/setup-checks";
 import {
   SettingsButton,
   SettingsFactRows,
@@ -164,44 +166,71 @@ export function ArchivedChatsSettings() {
   );
 }
 export function SetupChecksSettings() {
-  type Check = { id: string; label: string; ok: boolean; value: string; guidance: string };
-  const [checks, setChecks] = useState<Check[]>([]);
+  const [checks, setChecks] = useState<SetupCheck[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const controllerStatus = useSidebarStatus();
 
   useMountSubscription(() => {
     void fetch("/api/agent/setup-checks", { cache: "no-store" })
-      .then((res) => res.json() as Promise<{ checks?: Check[] }>)
-      .then((payload) => setChecks(payload.checks ?? []))
-      .catch(() => setChecks([]));
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Setup checks are unavailable");
+        return Schema.decodeUnknownSync(SetupChecksResponseSchema)(await response.json());
+      })
+      .then((payload) => {
+        setChecks([...payload.checks]);
+        setLoadError(false);
+      })
+      .catch(() => {
+        setChecks([]);
+        setLoadError(true);
+      })
+      .finally(() => setLoading(false));
   }, []);
-  const controllerCheck: Check = {
+  const controllerCheck: SetupCheck = {
     id: "controller",
     label: "Controller connection",
     ok: controllerStatus.online,
     value: controllerStatus.online ? controllerStatus.activityLine : "offline",
+    requirement: "required",
     guidance: "Set a reachable controller URL in Settings → Connection before using Agents.",
   };
   const rows = [...checks, controllerCheck];
-  const blockers = rows.filter((check) => !check.ok);
+  const blockers = rows.filter((check) => check.requirement === "required" && !check.ok);
   const setupRows: SettingsFactRow[] = rows.map((check) => ({
     key: check.id,
     label: check.label,
     description: check.guidance,
     value: check.value,
     mono: true,
-    status: { label: check.ok ? "ok" : "missing", tone: check.ok ? "good" : "warning" },
+    status: {
+      label: check.ok ? "ready" : check.requirement,
+      tone: check.ok ? "good" : check.requirement === "required" ? "warning" : "info",
+    },
   }));
   return (
     <SettingsGroup
       title="First-time setup"
       description="Preflight checks prevent new users from landing in an empty Agent tab without explanation."
       actions={
-        <StatusPill tone={blockers.length ? "warning" : "good"}>
-          {blockers.length ? `${blockers.length} blockers` : "ready"}
+        <StatusPill tone={loadError || blockers.length ? "warning" : "good"}>
+          {loading
+            ? "checking"
+            : loadError
+              ? "check unavailable"
+              : blockers.length
+                ? `${blockers.length} blockers`
+                : "ready"}
         </StatusPill>
       }
     >
-      <SettingsFactRows rows={setupRows} />
+      {loadError ? (
+        <div className="px-1 py-4 text-[length:var(--fs-sm)] text-(--ui-warning)">
+          Setup checks could not be loaded. Local Studio has not marked this installation ready.
+        </div>
+      ) : (
+        <SettingsFactRows rows={setupRows} />
+      )}
     </SettingsGroup>
   );
 }

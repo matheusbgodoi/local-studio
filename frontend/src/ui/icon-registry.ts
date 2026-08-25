@@ -149,6 +149,7 @@ export {
   TriangleAlert,
   Trash2,
   Upload,
+  UserRound,
   Variable,
   Volume2,
   Wrench,

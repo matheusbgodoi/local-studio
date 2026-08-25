@@ -8,7 +8,7 @@ import {
   type LucideIcon,
   Paintbrush,
   ServerCog,
-  Smartphone,
+  UserRound,
 } from "@/ui/icon-registry";
 import { SettingsLayout, type SettingsSectionDef, type SettingsSectionId } from "./settings-ui";
 import type { CompatibilityReport, ConfigData } from "@/lib/types";
@@ -42,7 +42,7 @@ interface SettingsViewProps {
 }
 const sectionIcon = (Icon: LucideIcon) => <Icon className="h-3.5 w-3.5" />;
 const SECTIONS: SettingsSectionDef[] = [
-  ["profile", "Profile & phone", "Your identity and phone pairing.", Smartphone],
+  ["profile", "Profile", "Your identity in Local Studio.", UserRound],
   ["connection", "General", "Controller connections and API access.", Cable],
   ["system", "System", "Engines, services, storage, and hardware.", Cpu],
   ["appearance", "Appearance", "Theme, typography, and interface scale.", Paintbrush],

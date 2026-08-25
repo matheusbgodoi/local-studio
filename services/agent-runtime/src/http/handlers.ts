@@ -569,22 +569,15 @@ export function handleRuntimeEvents(request: Request): Response {
 export function handleSetupChecks(): Response {
   const codexDir = path.join(homedir(), ".codex");
   const piDir = path.join(homedir(), ".pi");
-  // First-party extension load failures captured during the most recent SDK
-  // runtime creation. User/drop-in Pi extensions are intentionally disabled.
   const diagnostics = piResourceDiagnostics();
   return Response.json({
     checks: [
       {
-        //
-        // Whether the Sitegeist relay is configured at all. The composer uses
-        // this to decide whether to offer the browser-backend switch: without a
-        // relay the alternative backend does not exist, and a control that
-        // switches to nothing is worse than no control.
-        //
         id: "sitegeist-relay",
         label: "Sitegeist relay",
         ok: Boolean(sitegeistRelayUrl()),
         value: sitegeistRelayUrl() ? "configured" : "not configured",
+        requirement: "optional",
         guidance:
           "Optional. Set SITEGEIST_RELAY_URL, or ~/.config/sitegeist-relay/env, to run the agent's browser through the relay instead of the embedded panel.",
       },
@@ -593,6 +586,7 @@ export function handleSetupChecks(): Response {
         label: "Pi SDK",
         ok: typeof createAgentSessionRuntime === "function",
         value: "@earendil-works/pi-coding-agent",
+        requirement: "required",
         guidance: "The agent runtime is provided by the bundled Pi SDK package.",
       },
       {
@@ -600,6 +594,7 @@ export function handleSetupChecks(): Response {
         label: "Pi data directory",
         ok: existsSync(piDir),
         value: piDir,
+        requirement: "recommended",
         guidance: "The directory is created after the first Pi run.",
       },
       {
@@ -607,6 +602,7 @@ export function handleSetupChecks(): Response {
         label: "Codex config directory",
         ok: existsSync(codexDir),
         value: codexDir,
+        requirement: "optional",
         guidance: "Optional but recommended for skills parity.",
       },
     ],
