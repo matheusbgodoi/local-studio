@@ -12,9 +12,9 @@ import {
   MoreIcon,
   PinIcon,
   PinOffIcon,
+  RotateCcw,
   SquarePen,
   Trash2,
-  X,
 } from "@/ui/icon-registry";
 import { useProjects } from "@/features/agent/projects/context";
 import type { Project } from "@/features/agent/projects/types";
@@ -434,8 +434,8 @@ function SessionOptionsMenu({
       {showClear ? (
         <>
           <div className="mx-1 my-1 h-px bg-(--border)" />
-          <MenuItem Icon={X} danger onClick={run(onClear)}>
-            Clear
+          <MenuItem Icon={RotateCcw} onClick={run(onClear)}>
+            Reset name &amp; pin
           </MenuItem>
         </>
       ) : null}
