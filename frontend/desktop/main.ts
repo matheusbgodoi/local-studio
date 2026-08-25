@@ -619,6 +619,12 @@ function registerIpcHandlers(): void {
         error: "Shortcut settings are invalid.",
       };
     }
+    if (
+      candidate.mode !== dictationShortcutMode() ||
+      candidate.hotkey.trim() !== dictationShortcutHotkey()
+    ) {
+      stopDictationFromShortcut();
+    }
     return setDictationShortcut(
       { mode: candidate.mode as DictationMode, hotkey: candidate.hotkey },
       quickPanelHotkey ?? DESKTOP_CONFIG.quickPanel.hotkey,
