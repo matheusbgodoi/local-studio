@@ -3,14 +3,19 @@ import { toGB, toGBFromMB } from "@/lib/formatters";
 
 export type MetricSampleInput = {
   key: string;
-  generation: number;
-  generationPeak: number;
-  prefill: number;
-  prefillPeak: number;
-  ttft: number;
-  ttftPeak: number;
-  requests: number;
-  requestPeak: number;
+  generation: number | null;
+  generationPeak: number | null;
+  prefill: number | null;
+  prefillPeak: number | null;
+  ttft: number | null;
+  ttftPeak: number | null;
+  requests: number | null;
+  requestPeak: number | null;
+  queued: number | null;
+  gpuUtilization: number | null;
+  vramPercent: number | null;
+  powerWatts: number | null;
+  temperatureC: number | null;
   active: boolean;
 };
 
@@ -62,6 +67,7 @@ type StatusSectionViewInput = {
   currentProcess: ProcessInfo | null;
   currentRecipe: RecipeWithStatus | null;
   modelDisplayName?: string | null;
+  physicalModelId?: string | null;
   gpus: GPU[];
   inferencePort?: number;
   metrics: Metrics | null;
@@ -72,6 +78,7 @@ export function resolveStatusSectionView({
   currentProcess,
   currentRecipe,
   modelDisplayName,
+  physicalModelId,
   gpus,
   inferencePort,
   metrics,
@@ -88,15 +95,23 @@ export function resolveStatusSectionView({
     metricColumns: metricColumnViews(metrics, perf),
     modelName: resolveModelName(currentProcess, currentRecipe, modelDisplayName),
     sampleInput: {
-      key: resolveModelSampleKey(currentProcess, currentRecipe),
-      generation: perf.genTps ?? 0,
-      generationPeak: peakFor(metrics, "generation") ?? perf.genTps ?? 0,
-      prefill: perf.prefillTps ?? 0,
-      prefillPeak: peakFor(metrics, "prefill") ?? perf.prefillTps ?? 0,
-      ttft: perf.ttftMs ?? 0,
-      ttftPeak: peakFor(metrics, "ttft") ?? perf.ttftMs ?? 0,
+      key: physicalModelId ?? resolveModelSampleKey(currentProcess, currentRecipe),
+      generation: perf.genTps,
+      generationPeak: peakFor(metrics, "generation") ?? perf.genTps,
+      prefill: perf.prefillTps,
+      prefillPeak: peakFor(metrics, "prefill") ?? perf.prefillTps,
+      ttft: perf.ttftMs,
+      ttftPeak: peakFor(metrics, "ttft") ?? perf.ttftMs,
       requests: perf.sessions,
-      requestPeak: perf.peakReq || perf.sessions,
+      requestPeak: perf.peakReq ?? perf.sessions,
+      queued: perf.queued,
+      gpuUtilization: perf.gpuUtilization,
+      vramPercent:
+        perf.totalMemUsed !== null && perf.vramCapacity
+          ? (perf.totalMemUsed / perf.vramCapacity) * 100
+          : null,
+      powerWatts: perf.totalPower,
+      temperatureC: perf.temperatureC,
       active: isRunning,
     },
   };
@@ -128,28 +143,38 @@ function resolveModelSampleKey(
 function resolvePerformanceMetrics(metrics: Metrics | null, gpus: GPU[]) {
   const gpuTotals = resolveGpuTotals(gpus);
   return {
-    genTps: firstPositive(metrics?.generation_throughput, metrics?.session_avg_generation),
-    prefillTps: firstPositive(metrics?.prompt_throughput, metrics?.session_avg_prefill),
-    ttftMs: firstPositive(metrics?.avg_ttft_ms),
-    sessions: metrics?.running_requests ?? 0,
-    peakReq: metrics?.session_peak_running_requests ?? 0,
-    totalMemUsed: firstPositive(gpuTotals.memUsed, metrics?.vram_used_gb),
-    vramCapacity: firstPositive(gpuTotals.memCapacity, metrics?.vram_capacity_gb),
-    totalPower: firstPositive(gpuTotals.power, metrics?.current_power_watts),
-    powerLimit: firstPositive(gpuTotals.powerLimit, metrics?.power_limit_watts),
+    genTps: firstMeasured(metrics?.generation_throughput, metrics?.session_avg_generation),
+    prefillTps: firstMeasured(metrics?.prompt_throughput, metrics?.session_avg_prefill),
+    ttftMs: firstMeasured(metrics?.avg_ttft_ms),
+    sessions: firstMeasured(metrics?.running_requests),
+    peakReq: firstMeasured(metrics?.session_peak_running_requests),
+    queued: firstMeasured(metrics?.pending_requests),
+    gpuUtilization: gpuTotals.utilization,
+    temperatureC: gpuTotals.temperature,
+    totalMemUsed: firstMeasured(gpuTotals.memUsed, metrics?.vram_used_gb),
+    vramCapacity: firstMeasured(gpuTotals.memCapacity, metrics?.vram_capacity_gb),
+    totalPower: firstMeasured(gpuTotals.power, metrics?.current_power_watts),
+    powerLimit: firstMeasured(gpuTotals.powerLimit, metrics?.power_limit_watts),
   };
 }
 
 function resolveGpuTotals(gpus: GPU[]) {
-  return gpus.reduce(
-    (totals, gpu) => ({
-      memCapacity: totals.memCapacity + gpuMemoryTotal(gpu),
-      memUsed: totals.memUsed + gpuMemoryUsed(gpu),
-      power: totals.power + (gpu.power_draw || 0),
-      powerLimit: totals.powerLimit + (gpu.power_limit || 0),
-    }),
-    { memCapacity: 0, memUsed: 0, power: 0, powerLimit: 0 },
+  const memory = gpus.filter((gpu) => gpu.memory_usage_available !== false);
+  const power = gpus.filter(
+    (gpu) => gpu.power_available !== false && typeof gpu.power_draw === "number",
   );
+  const utilization = gpus.filter((gpu) => gpu.utilization_available !== false);
+  const temperature = gpus.filter((gpu) => gpu.temperature_available !== false);
+  return {
+    memCapacity: memory.length ? memory.reduce((sum, gpu) => sum + gpuMemoryTotal(gpu), 0) : null,
+    memUsed: memory.length ? memory.reduce((sum, gpu) => sum + gpuMemoryUsed(gpu), 0) : null,
+    power: power.length ? power.reduce((sum, gpu) => sum + (gpu.power_draw ?? 0), 0) : null,
+    powerLimit: power.length ? power.reduce((sum, gpu) => sum + (gpu.power_limit ?? 0), 0) : null,
+    utilization: utilization.length
+      ? utilization.reduce((sum, gpu) => sum + gpu.utilization_pct, 0) / utilization.length
+      : null,
+    temperature: temperature.length ? Math.max(...temperature.map((gpu) => gpu.temp_c)) : null,
+  };
 }
 
 function metricColumnViews(
@@ -182,7 +207,13 @@ function compactMetricViews(
   perf: ReturnType<typeof resolvePerformanceMetrics>,
 ): CompactMetricView[] {
   return [
-    { label: "Requests", value: `${perf.sessions}/${perf.peakReq || perf.sessions}` },
+    {
+      label: "Requests",
+      value:
+        perf.sessions === null
+          ? null
+          : `${perf.sessions}/${perf.peakReq === null ? perf.sessions : perf.peakReq}`,
+    },
     { label: "VRAM", value: ratioMetric(perf.totalMemUsed, perf.vramCapacity, "G", 1) },
     { label: "Power", value: ratioMetric(perf.totalPower, perf.powerLimit, "W") },
   ];
@@ -218,7 +249,7 @@ function peakDetailFor(metrics: Metrics | null, kind: PeakKind) {
 }
 
 function metricValue(value: number | null, digits: number): string | null {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? value.toFixed(digits)
     : null;
 }
@@ -229,7 +260,7 @@ function ratioMetric(
   unit: string,
   valueDigits = 0,
 ): string | null {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
   if (typeof total !== "number" || !Number.isFinite(total) || total <= 0) return null;
   return `${value.toFixed(valueDigits)}/${total.toFixed(0)}${unit}`;
 }
@@ -281,6 +312,13 @@ function gpuMemoryTotal(gpu: GPU): number {
 function firstPositive(...values: Array<number | null | undefined>): number | null {
   for (const v of values) {
     if (typeof v === "number" && Number.isFinite(v) && v > 0) return v;
+  }
+  return null;
+}
+
+function firstMeasured(...values: Array<number | null | undefined>): number | null {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
   }
   return null;
 }

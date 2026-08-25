@@ -4,7 +4,11 @@ import type { GPU, Metrics, ProcessInfo, RecipeWithStatus, RuntimePlatformKind }
 import { StatusHeader, StatusMetricStrip } from "./status-section-parts";
 import { MetricTrends, useMetricSamples } from "./status-section-trends";
 import { resolveStatusSectionView } from "./status-section-view";
-import { displayNameForModel, useServedModels } from "@/hooks/served-models-store";
+import {
+  displayNameForModel,
+  physicalIdForModel,
+  useServedModels,
+} from "@/hooks/served-models-store";
 
 interface StatusSectionProps {
   currentProcess: ProcessInfo | null;
@@ -49,6 +53,7 @@ export function StatusSection({
 }: StatusSectionProps) {
   const { physicalModels } = useServedModels();
   const modelDisplayName = displayNameForModel(physicalModels, currentProcess?.served_model_name);
+  const physicalModelId = physicalIdForModel(physicalModels, currentProcess?.served_model_name);
   const view = resolveStatusSectionView({
     currentProcess,
     currentRecipe,
@@ -56,6 +61,7 @@ export function StatusSection({
     inferencePort,
     metrics,
     modelDisplayName,
+    physicalModelId,
     platformKind,
   });
   const trendData = useMetricSamples(view.sampleInput);
