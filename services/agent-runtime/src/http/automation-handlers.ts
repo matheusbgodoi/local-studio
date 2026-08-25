@@ -11,6 +11,7 @@ import {
   patchAutomation,
 } from "../automations-store";
 import { runAutomationNow } from "../automation-scheduler";
+import { withAutomationMutationLock } from "../automation-mutation-lock";
 import { clearGoal, readGoal, writeGoal, type GoalStatus } from "../goals-store";
 import { GOAL_STATUSES } from "../../../../shared/agent/session-goal";
 import { errorMessage, jsonError, readJsonBody } from "./helpers";
@@ -87,12 +88,14 @@ export async function handleAutomationPatch(request: Request, id: string): Promi
 
 export async function handleAutomationDelete(id: string): Promise<Response> {
   try {
-    const automation = await getAutomation(id);
-    if (!automation) return jsonError(`Unknown automation '${id}'.`, 404);
-    if (automation.activeRun) return jsonError("A running automation cannot be deleted.", 409);
-    const removed = await deleteAutomation(id);
-    if (!removed) return jsonError(`Unknown automation '${id}'.`, 404);
-    return Response.json({ ok: true });
+    return await withAutomationMutationLock(id, async () => {
+      const automation = await getAutomation(id);
+      if (!automation) return jsonError(`Unknown automation '${id}'.`, 404);
+      if (automation.activeRun) return jsonError("A running automation cannot be deleted.", 409);
+      const removed = await deleteAutomation(id);
+      if (!removed) return jsonError(`Unknown automation '${id}'.`, 404);
+      return Response.json({ ok: true });
+    });
   } catch (error) {
     return jsonError(errorMessage(error, "Failed to delete automation."), 500);
   }

@@ -16,6 +16,7 @@ import { allowedConnectorTools, probeConnector } from "./connector-pool";
 import { qualifiedConnectorToolName } from "./connector-session-tools";
 import { isPersonalConnectorId } from "../../../shared/agent/personal-connectors";
 import type { PiAgentSession } from "./pi-runtime-types";
+import { withAutomationMutationLock } from "./automation-mutation-lock";
 
 const TICK_MS = 30_000;
 
@@ -86,19 +87,32 @@ export async function runAutomationNow(
   trigger: AutomationRunTrigger = "manual",
 ): Promise<Automation | null> {
   const scheduler = state();
-  if (scheduler.running.has(id)) return null;
-  scheduler.running.add(id);
-  const automation = await getAutomation(id);
-  if (!automation || automation.activeRun) {
-    scheduler.running.delete(id);
-    return null;
-  }
-  const startedAt = new Date().toISOString();
+  const claimed = await withAutomationMutationLock(id, async () => {
+    if (scheduler.running.has(id)) return null;
+    scheduler.running.add(id);
+    try {
+      const automation = await getAutomation(id);
+      if (!automation || automation.activeRun) {
+        scheduler.running.delete(id);
+        return null;
+      }
+      const startedAt = new Date().toISOString();
+      const started = await patchAutomation(id, { activeRun: { startedAt, trigger } });
+      if (!started) {
+        scheduler.running.delete(id);
+        return null;
+      }
+      return { automation, startedAt };
+    } catch (error) {
+      scheduler.running.delete(id);
+      throw error;
+    }
+  });
+  if (!claimed) return null;
+  const { automation, startedAt } = claimed;
   const runtimeSessionId = `automation:${id}:${Date.now()}`;
   let session: PiAgentSession | null = null;
   try {
-    const started = await patchAutomation(id, { activeRun: { startedAt, trigger } });
-    if (!started) return null;
     const connectorPlan = await preflightRequiredConnectors(automation);
     session = piRuntimeManager.getSessionForLookup(runtimeSessionId, null).session;
     await session.ensureStarted(automation.modelId, automation.cwd || undefined, null, {});
