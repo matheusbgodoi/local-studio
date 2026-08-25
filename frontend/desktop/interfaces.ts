@@ -64,12 +64,12 @@ export interface QuickPanelBridge {
 export interface ControllerDeployResultPayload {
   ok: boolean;
   url?: string;
-  apiKey?: string;
+  hasApiKey?: boolean;
   error?: string;
 }
 
 export interface ControllerDeployBridge {
-  /** Deploy a controller to an ssh host; resolves with url + api key. */
+  /** Deploy a controller to an ssh host. */
   start(options: {
     host: string;
     port?: number;

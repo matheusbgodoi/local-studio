@@ -103,3 +103,10 @@ export function migrateControllerCredentials(userDataDir: string): void {
     writeJsonAtomic(preferencesPath, preferences);
   }
 }
+
+export function saveControllerCredential(userDataDir: string, controller: StoredController): void {
+  const settingsPath = path.join(userDataDir, "api-settings.json");
+  const settings = readObject(settingsPath);
+  const controllers = mergeControllers(settings, [controller]);
+  writeJsonAtomic(settingsPath, { ...settings, controllers }, 2, 0o600);
+}

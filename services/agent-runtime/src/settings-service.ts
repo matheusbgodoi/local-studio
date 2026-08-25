@@ -50,6 +50,7 @@ export async function getApiSettings(): Promise<ApiSettings> {
   const settingsFile = resolveSettingsFilePath();
   if (!existsSync(settingsFile)) return DEFAULT_SETTINGS;
   try {
+    await chmod(settingsFile, 0o600).catch(() => undefined);
     const saved = JSON.parse(await readFile(settingsFile, "utf-8")) as Partial<ApiSettings>;
     return {
       backendUrl: saved.backendUrl || DEFAULT_SETTINGS.backendUrl,

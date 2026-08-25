@@ -8,14 +8,14 @@ import { SettingsButton, SettingsGroup } from "./settings-ui";
 export type DeployedController = {
   url: string;
   name?: string;
-  apiKey?: string;
+  hasApiKey?: boolean;
 };
 
 interface ControllerDeployBridge {
   start(options: {
     host: string;
     port?: number;
-  }): Promise<{ ok: boolean; url?: string; apiKey?: string; error?: string }>;
+  }): Promise<{ ok: boolean; url?: string; hasApiKey?: boolean; error?: string }>;
   onLog(listener: (line: string) => void): () => void;
 }
 
@@ -58,7 +58,7 @@ export function DeployControllerPanel({
       if (result.ok && result.url) {
         onDeployed({
           url: result.url,
-          apiKey: result.apiKey,
+          hasApiKey: result.hasApiKey,
           name: trimmed.split("@").pop() ?? trimmed,
         });
         setDone(`Controller running at ${result.url} — added to your list.`);

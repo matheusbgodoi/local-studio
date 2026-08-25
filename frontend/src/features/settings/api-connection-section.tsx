@@ -120,7 +120,7 @@ export function ApiConnectionSection({
       {
         url,
         name: controller.name,
-        apiKey: controller.apiKey,
+        hasApiKey: controller.hasApiKey,
       },
     ]);
     if (saved) await activateController({ url, name: controller.name });

@@ -27,10 +27,18 @@ import {
   resolveFrontendRestartUrl,
   shouldReloadAfterFrontendRestart,
 } from "./logic/frontend-restart";
-import { getUpdateState, initializeAutoUpdates, startUpdate } from "./logic/update-manager";
+import {
+  getUpdateState,
+  initializeAutoUpdates,
+  resolveUpdatePolicy,
+  startUpdate,
+} from "./logic/update-manager";
 import { addProject, listProjectsWithMeta, removeProject } from "./logic/projects-store";
 import { deployController } from "./logic/controller-deploy";
-import { migrateControllerCredentials } from "./logic/controller-credential-migration";
+import {
+  migrateControllerCredentials,
+  saveControllerCredential,
+} from "./logic/controller-credential-migration";
 import {
   getKittylitterPairingJson,
   normalizeKittylitterPairingJson,
@@ -286,7 +294,7 @@ function registerIpcHandlers(): void {
     packaged: app.isPackaged,
     releaseChannel: isDevChannelBuild ? "dev" : "stable",
     distribution: "owner-fork",
-    updatePolicy: process.env.LOCAL_STUDIO_UPDATE_URL?.trim() ? "owner-feed" : "manual-merge",
+    updatePolicy: resolveUpdatePolicy(),
     chromeVersion: process.versions.chrome,
     electronVersion: process.versions.electron,
   }));
@@ -432,11 +440,21 @@ function registerIpcHandlers(): void {
       const resourcesPath = app.isPackaged
         ? path.join(process.resourcesPath, "app", "scripts")
         : path.join(app.getAppPath(), "..", "scripts");
-      return deployController(options, resourcesPath, (line) => {
+      const result = await deployController(options, resourcesPath, (line) => {
         if (!event.sender.isDestroyed()) {
           event.sender.send("desktop:controller-deploy-log", { line });
         }
       });
+      if (!result.ok) return { ok: false, error: result.error };
+      if (!result.url || !result.apiKey) {
+        return { ok: false, error: "Controller deployment returned no credential" };
+      }
+      saveControllerCredential(app.getPath("userData"), {
+        url: result.url,
+        apiKey: result.apiKey,
+        name: options.host.trim().split("@").pop() || options.host.trim(),
+      });
+      return { ok: true, url: result.url, hasApiKey: true };
     },
   );
 
