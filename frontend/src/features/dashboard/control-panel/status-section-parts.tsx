@@ -52,6 +52,7 @@ export function StatusHeader({
 }) {
   const { capabilities } = useControllerCapabilities();
   const lifecycleSupported = capabilities.features.lifecycle === "supported";
+  const recipesSupported = capabilities.features.recipes === "supported";
   const logsSupported = capabilities.features.logs === "supported";
   return (
     // Stacks on phone widths: the five header actions would otherwise crush
@@ -91,6 +92,7 @@ export function StatusHeader({
         onViewAll={onViewAll}
         recipes={recipes}
         lifecycleSupported={lifecycleSupported}
+        recipesSupported={recipesSupported}
         logsSupported={logsSupported}
       />
     </div>
@@ -143,6 +145,7 @@ function StatusHeaderActions({
   onViewAll,
   recipes,
   lifecycleSupported,
+  recipesSupported,
   logsSupported,
 }: {
   benchmarking: boolean;
@@ -157,13 +160,14 @@ function StatusHeaderActions({
   onViewAll?: () => void;
   recipes?: RecipeWithStatus[];
   lifecycleSupported: boolean;
+  recipesSupported: boolean;
   logsSupported: boolean;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       <HeaderThemeToggle />
       {lifecycleSupported ? <HeaderStopButton running={isRunning} /> : null}
-      {lifecycleSupported && recipes && onLaunch ? (
+      {lifecycleSupported && recipesSupported && recipes && recipes.length > 0 && onLaunch ? (
         <ModelsDropdown
           currentRecipeId={currentRecipeId}
           lifecycleStatus={lifecycleStatus}

@@ -26,6 +26,7 @@ export function useDashboardData() {
     currentProcess,
     currentRecipe: recipesState.currentRecipe,
     metrics,
+    metricsObservedAt: realtime.metricsObservedAt,
     gpus,
     recipes: recipesState.recipes,
     logs: recipesState.logs,

@@ -14,6 +14,7 @@ interface StatusSectionProps {
   currentProcess: ProcessInfo | null;
   currentRecipe: RecipeWithStatus | null;
   metrics: Metrics | null;
+  metricsObservedAt: number;
   gpus: GPU[];
   isConnected: boolean;
   isStatusLoading: boolean;
@@ -35,6 +36,7 @@ export function StatusSection({
   currentProcess,
   currentRecipe,
   metrics,
+  metricsObservedAt,
   gpus,
   isConnected,
   isStatusLoading,
@@ -64,7 +66,7 @@ export function StatusSection({
     physicalModelId,
     platformKind,
   });
-  const trendData = useMetricSamples(view.sampleInput);
+  const trendData = useMetricSamples(view.sampleInput, metricsObservedAt);
 
   return (
     <section className="px-2 pt-2 pb-5">

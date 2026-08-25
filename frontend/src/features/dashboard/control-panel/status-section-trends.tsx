@@ -1,8 +1,10 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { Select } from "@/ui";
+import { effectInterval } from "@/lib/effect-timers";
 import { getStoredBackendUrl } from "@/lib/api/connection";
+import { useMountSubscription } from "@/hooks/use-mount-subscription";
 import type { MetricSampleInput } from "./status-section-view";
 
 type MetricSample = {
@@ -68,15 +70,18 @@ const RANGE_MS: Record<RangeKey, number> = {
 };
 
 const samplesByKey = new Map<string, MetricSample[]>();
+const MAX_SAMPLE_SERIES = 12;
 
 function scopedSampleKey(key: string): string {
   return `${getStoredBackendUrl() || "default"}::${key}`;
 }
 
-export function useMetricSamples(input: MetricSampleInput) {
-  const samplesRef = useRef<MetricSample[]>([]);
-  const sampleKeyRef = useRef<string | null>(null);
+export function useMetricSamples(input: MetricSampleInput, observedAt: number) {
   const scopedKey = scopedSampleKey(input.key);
+  const [sampleState, setSampleState] = useState(() => ({
+    key: scopedKey,
+    samples: samplesByKey.get(scopedKey) ?? [],
+  }));
   const peaks: MetricPeak = {
     generation: measured(input.generationPeak),
     prefill: measured(input.prefillPeak),
@@ -84,39 +89,64 @@ export function useMetricSamples(input: MetricSampleInput) {
     ttft: measured(input.ttftPeak),
   };
 
-  if (sampleKeyRef.current !== scopedKey) {
-    sampleKeyRef.current = scopedKey;
-    samplesRef.current = samplesByKey.get(scopedKey) ?? [];
-  }
-  if (!input.active) return { samples: [], peaks };
+  useMountSubscription(() => {
+    const current = samplesByKey.get(scopedKey) ?? [];
+    if (!input.active || observedAt <= 0) {
+      setSampleState({ key: scopedKey, samples: [] });
+      return;
+    }
+    const next: MetricSample = {
+      at: observedAt,
+      generation: measured(input.generation),
+      prefill: measured(input.prefill),
+      requests: measured(input.requests),
+      queued: measured(input.queued),
+      ttft: measured(input.ttft),
+      gpuUtilization: measured(input.gpuUtilization),
+      vramPercent: measured(input.vramPercent),
+      powerWatts: measured(input.powerWatts),
+      temperatureC: measured(input.temperatureC),
+    };
+    const previous = current.at(-1);
+    if (!previous || next.at - previous.at >= 4_000) {
+      const nextSamples = [...current, next].slice(-21_600);
+      samplesByKey.delete(scopedKey);
+      samplesByKey.set(scopedKey, nextSamples);
+      while (samplesByKey.size > MAX_SAMPLE_SERIES) {
+        const oldestKey = samplesByKey.keys().next().value;
+        if (typeof oldestKey !== "string") break;
+        samplesByKey.delete(oldestKey);
+      }
+      setSampleState({ key: scopedKey, samples: nextSamples });
+      return;
+    }
+    setSampleState({ key: scopedKey, samples: current });
+  }, [
+    scopedKey,
+    input.active,
+    observedAt,
+    input.generation,
+    input.prefill,
+    input.requests,
+    input.queued,
+    input.ttft,
+    input.gpuUtilization,
+    input.vramPercent,
+    input.powerWatts,
+    input.temperatureC,
+  ]);
 
-  const next: MetricSample = {
-    at: Date.now(),
-    generation: measured(input.generation),
-    prefill: measured(input.prefill),
-    requests: measured(input.requests),
-    queued: measured(input.queued),
-    ttft: measured(input.ttft),
-    gpuUtilization: measured(input.gpuUtilization),
-    vramPercent: measured(input.vramPercent),
-    powerWatts: measured(input.powerWatts),
-    temperatureC: measured(input.temperatureC),
+  return {
+    samples: input.active && sampleState.key === scopedKey ? sampleState.samples : [],
+    peaks,
   };
-  const current = samplesRef.current;
-  const previous = current.at(-1);
-  if (!previous || next.at - previous.at >= 4_000 || valuesChanged(previous, next)) {
-    const nextSamples = [...current, next].slice(-21_600);
-    samplesRef.current = nextSamples;
-    samplesByKey.set(scopedKey, nextSamples);
-  }
-
-  return { samples: samplesRef.current, peaks };
 }
 
 export function MetricTrends({ samples, peaks }: { samples: MetricSample[]; peaks: MetricPeak }) {
   const [metric, setMetric] = useState<MetricKey>("generation");
   const [range, setRange] = useState<RangeKey>("5m");
-  const now = Date.now();
+  const [now, setNow] = useState(Date.now);
+  useMountSubscription(() => effectInterval(() => setNow(Date.now()), 5_000).cancel, []);
   const visible = samples.filter((sample) => now - sample.at <= RANGE_MS[range]);
   const definition = METRICS[metric];
   const values = visible.map((sample) => sample[metric]);
@@ -298,10 +328,6 @@ function yForValue(value: number, max: number): number {
 
 function measured(value: number | null | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
-}
-
-function valuesChanged(previous: MetricSample, next: MetricSample): boolean {
-  return (Object.keys(METRICS) as MetricKey[]).some((key) => previous[key] !== next[key]);
 }
 
 function formatMetric(value: number | null, digits: number, unit: string): string {
