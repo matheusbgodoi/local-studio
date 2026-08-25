@@ -6,7 +6,6 @@ export type SavedController = {
   url: string;
   name?: string;
   hasApiKey?: boolean;
-  apiKey?: string;
 };
 
 type LegacyControllerCredential = SavedController & { apiKey?: string };

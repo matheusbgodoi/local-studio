@@ -53,7 +53,7 @@ export async function getApiSettings(): Promise<ApiSettings> {
     const saved = JSON.parse(await readFile(settingsFile, "utf-8")) as Partial<ApiSettings>;
     return {
       backendUrl: saved.backendUrl || DEFAULT_SETTINGS.backendUrl,
-      apiKey: saved.apiKey || DEFAULT_SETTINGS.apiKey,
+      apiKey: typeof saved.apiKey === "string" ? saved.apiKey : DEFAULT_SETTINGS.apiKey,
       controllers: normalizeStoredControllers(saved.controllers),
       voiceUrl: saved.voiceUrl || DEFAULT_SETTINGS.voiceUrl,
       voiceModel: saved.voiceModel || DEFAULT_SETTINGS.voiceModel,
