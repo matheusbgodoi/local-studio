@@ -6,6 +6,7 @@ import { AppPage, Button, Checkbox, KeyValueRow, StatusPill, Tabs } from "@/ui";
 import { useLogs } from "@/features/logs/use-logs";
 import { useControllerCapabilities } from "@/hooks/controller-capabilities-store";
 import { useRealtimeStatusStore } from "@/hooks/realtime-status-store";
+import { displayNameForModel, useServedModels } from "@/hooks/served-models-store";
 import type { RealtimeStatusSnapshot } from "@/hooks/realtime-status-types";
 import { getStoredBackendUrl } from "@/lib/api/connection";
 import { CensoredApiUrl } from "@/ui/api-url-censor";
@@ -24,6 +25,11 @@ export function ServerContent({ embedded = false }: { embedded?: boolean }) {
   const openapiCapability = capabilities.features.openapi;
   const logs = useLogs(logsCapability);
   const realtime = useRealtimeStatusStore();
+  const { physicalModels } = useServedModels();
+  const modelDisplayName = displayNameForModel(
+    physicalModels,
+    realtime.status?.process?.served_model_name,
+  );
   const [tab, setTab] = useState<Tab>("logs");
   const tabs: { id: Tab; label: string }[] = [
     ...(logsCapability === "supported" ? [{ id: "logs" as const, label: "Server Logs" }] : []),
@@ -50,6 +56,7 @@ export function ServerContent({ embedded = false }: { embedded?: boolean }) {
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-0 overflow-hidden lg:grid-cols-[320px_minmax(0,1fr)]">
         <ServerStatusAside
           realtime={realtime}
+          modelDisplayName={modelDisplayName}
           backendUrl={backendUrl}
           tab={activeTab}
           setTab={setTab}
@@ -155,6 +162,7 @@ function ServerHeader({
 
 function ServerStatusAside({
   realtime,
+  modelDisplayName,
   backendUrl,
   tab,
   setTab,
@@ -167,6 +175,7 @@ function ServerStatusAside({
   onSelectSession,
 }: {
   realtime: RealtimeStatusSnapshot;
+  modelDisplayName: string | null;
   backendUrl: string;
   tab: Tab | null;
   setTab: (t: Tab) => void;
@@ -183,7 +192,7 @@ function ServerStatusAside({
       <ConnectionGroup realtime={realtime} backendUrl={backendUrl} />
       <RuntimeGroup realtime={realtime} />
       <BackendsGroup realtime={realtime} />
-      <ProcessGroup realtime={realtime} />
+      <ProcessGroup realtime={realtime} modelDisplayName={modelDisplayName} />
       <ServicesGroup realtime={realtime} />
       {tabs.length > 0 && tab ? (
         <div className="border-t border-(--border) px-4 py-3">
@@ -264,7 +273,13 @@ function BackendsGroup({ realtime }: { realtime: RealtimeStatusSnapshot }) {
   );
 }
 
-function ProcessGroup({ realtime }: { realtime: RealtimeStatusSnapshot }) {
+function ProcessGroup({
+  realtime,
+  modelDisplayName,
+}: {
+  realtime: RealtimeStatusSnapshot;
+  modelDisplayName: string | null;
+}) {
   const process = realtime.status?.process ?? null;
   return (
     <StatusGroup title="Active process">
@@ -274,7 +289,7 @@ function ProcessGroup({ realtime }: { realtime: RealtimeStatusSnapshot }) {
           <KeyValueRow label="PID" value={process.pid ?? "—"} />
           <KeyValueRow
             label="Model"
-            value={process.served_model_name ?? process.model_path ?? "—"}
+            value={modelDisplayName ?? process.model_path?.split("/").pop() ?? "—"}
           />
           <KeyValueRow label="Port" value={process.port ?? "—"} />
         </>

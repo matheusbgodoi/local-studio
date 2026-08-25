@@ -17,7 +17,6 @@ export interface LocalModelProfile {
 export interface LocalModelCard {
   id: string;
   displayName: string;
-  aliases: string[];
   resident: boolean;
   contextWindow: number | null;
   tools: boolean;
@@ -63,7 +62,6 @@ function buildCard(physical: PhysicalModel, residentAlias: string | null): Local
   return {
     id: physical.physicalModelId,
     displayName: physical.displayName,
-    aliases: physical.profiles.map((profile) => profile.id),
     resident: physical.profiles.some(isResident),
     contextWindow: declared?.contextWindowDeclared ?? null,
     tools: physical.profiles.some((profile) => profile.tools === true),

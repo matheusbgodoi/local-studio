@@ -30,9 +30,8 @@ function ProfileList({ card }: { card: LocalModelCard }) {
     <div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-[length:var(--fs-xs)] text-(--ui-muted)">
       {card.profiles.map((profile) => (
         <span key={profile.id} className="min-w-0">
-          <span className="text-(--ui-fg)">{profile.label}</span> {profile.id}
+          <span className="text-(--ui-fg)">{profile.label}</span>
           {profile.isDefault ? " · default" : ""}
-          {profile.resident ? " · resident" : ""}
         </span>
       ))}
     </div>
@@ -44,7 +43,9 @@ function LocalModelRow({ card }: { card: LocalModelCard }) {
   return (
     <ModelRow
       label={card.displayName}
-      description={card.aliases.join(" · ")}
+      description={
+        card.profiles.length > 1 ? `${card.profiles.length} behavior profiles` : undefined
+      }
       // NO REMOTE AVATAR. ModelLogo works the owner out by substring-matching the model string
       // against a keyword table (/qwen|qwq|qvq/i -> "Qwen", /llama/i -> "meta-llama",
       // /gemma/i -> "google", ...) and fetches that org's avatar from huggingface.co. Two
