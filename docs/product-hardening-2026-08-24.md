@@ -2,6 +2,54 @@
 
 This document tracks the owner-facing product review requested from the installed desktop app. Every area must be researched, implemented, and independently validated. Empty or unsupported controller capabilities must never be presented as broken primary workflows.
 
+## Status language
+
+- `READY`: implementation and installed acceptance evidence both exist.
+- `CODED — UNVALIDATED`: implementation exists, with static evidence only; it is not in the installed app yet.
+- `DEPENDENCY`: completion needs hardware, credentials, provider authorization, signing identity, or an external deployment.
+- `REFUSED`: the requested result cannot be represented honestly or safely with the available source.
+- `MISSING`: no sufficient implementation exists yet.
+
+No item in the table below becomes `READY` merely because it compiles. The current owner app and the active 3090 inference process must remain untouched until the owner releases them for packaging and live acceptance.
+
+## Review protocol
+
+Each numbered area below passed through the same three roles requested by the owner:
+
+1. **Research** traced the current UI, controller contract, capabilities, persistence, and external dependencies.
+2. **Engineering** implemented only behavior supported by those contracts, keeping unsupported features hidden or explicitly unavailable.
+3. **Validation** reviewed the resulting code adversarially for stale controller state, misleading capability fallbacks, secret exposure, unsafe mutations, and owner-facing regressions.
+
+This is one cross-cutting triad applied to every area, not three independent implementations of the same feature. Its evidence is static until the release gate is opened. Findings found by validation were fixed before this document was finalized; a final branch-wide static review still precedes packaging.
+
+## Current truth
+
+| Area | Status | Static evidence | Installed evidence | Dependency, limitation, and next step |
+| --- | --- | --- | --- | --- |
+| Profile and phone | CODED — UNVALIDATED | Legacy controller pairing removed in `734dbfd2`; mobile access is exposed through the masked-token desktop footer. | The earlier tailnet pairing flow worked, but this cleanup is not installed. | Package later; verify that the secret never reaches the renderer or DOM and that desktop and PWA pairing still work. |
+| General, updates, controllers | CODED — UNVALIDATED | Owner-release update protection and two-step confirmation exist through `f88f9a74`; deploy output is redacted before IPC in `33bf8864`; manual deploy is demoted to Advanced. | Not accepted against a real fork update after this batch. | Package later; verify the owner channel cannot be replaced by an upstream update while tailnet publishing is active. |
+| System | CODED — UNVALIDATED | Capability-aware states exist in `fa3a19c8`, `ee412bfc`, and `47c5dbc2`; controller state is scoped in `fbfc9715`; unsupported data is not fabricated. | Not accepted against both capable and limited controllers. | Verify no stale controller frame, permanent spinner, or raw endpoint error. |
+| Shortcuts and dictation | CODED — UNVALIDATED | Global toggle and hold-to-talk dictation, readiness, and permission handling are implemented from `de55c5a8` through `2fec53b2`. | The helper and both modes have not been exercised in the next package. | Package later; verify target ownership, conflicts, permission denial, toggle stop, and hold release. Additional global shortcuts remain a product decision. |
+| Setup | CODED — UNVALIDATED | Sitegeist is optional and only required checks count as blockers; owner copy now points to Settings → General. | Not accepted in the next package. | Verify a healthy owner install reports ready with no relay. |
+| Status telemetry | CODED — UNVALIDATED | Trends originate in `de92de55`; `a51fb75a` isolates controller/process epochs and `856021cc` samples only observed payloads. GPU utilization, VRAM, board power, temperature, decode, prefill, TTFT, requests, and queue are available. | No next-package graph acceptance yet. | Whole-PC power is `DEPENDENCY`: it requires a real wall meter or UPS source. Estimated TDP or GPU+CPU sums are refused. |
+| Status controls and identity | CODED — UNVALIDATED | Lifecycle actions say “Unload model”; `f29a66a1` capability-gates lifecycle and recipe controls; `cd90e113` and `3d1637db` keep physical identity and behavior profiles separate. | Not accepted in the next package. | Verify a controller without lifecycle/recipes exposes no action destined to fail and no internal routing alias. |
+| Model identity and logos | CODED — UNVALIDATED for names; REFUSED for unlicensed logos | Qwen3.8-27B, Ornith-1.5-35B-A3B, and Gemma 4 26B A4B are the owner identities; routing aliases remain technical metadata. | Not accepted everywhere in the next package. | Neutral bundled monograms remain until each official asset has source, immutable version, redistribution permission, and brand guidance. Model/code licenses do not grant logo rights. |
+| Launch profiles | CODED — UNVALIDATED | `c8c6c5d7` replaces owner-facing “Serves” language with Launch profiles; `f29a66a1` gates Recipes separately from Lifecycle. | Not accepted against capability combinations. | Verify Recipes=yes/Lifecycle=no and Recipes=no/Lifecycle=yes without 404s or reachable invalid mutations. |
+| Run retention | CODED — UNVALIDATED | Current, History, Archived, restore, and terminal-only delete exist; internal rollout sessions stay out of chat navigation. | Earlier Run surfaces worked, but the final retention batch is not installed. | Verify active/completed/archive/restore/delete and chat isolation after packaging. |
+| Run concurrency | CODED — UNVALIDATED | `4195c3dc` establishes one inference boundary; `22faaef7` exposes queued/generating phases and one shared inference slot. | Not accepted under two competing logical agents in the next package. | Verify no two agents are labeled generating simultaneously and interactive work receives the documented priority. |
+| Automations | CODED — UNVALIDATED for the scheduler; MISSING for requested write workflows | Persistence/recovery and required connections exist from `2eed5baf` through `1a0c84b6`; claims, deletion, settlement, and retry are serialized and durable. | Not accepted across restart and manual Run now. | Gmail and Calendar are read-only. Image, email/calendar write, WhatsApp, and Instagram workflows require separate authorized mutation designs and an idempotent action ledger. |
+| Configure and Machines | CODED — UNVALIDATED | Capability-aware overview exists in `ee412bfc` and `ae4e1c0a`; `fbfc9715` scopes controller state and identity. | Not accepted against the owner topology. | Verify the managed 3090 is described as the current system and unsupported extra-machine APIs are not shown as broken. |
+| Server health and logs | CODED — UNVALIDATED; DEPENDENCY on stack deployment | The 3090 stack branch has bounded, allowlisted, redacted journal endpoints in `1412312` through `8f5ce9a`; `c038d031` isolates frontend sessions and `33bf8864` protects deploy output. | The gateway changes are not deployed. | Merge/deploy only after the active inference process is released; then validate every stream and redaction boundary. |
+| API reference | CODED — UNVALIDATED | Capability gating and the explicit valid-but-empty state in `d2acf1c2` prevent an unexplained empty panel. | Not accepted against supported, empty, and unsupported controllers. | Verify unsupported hides the affordance and no owner path ends in a raw 404. |
+| Plugins | CODED — UNVALIDATED | `6a806d73` separates everyday integrations from developer-only adapters and adds actionable state copy. | Gmail/Calendar setup and adapter states are not accepted in the next package. | Credentials and provider consent remain external dependencies. |
+| Connectors | CODED — UNVALIDATED for custom MCP; MISSING for Meta workflows | Guided custom connector create/test/enable/disable/remove exists in `f088de4c` and `9f965454`; remote MCP traffic is protected under VPN policy. | Not accepted end to end in the next package. | WhatsApp personal scraping and unattended browser posting are refused. Official WhatsApp Cloud and Instagram Graph integrations require the owner’s Meta app, scopes, webhook/public callback design, and explicit mutation policy. |
+
+### Cross-cutting release state
+
+- `/copy`, `/export:file`, `/export:clipboard`, native save, local titles, conversation-project moves, archived deletion, Run ownership, and the compact Run strip are coded but remain subject to the same package-and-acceptance gate.
+- `--cache-reuse 256` is configured in the generated Qwen launch command, but remains unvalidated on the custom llama.cpp fork. It changes no prompt text and is reversible, but only a controlled restart and cache observation can establish whether it works in this stack.
+- Stable macOS privacy identity and the owner-facing permissions name remain dependent on an Apple Developer ID; renaming the disk image does not create a stable signing identity.
+
 ## 1. Profile and phone
 
 - Decide whether the legacy KittyLitter controller pairing still has an owner-facing purpose now that Local Studio has tailnet-only PWA pairing.
@@ -56,10 +104,10 @@ This document tracks the owner-facing product review requested from the installe
 - Preserve aliases only as advanced technical details where required for routing.
 - Acceptance: official identity is consistent across every owner-facing surface.
 
-## 9. Serves
+## 9. Launch profiles
 
 - Determine whether owner-managed launch recipes are supported by the active controller.
-- Hide or demote the Serves tab when `/recipes` is unavailable; never render a permanent 404 workflow.
+- Hide or demote Launch profiles when `/recipes` is unavailable; never render a permanent 404 workflow.
 - Acceptance: the Models page contains no unreachable primary tab.
 
 ## 10. Run retention and cleanup
