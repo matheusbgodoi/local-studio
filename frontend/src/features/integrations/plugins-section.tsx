@@ -8,7 +8,7 @@ import {
 } from "@local-studio/agent-runtime/plugin-runtime-contract";
 import { ApiErrorResponseSchema } from "@local-studio/agent-runtime/api-contract";
 import { Alert, Button, ModelButton, SearchInput, UiModal, UiModalHeader } from "@/ui";
-import { Eye, X } from "@/ui/icon-registry";
+import { ChevronRight, Eye, X } from "@/ui/icon-registry";
 import { ResourceDrawer, ResourceDrawerSection, ResourceFact } from "@/ui/resource-drawer";
 import { ResourceLogo } from "@/ui/resource-logo";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
@@ -80,7 +80,7 @@ function pluginStatus(plugin: PluginRuntimeView, speech: SpeechSnapshot): Plugin
   if (plugin.tools.state === "disabled") return { label: "Off", tone: "default" };
   if (plugin.tools.state === "invalid") return { label: "Unavailable", tone: "danger" };
   if (plugin.tools.state === "configuration_required" || plugin.provides.apps) {
-    return { label: "Adapter needed", tone: "warning" };
+    return { label: "Developer adapter", tone: "default" };
   }
   return { label: "Skills", tone: "default" };
 }
@@ -96,6 +96,15 @@ function activationAction(plugin: PluginRuntimeView): "account" | "connect" | "d
   if (plugin.tools.state === "enabled") return "disconnect";
   if (plugin.tools.state === "available" || plugin.tools.state === "disabled") return "connect";
   return null;
+}
+
+function isDeveloperOnly(plugin: PluginRuntimeView): boolean {
+  return (
+    !plugin.hostCapability &&
+    !plugin.account &&
+    activationAction(plugin) === null &&
+    (plugin.tools.state === "configuration_required" || plugin.provides.apps)
+  );
 }
 
 function PluginRowsSkeleton() {
@@ -378,6 +387,8 @@ export function PluginsSection() {
         .includes(normalized),
     );
   }, [plugins, query]);
+  const primaryPlugins = visiblePlugins.filter((plugin) => !isDeveloperOnly(plugin));
+  const developerPlugins = visiblePlugins.filter(isDeveloperOnly);
 
   const setEnabled = async (plugin: PluginRuntimeView, enabled: boolean) => {
     const generation = ++requestGeneration.current;
@@ -402,6 +413,32 @@ export function PluginsSection() {
       setBusyId((current) => (current === plugin.id ? null : current));
     }
   };
+
+  const pluginRow = (plugin: PluginRuntimeView) => (
+    <PluginRow
+      key={plugin.id}
+      plugin={plugin}
+      speech={speech}
+      busy={busyId === plugin.id}
+      onOpen={() => setSelectedPlugin(plugin)}
+      onConnect={() => {
+        setSelectedPlugin(null);
+        setPending(plugin);
+      }}
+      onDisconnect={() => {
+        setSelectedPlugin(null);
+        void setEnabled(plugin, false);
+      }}
+      onAccount={() => {
+        setSelectedPlugin(null);
+        setAccountPlugin(plugin);
+      }}
+      onHostCapability={() => {
+        setSelectedPlugin(null);
+        setSpeechPlugin(plugin);
+      }}
+    />
+  );
 
   return (
     <>
@@ -435,31 +472,25 @@ export function PluginsSection() {
         {!loaded ? (
           <PluginRowsSkeleton />
         ) : visiblePlugins.length ? (
-          visiblePlugins.map((plugin) => (
-            <PluginRow
-              key={plugin.id}
-              plugin={plugin}
-              speech={speech}
-              busy={busyId === plugin.id}
-              onOpen={() => setSelectedPlugin(plugin)}
-              onConnect={() => {
-                setSelectedPlugin(null);
-                setPending(plugin);
-              }}
-              onDisconnect={() => {
-                setSelectedPlugin(null);
-                void setEnabled(plugin, false);
-              }}
-              onAccount={() => {
-                setSelectedPlugin(null);
-                setAccountPlugin(plugin);
-              }}
-              onHostCapability={() => {
-                setSelectedPlugin(null);
-                setSpeechPlugin(plugin);
-              }}
-            />
-          ))
+          <>
+            {primaryPlugins.map(pluginRow)}
+            {developerPlugins.length ? (
+              <details className="group border-t border-(--ui-separator)">
+                <summary className="cursor-pointer list-none px-4 py-3 text-[length:var(--fs-sm)] text-(--ui-muted) marker:hidden hover:text-(--ui-fg)">
+                  <span className="inline-flex items-center gap-2">
+                    <ChevronRight className="h-3.5 w-3.5 group-open:rotate-90" />
+                    <span className="font-medium">Developer adapters</span>
+                    <span className="text-[length:var(--fs-xs)]">
+                      {developerPlugins.length} · need host-specific integration
+                    </span>
+                  </span>
+                </summary>
+                <div className="border-t border-(--ui-separator)">
+                  {developerPlugins.map(pluginRow)}
+                </div>
+              </details>
+            ) : null}
+          </>
         ) : (
           <div className="px-4 py-8 text-center text-[length:var(--fs-md)] text-(--ui-muted)">
             {plugins.length ? `No plugins match “${query}”.` : "No plugin manifests found."}
