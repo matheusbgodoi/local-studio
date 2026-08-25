@@ -37,7 +37,7 @@ export function RunAgents({ snapshot }: { snapshot: AgenticRunSnapshot }) {
               { label: "Role", value: agent.role },
               {
                 label: "Model",
-                value: agent.modelDisplayName ?? agent.physicalModelId,
+                value: agent.modelDisplayName ?? "Model identity unavailable",
               },
               {
                 label: "Context",

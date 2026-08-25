@@ -287,10 +287,7 @@ function ProcessGroup({
         <>
           <KeyValueRow label="Backend" value={process.backend ?? "—"} />
           <KeyValueRow label="PID" value={process.pid ?? "—"} />
-          <KeyValueRow
-            label="Model"
-            value={modelDisplayName ?? process.model_path?.split("/").pop() ?? "—"}
-          />
+          <KeyValueRow label="Model" value={modelDisplayName ?? "Model identity unavailable"} />
           <KeyValueRow label="Port" value={process.port ?? "—"} />
         </>
       ) : (

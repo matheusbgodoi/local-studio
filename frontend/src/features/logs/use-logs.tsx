@@ -87,6 +87,11 @@ export function useLogs(logsCapability: CapabilityState) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
   const streamControllerRef = useRef<AbortController | null>(null);
+  const selectedLogSession = useMemo(
+    () => sessions.find((session) => session.id === selectedSession) ?? null,
+    [selectedSession, sessions],
+  );
+  const streamingAvailable = selectedLogSession?.streaming !== false;
 
   const loadSessions = useCallback(async () => {
     if (logsCapability !== "supported") return;
@@ -126,8 +131,9 @@ export function useLogs(logsCapability: CapabilityState) {
 
   const deleteSession = useCallback(
     async (sessionId: string) => {
-      if (sessionId === "controller") {
-        alert("Controller logs cannot be deleted.");
+      const session = sessions.find((candidate) => candidate.id === sessionId);
+      if (sessionId === "controller" || session?.deletable === false) {
+        alert("This log source is read-only.");
         return;
       }
       if (!confirm("Delete this log session?")) return;
@@ -142,7 +148,7 @@ export function useLogs(logsCapability: CapabilityState) {
         alert("Failed to delete: " + (e as Error).message);
       }
     },
-    [loadSessions, selectedSession],
+    [loadSessions, selectedSession, sessions],
   );
 
   const downloadLog = useCallback(() => {
@@ -202,7 +208,7 @@ export function useLogs(logsCapability: CapabilityState) {
     if (selectedSession) void loadLogContent(selectedSession);
   }, [loadLogContent, selectedSession]);
   useMountSubscription(() => {
-    if (logsCapability !== "supported" || !autoRefresh || !selectedSession) {
+    if (logsCapability !== "supported" || !autoRefresh || !selectedSession || !streamingAvailable) {
       streamControllerRef.current?.abort();
       streamControllerRef.current = null;
       return;
@@ -244,7 +250,7 @@ export function useLogs(logsCapability: CapabilityState) {
         streamControllerRef.current = null;
       }
     };
-  }, [autoRefresh, logsCapability, selectedSession]);
+  }, [autoRefresh, logsCapability, selectedSession, streamingAvailable]);
   useMountSubscription(() => {
     if (autoScroll && logRef.current) {
       logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -311,6 +317,7 @@ export function useLogs(logsCapability: CapabilityState) {
     streamError,
     autoScroll,
     autoRefresh,
+    streamingAvailable,
     sidebarOpen,
     logRef,
     setFilter,

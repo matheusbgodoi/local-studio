@@ -139,6 +139,8 @@ export interface LogSession {
   created_at: string;
   ended_at?: string;
   status: "running" | "stopped" | "crashed";
+  streaming?: boolean;
+  deletable?: boolean;
 }
 
 export interface StudioSettings {

@@ -17,6 +17,7 @@ export default function LogsPage() {
     loadingContent,
     autoScroll,
     autoRefresh,
+    streamingAvailable,
     sidebarOpen,
     logRef,
     setFilter,
@@ -44,6 +45,7 @@ export default function LogsPage() {
       loadingContent={loadingContent}
       autoScroll={autoScroll}
       autoRefresh={autoRefresh}
+      streamingAvailable={streamingAvailable}
       sidebarOpen={sidebarOpen}
       logRef={logRef}
       onFilterChange={setFilter}
