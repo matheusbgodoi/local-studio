@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 import type { DictationShortcutBridge } from "../../../../desktop/interfaces";
 
@@ -23,10 +23,11 @@ export function useGlobalDictationShortcut({
 }: {
   enabled: boolean;
   recording: boolean;
-  start: () => Promise<void>;
+  start: () => Promise<boolean>;
   stop: () => void;
 }): void {
   const [ownerId] = useState(() => crypto.randomUUID());
+  const recordingSeen = useRef(false);
 
   useMountSubscription(() => {
     const api = bridge();
@@ -34,8 +35,11 @@ export function useGlobalDictationShortcut({
     const id = ownerId;
     const unsubscribe = api.onRequest((request) => {
       if (request.ownerId !== id) return;
-      if (request.action === "start") void start();
-      else stop();
+      if (request.action === "start") {
+        void start().then((started) => {
+          if (!started) void api.reportRecording(id, false);
+        });
+      } else stop();
     });
     void api.registerTarget(id, true);
     return () => {
@@ -49,6 +53,8 @@ export function useGlobalDictationShortcut({
   useMountSubscription(() => {
     const api = bridge();
     if (!api || !enabled) return;
+    if (!recording && !recordingSeen.current) return;
+    recordingSeen.current = recording;
     void api.reportRecording(ownerId, recording);
   }, [enabled, ownerId, recording]);
 }

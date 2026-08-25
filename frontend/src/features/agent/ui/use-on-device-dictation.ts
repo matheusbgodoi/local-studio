@@ -112,7 +112,7 @@ export function useOnDeviceDictation(onTranscript: (text: string, phase: Transcr
 
   const start = useCallback(async () => {
     const api = bridge();
-    if (!api || recordingRef.current) return;
+    if (!api || recordingRef.current) return false;
     setError("");
 
     unsubscribe.current?.();
@@ -152,7 +152,9 @@ export function useOnDeviceDictation(onTranscript: (text: string, phase: Transcr
       setRecording(false);
       unsubscribe.current?.();
       unsubscribe.current = null;
+      return false;
     }
+    return result.started;
   }, [onTranscript]);
 
   return {

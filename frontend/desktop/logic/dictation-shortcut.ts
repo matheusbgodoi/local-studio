@@ -168,16 +168,17 @@ async function prepareHold(accelerator: string, listen: boolean): Promise<Prepar
 }
 
 function state(probe = lastProbe): DictationShortcutState {
+  const readiness = mode === "toggle" && active ? "ready" : probe.readiness;
   return {
     mode,
     hotkey,
     defaultHotkey: DESKTOP_CONFIG.dictationShortcut.hotkey,
     platform: process.platform,
-    readiness: mode === "toggle" && active ? "ready" : probe.readiness,
+    readiness,
     active,
     inputMonitoring: probe.inputMonitoring,
     accessibility: probe.accessibility,
-    ...(probe.reason ? { reason: probe.reason } : {}),
+    ...(readiness !== "ready" && probe.reason ? { reason: probe.reason } : {}),
   };
 }
 
