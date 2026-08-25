@@ -8,6 +8,7 @@ import { SetupView } from "@/features/setup/setup-view/setup-view";
 import { useSetup } from "@/features/setup/use-setup";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 import { legacyIntegrationHref } from "@/features/integrations/integration-navigation";
+import { useControllerCapabilities } from "@/hooks/controller-capabilities-store";
 
 const hasSettingsHash = () => {
   if (typeof window === "undefined") return true;
@@ -15,8 +16,28 @@ const hasSettingsHash = () => {
 };
 
 export default function SettingsPage() {
+  const { capabilities, controllerKey } = useControllerCapabilities();
+  return (
+    <SettingsPageForController
+      key={controllerKey}
+      controllerKey={controllerKey}
+      configCapability={capabilities.features.config}
+      compatibilityCapability={capabilities.features.compatibility}
+    />
+  );
+}
+
+function SettingsPageForController({
+  controllerKey,
+  configCapability,
+  compatibilityCapability,
+}: {
+  controllerKey: string;
+  configCapability: "supported" | "unsupported" | "unknown";
+  compatibilityCapability: "supported" | "unsupported" | "unknown";
+}) {
   const router = useRouter();
-  const configs = useSettings();
+  const configs = useSettings(controllerKey, configCapability, compatibilityCapability);
   const setup = useSetup();
   const [setupComplete] = useState(() => {
     if (typeof window === "undefined") return false;

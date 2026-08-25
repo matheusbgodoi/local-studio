@@ -20,7 +20,6 @@ import { ShortcutsSettings } from "./terminal-settings";
 import { EnginesSection } from "./engines-section";
 import { ServicesSettings, SystemDetails, SystemOverview } from "./system-settings-section";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
-import { useControllerCapabilities } from "@/hooks/controller-capabilities-store";
 import { ProfileSettings } from "./profile-settings";
 interface SettingsViewProps {
   data: ConfigData | null;
@@ -80,15 +79,7 @@ export function SettingsView({
   onSystemSectionActive,
 }: SettingsViewProps) {
   const [activeSection, setActiveSection] = useState<SettingsSectionId>("connection");
-  const { capabilities } = useControllerCapabilities();
-  const sections = useMemo(
-    () =>
-      capabilities.features.config === "supported"
-        ? SECTIONS
-        : SECTIONS.filter((section) => section.id !== "system"),
-    [capabilities.features.config],
-  );
-  const visibleSection = sections.some((section) => section.id === activeSection)
+  const visibleSection = SECTIONS.some((section) => section.id === activeSection)
     ? activeSection
     : "connection";
   useMountSubscription(() => {
@@ -119,7 +110,7 @@ export function SettingsView({
   }, [error, hasConfigData, isInitialLoading, loading]);
   return (
     <SettingsLayout
-      sections={sections}
+      sections={SECTIONS}
       activeSection={visibleSection}
       title="Settings"
       status={layoutStatus}
