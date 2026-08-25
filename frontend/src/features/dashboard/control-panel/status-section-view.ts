@@ -95,7 +95,7 @@ export function resolveStatusSectionView({
     metricColumns: metricColumnViews(metrics, perf),
     modelName: resolveModelName(currentProcess, currentRecipe, modelDisplayName),
     sampleInput: {
-      key: physicalModelId ?? resolveModelSampleKey(currentProcess, currentRecipe),
+      key: resolveProcessSampleKey(currentProcess, currentRecipe, physicalModelId),
       generation: perf.genTps,
       generationPeak: peakFor(metrics, "generation") ?? perf.genTps,
       prefill: perf.prefillTps,
@@ -115,6 +115,16 @@ export function resolveStatusSectionView({
       active: isRunning,
     },
   };
+}
+
+function resolveProcessSampleKey(
+  currentProcess: ProcessInfo | null,
+  currentRecipe: RecipeWithStatus | null,
+  physicalModelId?: string | null,
+): string {
+  const modelKey = physicalModelId ?? resolveModelSampleKey(currentProcess, currentRecipe);
+  if (!currentProcess) return `${modelKey}::idle`;
+  return `${modelKey}::${currentProcess.pid}|${currentProcess.backend}|${currentProcess.port}`;
 }
 
 function resolveModelName(

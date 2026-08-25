@@ -50,6 +50,8 @@ export interface RealtimeStatusSnapshot {
   runtimeSummary: RuntimeSummaryData | null;
   services: ServiceEntry[];
   lease: LeaseInfo | null;
+  /** Time of the latest metrics payload received from the selected controller. */
+  metricsObservedAt: number;
   lastEventAt: number;
 }
 
