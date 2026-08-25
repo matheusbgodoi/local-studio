@@ -4,8 +4,14 @@ import { useCallback, useMemo } from "react";
 import type { RecipesTableProps } from "./types";
 import { useRecipesContentModel, type RecipesContentTab } from "./recipes-content-model";
 import { RecipesContentView } from "./recipes-content-view";
+import { useControllerCapabilities } from "@/hooks/controller-capabilities-store";
 
 export function RecipesContent({ embedded = false }: { embedded?: boolean }) {
+  const { controllerKey } = useControllerCapabilities();
+  return <RecipesContentForController key={controllerKey} embedded={embedded} />;
+}
+
+function RecipesContentForController({ embedded }: { embedded: boolean }) {
   const model = useRecipesContentModel();
   const setTab = model.setTab;
   const selectTab = useCallback(
@@ -25,6 +31,7 @@ export function RecipesContent({ embedded = false }: { embedded?: boolean }) {
       recipes: model.derived.sortedRecipes,
       pinnedRecipes: model.pinnedRecipes,
       recipeMenuOpen: model.recipeMenuOpen,
+      lifecycleSupported: model.lifecycleSupported,
       launching: model.launching,
       runningRecipeId: model.runningRecipeId,
       onTogglePin: model.togglePin,
@@ -41,6 +48,7 @@ export function RecipesContent({ embedded = false }: { embedded?: boolean }) {
       model.actions.handleRequestDelete,
       model.actions.handleToggleRecipeMenu,
       model.derived.sortedRecipes,
+      model.lifecycleSupported,
       model.launching,
       model.pinnedRecipes,
       model.recipeMenuOpen,
@@ -54,6 +62,9 @@ export function RecipesContent({ embedded = false }: { embedded?: boolean }) {
       embedded={embedded}
       tab={model.tab}
       lifecycleSupported={model.lifecycleSupported}
+      modelIndexSupported={model.modelIndexSupported}
+      downloadQueueSupported={model.downloadQueueSupported}
+      recipesSupported={model.recipesSupported}
       setTab={selectTab}
       loading={model.loading}
       refreshing={model.refreshing}
@@ -73,9 +84,11 @@ export function RecipesContent({ embedded = false }: { embedded?: boolean }) {
       availableModels={model.availableModels}
       runtimeTargets={model.runtimeTargets}
       sortedRecipes={model.derived.sortedRecipes}
-      onRefresh={model.actions.handleRefresh}
+      onRefreshRecipes={model.actions.handleRefreshRecipes}
       onNewRecipe={model.actions.handleNewRecipe}
-      onCreateServeFromDownload={model.actions.handleCreateServeFromDownload}
+      onCreateServeFromDownload={
+        model.recipesSupported ? model.actions.handleCreateServeFromDownload : undefined
+      }
       onSaveRecipe={model.actions.handleSaveRecipe}
       onCloseRecipeModal={model.actions.closeRecipeModal}
       onCancelDelete={() => model.setDeleteConfirm(null)}

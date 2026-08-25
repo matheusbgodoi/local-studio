@@ -7,6 +7,7 @@ import api from "@/lib/api/client";
 import { isAbsentRouteStatus } from "@/lib/api/http-error-message";
 import type { ModelDownload } from "@/lib/types";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
+import { useControllerCapabilities } from "@/hooks/controller-capabilities-store";
 
 type StartDownloadParams = {
   model_id: string;
@@ -18,6 +19,8 @@ type StartDownloadParams = {
 };
 
 export function useDownloads(pollIntervalMs = 2500) {
+  const { capabilities } = useControllerCapabilities();
+  const downloadQueueSupported = capabilities.features.downloadQueue === "supported";
   const [downloads, setDownloads] = useState<ModelDownload[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -25,6 +28,13 @@ export function useDownloads(pollIntervalMs = 2500) {
   const [unsupported, setUnsupported] = useState(false);
 
   const refresh = useCallback(async () => {
+    if (!downloadQueueSupported) {
+      setUnsupported(true);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+    setUnsupported(false);
     try {
       const data = await api.getDownloads();
       setDownloads(data.downloads || []);
@@ -35,7 +45,7 @@ export function useDownloads(pollIntervalMs = 2500) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [downloadQueueSupported]);
 
   // Only in-flight/resumable-soon states justify the fast poll; terminal
   // states (failed/canceled/completed) don't change server-side, so they fall
@@ -52,6 +62,7 @@ export function useDownloads(pollIntervalMs = 2500) {
 
   const startDownload = useCallback(
     async (params: StartDownloadParams) => {
+      if (!downloadQueueSupported) throw new Error("Download queue is unavailable");
       const modelId = params.model_id;
       setStartingModelIds((previous) => new Set(previous).add(modelId));
       setError(null);
@@ -70,34 +81,37 @@ export function useDownloads(pollIntervalMs = 2500) {
         });
       }
     },
-    [refresh],
+    [downloadQueueSupported, refresh],
   );
 
   const pauseDownload = useCallback(
     async (id: string) => {
+      if (!downloadQueueSupported) throw new Error("Download queue is unavailable");
       const result = await api.pauseDownload(id);
       await refresh();
       return result.download;
     },
-    [refresh],
+    [downloadQueueSupported, refresh],
   );
 
   const resumeDownload = useCallback(
     async (id: string, hfToken?: string) => {
+      if (!downloadQueueSupported) throw new Error("Download queue is unavailable");
       const result = await api.resumeDownload(id, hfToken);
       await refresh();
       return result.download;
     },
-    [refresh],
+    [downloadQueueSupported, refresh],
   );
 
   const cancelDownload = useCallback(
     async (id: string) => {
+      if (!downloadQueueSupported) throw new Error("Download queue is unavailable");
       const result = await api.cancelDownload(id);
       await refresh();
       return result.download;
     },
-    [refresh],
+    [downloadQueueSupported, refresh],
   );
 
   const downloadsByModel = useMemo(() => {

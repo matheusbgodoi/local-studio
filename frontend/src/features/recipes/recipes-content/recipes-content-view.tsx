@@ -19,6 +19,9 @@ type Props = {
   embedded?: boolean;
   tab: RecipesContentTab;
   lifecycleSupported: boolean;
+  modelIndexSupported: boolean;
+  downloadQueueSupported: boolean;
+  recipesSupported: boolean;
   setTab: (tab: RecipesContentTab) => void;
   loading: boolean;
   refreshing: boolean;
@@ -38,9 +41,9 @@ type Props = {
   availableModels: ModelInfo[];
   runtimeTargets: RuntimeTarget[];
   sortedRecipes: RecipeWithStatus[];
-  onRefresh: () => void;
+  onRefreshRecipes: () => void;
   onNewRecipe: () => void;
-  onCreateServeFromDownload: (download: ModelDownload) => void;
+  onCreateServeFromDownload?: (download: ModelDownload) => void;
   onSaveRecipe: () => void;
   onCloseRecipeModal: () => void;
   onCancelDelete: () => void;
@@ -86,6 +89,9 @@ export function RecipesContentView(props: Props) {
     embedded = false,
     tab,
     lifecycleSupported,
+    modelIndexSupported,
+    downloadQueueSupported,
+    recipesSupported,
     setTab,
     loading,
     refreshing,
@@ -105,7 +111,7 @@ export function RecipesContentView(props: Props) {
     availableModels,
     runtimeTargets,
     sortedRecipes,
-    onRefresh,
+    onRefreshRecipes,
     onNewRecipe,
     onCreateServeFromDownload,
     onSaveRecipe,
@@ -116,9 +122,12 @@ export function RecipesContentView(props: Props) {
     table,
   } = props;
   const heading = TAB_HEADINGS[tab];
-  const modelTabs = lifecycleSupported
-    ? MODEL_TABS
-    : MODEL_TABS.filter((candidate) => candidate.id === "local");
+  const modelTabs = MODEL_TABS.filter((candidate) => {
+    if (candidate.id === "local") return true;
+    if (candidate.id === "serves") return recipesSupported;
+    if (candidate.id === "picks") return modelIndexSupported;
+    return downloadQueueSupported;
+  });
   const content = (
     <section>
       <h2 className="text-[length:var(--fs-2xl)] font-medium tracking-[-0.015em] text-(--ui-fg)">
@@ -154,7 +163,7 @@ export function RecipesContentView(props: Props) {
     </section>
   );
 
-  const showHeaderRefresh = lifecycleSupported && tab !== "local";
+  const showHeaderRefresh = tab === "serves" && recipesSupported;
   return (
     <>
       {embedded ? (
@@ -163,9 +172,9 @@ export function RecipesContentView(props: Props) {
             <Tabs variant="pill" items={modelTabs} activeTab={tab} onSelectTab={setTab} />
             {showHeaderRefresh ? (
               <RefreshButton
-                onRefresh={onRefresh}
+                onRefresh={onRefreshRecipes}
                 loading={refreshing || loading}
-                label="Refresh models"
+                label="Refresh launch profiles"
                 className="h-8 w-8"
               />
             ) : null}
@@ -177,7 +186,7 @@ export function RecipesContentView(props: Props) {
           eyebrow="Model library"
           title="Models"
           description={
-            lifecycleSupported
+            modelIndexSupported || downloadQueueSupported || recipesSupported
               ? "Models currently served, plus catalogs, downloads, and launch profiles."
               : "Models currently served by this inference gateway."
           }
@@ -188,9 +197,9 @@ export function RecipesContentView(props: Props) {
           actions={
             showHeaderRefresh ? (
               <RefreshButton
-                onRefresh={onRefresh}
+                onRefresh={onRefreshRecipes}
                 loading={refreshing || loading}
-                label="Refresh models"
+                label="Refresh launch profiles"
                 className="h-8 w-8"
               />
             ) : null
