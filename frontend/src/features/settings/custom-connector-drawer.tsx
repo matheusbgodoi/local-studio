@@ -16,8 +16,6 @@ import { ModelStatus } from "@/features/recipes/recipes-content/model-page";
 export type ConnectorFieldPair = { id: string; key: string; value: string };
 type Transport = "http" | "stdio";
 
-export const CONNECTOR_MASK = "••••••••";
-
 const newPair = (): ConnectorFieldPair => ({ id: crypto.randomUUID(), key: "", value: "" });
 
 function slug(value: string): string {

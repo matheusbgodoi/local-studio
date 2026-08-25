@@ -36,20 +36,6 @@ export const bumpBestLower = (
   if (peaks[key] === 0 || value < peaks[key]) peaks[key] = value;
 };
 
-/**
- * Return the first finite Prometheus metric value for a list of compatible metric names.
- * @param metrics - Scraped Prometheus metrics keyed by metric name.
- * @param names - Candidate metric names in priority order.
- * @returns First finite metric value, or zero when none exists.
- */
-export const firstMetric = (metrics: Record<string, number>, names: string[]): number => {
-  for (const name of names) {
-    const value = metrics[name];
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-  }
-  return 0;
-};
-
 export const firstMetricOrUndefined = (
   metrics: Record<string, number>,
   names: string[],

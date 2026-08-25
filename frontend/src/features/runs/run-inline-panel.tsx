@@ -194,11 +194,8 @@ function RunInlineDetails({
   );
 }
 
-function RunInlineBody({ snapshot }: { snapshot: AgenticRunSnapshot }) {
-  const [open, setOpen] = useState(readOpen);
-  const [expanded, setExpanded] = useState(false);
+function deriveRunInlineView(snapshot: AgenticRunSnapshot, expanded: boolean) {
   const { run, tasks, agents, events } = snapshot;
-  const done = tasks.filter((task) => task.status === "SUCCEEDED").length;
   const active = tasks.find((task) => task.id === run.activeTaskId) ?? null;
   const activeAgent = active?.agentId
     ? agents.find((entry) => entry.id === active.agentId)
@@ -208,19 +205,29 @@ function RunInlineBody({ snapshot }: { snapshot: AgenticRunSnapshot }) {
     agents.find((entry) => entry.status === "COMPACTING") ??
     agents.find((entry) => entry.status === "WORKING") ??
     agents[0];
-  const latest = events[events.length - 1];
-  //
-  // Collapsed, it keeps whatever is actually happening rather than the first N
-  // in plan order: the active task, the ones still to come, and enough finished
-  // ones to show where the run has got to.
-  //
   const activeIndex = Math.max(
     0,
     tasks.findIndex((task) => task.id === run.activeTaskId),
   );
   const window = Math.max(0, Math.min(activeIndex - 1, tasks.length - COLLAPSED_TASKS));
-  const visibleTasks = expanded ? tasks : tasks.slice(window, window + COLLAPSED_TASKS);
-  const hiddenCount = Math.max(0, tasks.length - COLLAPSED_TASKS);
+  return {
+    run,
+    tasks,
+    agents,
+    active,
+    agent,
+    latest: events.at(-1),
+    done: tasks.filter((task) => task.status === "SUCCEEDED").length,
+    visibleTasks: expanded ? tasks : tasks.slice(window, window + COLLAPSED_TASKS),
+    hiddenCount: Math.max(0, tasks.length - COLLAPSED_TASKS),
+  };
+}
+
+function RunInlineBody({ snapshot }: { snapshot: AgenticRunSnapshot }) {
+  const [open, setOpen] = useState(readOpen);
+  const [expanded, setExpanded] = useState(false);
+  const { run, tasks, agents, active, agent, latest, done, visibleTasks, hiddenCount } =
+    deriveRunInlineView(snapshot, expanded);
 
   const toggle = (): void => {
     setOpen((value) => {

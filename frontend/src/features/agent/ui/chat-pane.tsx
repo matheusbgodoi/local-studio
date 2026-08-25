@@ -287,6 +287,15 @@ function renderComposerModelSelector(
 ): ReactNode {
   return renderer ? renderer(props) : null;
 }
+
+function terminalActionFor(
+  terminalOwner: TerminalOwner | null,
+  toggleTerminalView: () => void,
+  onOpenTerminal: (() => void) | undefined,
+): (() => void) | undefined {
+  return terminalOwner ? toggleTerminalView : onOpenTerminal;
+}
+
 export function ChatPane({
   paneId,
   modelId,
@@ -511,7 +520,7 @@ export function ChatPane({
   const canExport = Boolean(
     activeTab?.messages.some((message) => message.role !== "system" && message.text.trim()),
   );
-  const openTerminalAction = terminalOwner ? toggleTerminalView : onOpenTerminal;
+  const openTerminalAction = terminalActionFor(terminalOwner, toggleTerminalView, onOpenTerminal);
   const applyTemplate = useCallback(
     (row: ComposerPromptTemplateRef) =>
       activeTab ? applyContextRow(activeTab.id, "promptTemplate", row, tools) : Promise.resolve(),
