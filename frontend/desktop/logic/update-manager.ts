@@ -110,18 +110,6 @@ export async function checkForUpdates(force = false): Promise<DesktopUpdateSnaps
     return ownerState;
   }
 
-  // Dev-channel builds install via the dev mirror, never the stable releases —
-  // the default GitHub feed would happily "update" them onto stable. An
-  // explicit LOCAL_STUDIO_UPDATE_URL override still wins for feed testing.
-  if (isDevChannelBuild && !resolveFeedUrl()) {
-    const devChannelState = {
-      status: "idle",
-      message: "Dev-channel builds do not auto-update from stable releases",
-    } satisfies DesktopUpdateSnapshot;
-    setUpdateState(devChannelState);
-    return devChannelState;
-  }
-
   const feed = ensureFeedConfigured();
   if (!feed.ok) return latestUpdateState;
 
