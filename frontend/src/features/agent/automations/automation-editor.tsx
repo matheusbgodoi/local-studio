@@ -87,6 +87,7 @@ export function AutomationEditor({
     setDraft((current) => ({ ...current, schedule }));
   };
   const busy = action !== null;
+  const running = Boolean(automation?.activeRun);
 
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-(--ui-bg)">
@@ -95,6 +96,7 @@ export function AutomationEditor({
         creating={creating}
         action={action}
         busy={busy}
+        running={running}
         onClose={onClose}
         onRun={onRun}
         onToggleStatus={onToggleStatus}
@@ -202,6 +204,7 @@ export function AutomationEditor({
             creating={creating}
             action={action}
             busy={busy}
+            running={running}
             canSave={draftIsValid(draft)}
             confirmDelete={confirmDelete}
             onConfirmDelete={() => setConfirmDelete(true)}
@@ -240,7 +243,11 @@ function RequiredConnections({
             Required connections
           </h3>
           <p className="mt-0.5 text-[length:var(--fs-xs)] leading-5 text-(--ui-muted)">
-            The task will stop before contacting the model if any selected tool is unavailable.
+            Selected connections are checked before the model starts.{" "}
+            <Link href="/configure?section=integrations#integrations" className="text-(--link)">
+              Browse integrations
+            </Link>
+            .
           </p>
         </div>
       </div>
@@ -284,6 +291,11 @@ function RequiredConnections({
           No enabled connections. Add one in Configure → Integrations.
         </p>
       )}
+      <p className="mt-3 text-[length:var(--fs-xs)] leading-5 text-(--ui-muted)">
+        A missed schedule runs once after Local Studio restarts; an interrupted run is recorded as
+        failed, not resumed. There is no approval queue or external action ledger yet, so only
+        schedule writes that are safe to repeat.
+      </p>
     </div>
   );
 }
@@ -293,6 +305,7 @@ function EditorHeader({
   creating,
   action,
   busy,
+  running,
   onClose,
   onRun,
   onToggleStatus,
@@ -301,15 +314,18 @@ function EditorHeader({
   creating: boolean;
   action: EditorAction;
   busy: boolean;
+  running: boolean;
   onClose: () => void;
   onRun: () => void;
   onToggleStatus: () => void;
 }) {
   const statusText = creating
     ? "Set up the work once, then let Local Studio run it."
-    : automation?.status === "paused"
-      ? "Paused"
-      : `Next run ${relativeTime(automation?.nextRunAt ?? null)}`;
+    : running
+      ? `Running since ${relativeTime(automation?.activeRun?.startedAt ?? null)}`
+      : automation?.status === "paused"
+        ? "Paused"
+        : `Next run ${relativeTime(automation?.nextRunAt ?? null)}`;
   return (
     <header className="flex min-h-14 shrink-0 items-center gap-2 border-b border-(--ui-border) px-4">
       <div className="min-w-0 flex-1">
@@ -324,11 +340,11 @@ function EditorHeader({
             variant="secondary"
             size="sm"
             loading={action === "run"}
-            disabled={busy}
+            disabled={busy || running}
             onClick={onRun}
             icon={<Play className="h-3.5 w-3.5" />}
           >
-            Run now
+            {running ? "Running" : "Run now"}
           </Button>
           <Button
             variant="secondary"
@@ -416,7 +432,7 @@ function RunHistory({ automation }: { automation: Automation }) {
                     {run.outcome === "error" ? "Failed" : "Completed"} {relativeTime(run.at)}
                   </p>
                   <p className="mt-0.5 text-[length:var(--fs-xs)] text-(--ui-muted)">
-                    {new Date(run.at).toLocaleString()}
+                    {new Date(run.at).toLocaleString()} · {runTriggerLabel(run.trigger)}
                   </p>
                 </div>
                 {transcriptHref ? (
@@ -449,6 +465,12 @@ function RunHistory({ automation }: { automation: Automation }) {
   );
 }
 
+function runTriggerLabel(trigger: Automation["runs"][number]["trigger"]): string {
+  if (trigger === "manual") return "manual";
+  if (trigger === "recovered") return "recovered after restart";
+  return "scheduled";
+}
+
 function EditorError({ error }: { error: string }) {
   return (
     <div
@@ -465,6 +487,7 @@ function EditorFooter({
   creating,
   action,
   busy,
+  running,
   canSave,
   confirmDelete,
   onConfirmDelete,
@@ -475,6 +498,7 @@ function EditorFooter({
   creating: boolean;
   action: EditorAction;
   busy: boolean;
+  running: boolean;
   canSave: boolean;
   confirmDelete: boolean;
   onConfirmDelete: () => void;
@@ -490,7 +514,7 @@ function EditorFooter({
               variant="danger"
               size="sm"
               loading={action === "delete"}
-              disabled={busy}
+              disabled={busy || running}
               onClick={onDelete}
             >
               Confirm delete
@@ -503,7 +527,7 @@ function EditorFooter({
           <Button
             variant="ghost"
             size="sm"
-            disabled={busy}
+            disabled={busy || running}
             onClick={onConfirmDelete}
             icon={<Trash2 className="h-3.5 w-3.5" />}
             className="text-(--ui-danger)"

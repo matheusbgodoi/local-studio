@@ -14,6 +14,7 @@ import { useShallow } from "zustand/react/shallow";
 import { DEFAULT_SIDEBAR_WIDTH, useAppStore } from "@/store";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 import { useOpenSessions } from "@/features/agent/ui/use-open-sessions";
+import { startAutomationNotifications } from "@/features/agent/automations/automation-notifications";
 import { hrefWithOpenNonce } from "@/features/agent/ui/projects-nav/helpers";
 import { DesktopSidebar } from "@/features/shell/left-sidebar-desktop";
 import {
@@ -72,6 +73,8 @@ export function LeftSidebar({ children }: { children: ReactNode }) {
   );
   const [SessionsCommand, setSessionsCommand] = useState<SessionsCommandComponent | null>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
+
+  useMountSubscription(() => startAutomationNotifications(), []);
 
   useMountSubscription(() => {
     if (!mobileMenuOpen) return;

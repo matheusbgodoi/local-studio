@@ -87,6 +87,9 @@ export async function handleAutomationPatch(request: Request, id: string): Promi
 
 export async function handleAutomationDelete(id: string): Promise<Response> {
   try {
+    const automation = await getAutomation(id);
+    if (!automation) return jsonError(`Unknown automation '${id}'.`, 404);
+    if (automation.activeRun) return jsonError("A running automation cannot be deleted.", 409);
     const removed = await deleteAutomation(id);
     if (!removed) return jsonError(`Unknown automation '${id}'.`, 404);
     return Response.json({ ok: true });

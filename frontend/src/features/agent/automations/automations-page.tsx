@@ -222,7 +222,9 @@ function AutomationWelcome({ onCreate }: { onCreate: () => void }) {
         </span>
         <h2 className="mt-4 text-[length:var(--fs-lg)] font-medium">Select an automation</h2>
         <p className="mt-1.5 text-[length:var(--fs-sm)] leading-5 text-(--ui-muted)">
-          Review its task and schedule, run it now, pause it, or change its configuration.
+          Scheduled work is saved on this Mac. Missed schedules catch up once after restart;
+          interrupted runs are recorded as failed. Required connections are checked before the model
+          starts, and the desktop notifies when a result arrives in the background.
         </p>
         <Button
           size="sm"
