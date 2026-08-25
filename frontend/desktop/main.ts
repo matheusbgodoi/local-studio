@@ -41,10 +41,6 @@ import {
   saveControllerCredential,
 } from "./logic/controller-credential-migration";
 import {
-  getKittylitterPairingJson,
-  normalizeKittylitterPairingJson,
-} from "./logic/kittylitter-pairing";
-import {
   getQuickPanelWindow,
   hideQuickPanel,
   resetQuickPanel,
@@ -489,17 +485,6 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle("desktop:get-update-status", async () => getUpdateState());
   ipcMain.handle("desktop:start-update", async () => startUpdate());
-  ipcMain.handle("desktop:get-kittylitter-pairing-json", async () => getKittylitterPairingJson());
-  ipcMain.handle("desktop:copy-kittylitter-pairing-json", async (_, pairingJson: unknown) => {
-    try {
-      if (typeof pairingJson !== "string") throw new Error("invalid pairing payload");
-      clipboard.writeText(normalizeKittylitterPairingJson(pairingJson));
-      return { ok: true };
-    } catch {
-      return { ok: false, error: "Connection JSON could not be copied." };
-    }
-  });
-
   ipcMain.handle("desktop:open-directory", async () => {
     const owner = mainWindow ?? undefined;
     const result = owner

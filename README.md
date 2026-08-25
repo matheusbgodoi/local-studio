@@ -167,17 +167,16 @@ It is built from two modules that share one controller API:
   Electron desktop shell. Hosts the Workbench (`/agent`), consolidated
   Configure surface, settings, usage, logs, and browser-facing API routes.
 
-## Mobile companion
+## Mobile access
 
-[KittyLitter](https://kittylitter.app) connects to Local Studio so the same
-agent sessions, streaming content, reasoning, tool calls, and tool results are
-available on iPhone, iPad, and Android. Pair from **Settings → Profile & phone →
-Connect your phone**. The QR code and copied connection JSON are private
-controller credentials; share them only with a device you trust.
+Local Studio can publish its web interface to devices on the owner's Tailscale
+network. The desktop footer exposes the tailnet URL and copies the masked
+pairing token without sending the secret to the renderer. Pair once in Safari,
+then add Local Studio to the iPhone home screen as a PWA.
 
-See the complete pairing, version, and security guide at
-[localstudio.ai/mobile](https://localstudio.ai/mobile). Mobile pairing requires
-Local Studio 2.9.0 or newer and KittyLitter 1.6.0 or newer.
+See [`docs/remote-access.md`](docs/remote-access.md) for setup, authentication,
+port recovery, and the boundary between tailnet-only access and public Funnel
+exposure.
 
 ## What is a controller?
 
