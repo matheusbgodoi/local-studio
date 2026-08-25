@@ -14,6 +14,7 @@ import { DEFAULT_RECIPE } from "./default-recipe";
 import type { RecipesTableProps } from "./types";
 import { useRecipesDerived } from "./use-recipes-derived";
 import { isRecipeActive } from "./launch-reconciliation";
+import { useControllerCapabilities } from "@/hooks/controller-capabilities-store";
 
 export type RecipesContentTab = "local" | "picks" | "get" | "serves" | "downloads";
 
@@ -25,6 +26,8 @@ const requestedTab = (value: string | null): RecipesContentTab =>
 export function useRecipesContentModel() {
   const searchParams = useSearchParams();
   const [tab, setTab] = useState<RecipesContentTab>(() => requestedTab(searchParams.get("tab")));
+  const { capabilities } = useControllerCapabilities();
+  const lifecycleSupported = capabilities.features.lifecycle === "supported";
   // Stale-while-revalidate: paint the last-loaded recipe list instantly on
   // navigation while the fresh fetch runs in the background.
   const cachedRecipes = readPageCache<RecipeWithStatus[]>("recipes:list");
@@ -71,6 +74,11 @@ export function useRecipesContentModel() {
   }, []);
 
   const loadRecipes = useCallback(async (): Promise<RecipeWithStatus[]> => {
+    if (!lifecycleSupported) {
+      setRecipesError(null);
+      setLoading(false);
+      return [];
+    }
     try {
       const [recipesResult, modelsData, runtimeData] = await Promise.all([
         api
@@ -97,7 +105,7 @@ export function useRecipesContentModel() {
       console.error("Failed to load recipes:", e);
       return [];
     }
-  }, []);
+  }, [lifecycleSupported]);
 
   useMountSubscription(() => {
     void (async () => {
@@ -267,8 +275,9 @@ export function useRecipesContentModel() {
   );
 
   return {
-    tab,
+    tab: lifecycleSupported ? tab : "local",
     setTab,
+    lifecycleSupported,
     loading,
     refreshing,
     recipes,

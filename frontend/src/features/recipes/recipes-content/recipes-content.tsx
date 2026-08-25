@@ -53,6 +53,7 @@ export function RecipesContent({ embedded = false }: { embedded?: boolean }) {
     <RecipesContentView
       embedded={embedded}
       tab={model.tab}
+      lifecycleSupported={model.lifecycleSupported}
       setTab={selectTab}
       loading={model.loading}
       refreshing={model.refreshing}

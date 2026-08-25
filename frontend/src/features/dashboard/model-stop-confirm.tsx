@@ -43,7 +43,7 @@ export function ModelStopConfirm({ trigger, onStop }: ModelStopConfirmProps) {
       })}
       <UiModal isOpen={open} onClose={() => !stopping && setOpen(false)} maxWidth="max-w-md">
         <UiModalHeader
-          title="Stop model"
+          title="Unload model"
           icon={<Square className="h-3 w-3 text-(--err)" fill="currentColor" />}
           onClose={() => !stopping && setOpen(false)}
         />
@@ -52,10 +52,11 @@ export function ModelStopConfirm({ trigger, onStop }: ModelStopConfirmProps) {
             <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-(--err)" />
             <div className="space-y-1">
               <p className="text-[length:var(--fs-sm)] font-medium text-(--fg)">
-                Active inference will end now.
+                Active inference will end and GPU memory will be released.
               </p>
               <p className="text-[length:var(--fs-sm)] leading-relaxed text-(--dim)">
-                Running chats may stop responding while the GPU lease is released.
+                The controller stays online. Running chats and Runs will wait until a model is
+                loaded again.
               </p>
             </div>
           </div>
@@ -71,7 +72,7 @@ export function ModelStopConfirm({ trigger, onStop }: ModelStopConfirmProps) {
             </Button>
             <Button size="sm" variant="danger" onClick={confirmStop} disabled={stopping}>
               {stopping && <Spinner size="sm" />}
-              {stopping ? "Stopping..." : "Stop model"}
+              {stopping ? "Unloading..." : "Unload model"}
             </Button>
           </div>
         </div>

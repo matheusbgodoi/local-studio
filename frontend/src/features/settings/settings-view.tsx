@@ -20,6 +20,7 @@ import { ShortcutsSettings } from "./terminal-settings";
 import { EnginesSection } from "./engines-section";
 import { ServicesSettings, SystemDetails, SystemOverview } from "./system-settings-section";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
+import { useControllerCapabilities } from "@/hooks/controller-capabilities-store";
 import { ProfileSettings } from "./profile-settings";
 interface SettingsViewProps {
   data: ConfigData | null;
@@ -83,6 +84,17 @@ export function SettingsView({
   onSystemSectionActive,
 }: SettingsViewProps) {
   const [activeSection, setActiveSection] = useState<SettingsSectionId>("connection");
+  const { capabilities } = useControllerCapabilities();
+  const sections = useMemo(
+    () =>
+      capabilities.features.config === "supported"
+        ? SECTIONS
+        : SECTIONS.filter((section) => section.id !== "system"),
+    [capabilities.features.config],
+  );
+  const visibleSection = sections.some((section) => section.id === activeSection)
+    ? activeSection
+    : "connection";
   useMountSubscription(() => {
     const onHashChange = () => {
       const hash = window.location.hash.replace("#", "");
@@ -111,15 +123,15 @@ export function SettingsView({
   }, [error, hasConfigData, isInitialLoading, loading]);
   return (
     <SettingsLayout
-      sections={SECTIONS}
-      activeSection={activeSection}
+      sections={sections}
+      activeSection={visibleSection}
       title="Settings"
       status={layoutStatus}
       loading={loading}
       onReload={onReload}
       onSelectSection={selectSection}
     >
-      {activeSection === "connection" ? (
+      {visibleSection === "connection" ? (
         <ApiConnectionSection
           apiSettingsLoading={apiSettingsLoading}
           apiSettings={apiSettings}
@@ -132,8 +144,8 @@ export function SettingsView({
           onSave={onSaveSettings}
         />
       ) : null}
-      {activeSection === "profile" ? <ProfileSettings /> : null}
-      {activeSection === "system" ? (
+      {visibleSection === "profile" ? <ProfileSettings /> : null}
+      {visibleSection === "system" ? (
         <div className="space-y-10">
           <SystemOverview
             data={data}
@@ -146,10 +158,10 @@ export function SettingsView({
           <SystemDetails data={data} compatibilityReport={compatibilityReport} />
         </div>
       ) : null}
-      {activeSection === "appearance" ? <AppearanceSettings /> : null}
-      {activeSection === "terminal" ? <ShortcutsSettings /> : null}
-      {activeSection === "archive" ? <ArchivedChatsSettings /> : null}
-      {activeSection === "setup" ? <SetupChecksSettings /> : null}
+      {visibleSection === "appearance" ? <AppearanceSettings /> : null}
+      {visibleSection === "terminal" ? <ShortcutsSettings /> : null}
+      {visibleSection === "archive" ? <ArchivedChatsSettings /> : null}
+      {visibleSection === "setup" ? <SetupChecksSettings /> : null}
     </SettingsLayout>
   );
 }
