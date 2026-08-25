@@ -5,7 +5,12 @@ import { useLogs } from "@/features/logs/use-logs";
 import { useControllerCapabilities } from "@/hooks/controller-capabilities-store";
 
 export default function LogsPage() {
-  const { capabilities } = useControllerCapabilities();
+  const { controllerKey } = useControllerCapabilities();
+  return <LogsPageForController key={controllerKey} />;
+}
+
+function LogsPageForController() {
+  const { capabilities, controllerKey } = useControllerCapabilities();
   const {
     sessions,
     filteredSessions,
@@ -31,7 +36,7 @@ export default function LogsPage() {
     renderLogs,
     handleSelectSession,
     formatDateTime,
-  } = useLogs(capabilities.features.logs);
+  } = useLogs(capabilities.features.logs, controllerKey);
 
   return (
     <LogsView

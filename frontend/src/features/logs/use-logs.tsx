@@ -3,9 +3,8 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import type { CapabilityState } from "@local-studio/contracts/capabilities";
 import api from "@/lib/api/client";
-import { BACKEND_URL_CHANGED_EVENT } from "@/lib/api/connection";
 import type { LogSession } from "@/lib/types";
-import { readPageCache, writePageCache } from "@/lib/page-data-cache";
+import { readPageCache, scopedPageCacheKey, writePageCache } from "@/lib/page-data-cache";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 
 const MAX_RENDERED_LINES = 20_000;
@@ -64,10 +63,11 @@ const consumeLogStream = async (
   }
 };
 
-export function useLogs(logsCapability: CapabilityState) {
+export function useLogs(logsCapability: CapabilityState, controllerKey: string) {
+  const sessionsCacheKey = scopedPageCacheKey(controllerKey, "logs:sessions");
   // Stale-while-revalidate: paint the last-loaded session list instantly on
   // navigation while the fresh fetch runs in the background.
-  const [cachedSessions] = useState(() => readPageCache<LogSession[]>("logs:sessions"));
+  const [cachedSessions] = useState(() => readPageCache<LogSession[]>(sessionsCacheKey));
   const [sessions, setSessions] = useState<LogSession[]>(() =>
     logsCapability === "supported" ? (cachedSessions ?? []) : [],
   );
@@ -98,7 +98,7 @@ export function useLogs(logsCapability: CapabilityState) {
     setSessionsError(null);
     try {
       const data = await api.getLogSessions(FAST_LOG_REQUEST);
-      writePageCache("logs:sessions", data.sessions || []);
+      writePageCache(sessionsCacheKey, data.sessions || []);
       setSessions(data.sessions || []);
       if (data.sessions?.length > 0) {
         setSelectedSession((current) => current ?? data.sessions[0].id);
@@ -108,7 +108,7 @@ export function useLogs(logsCapability: CapabilityState) {
     } finally {
       setLoading(false);
     }
-  }, [logsCapability]);
+  }, [logsCapability, sessionsCacheKey]);
 
   const loadLogContent = useCallback(
     async (sessionId: string, silent = false) => {
@@ -188,22 +188,6 @@ export function useLogs(logsCapability: CapabilityState) {
     setLoading(logsCapability === "unknown");
     setLoadingContent(false);
   }, [cachedSessions, loadSessions, logsCapability]);
-  useMountSubscription(() => {
-    const handler = () => {
-      streamControllerRef.current?.abort();
-      streamControllerRef.current = null;
-      setSessions([]);
-      setSelectedSession(null);
-      setLogLines([]);
-      setSessionsError(null);
-      setContentError(null);
-      setStreamError(null);
-      setLoading(logsCapability !== "unsupported");
-      if (logsCapability === "supported") void loadSessions();
-    };
-    window.addEventListener(BACKEND_URL_CHANGED_EVENT, handler);
-    return () => window.removeEventListener(BACKEND_URL_CHANGED_EVENT, handler);
-  }, [loadSessions, logsCapability]);
   useMountSubscription(() => {
     if (selectedSession) void loadLogContent(selectedSession);
   }, [loadLogContent, selectedSession]);

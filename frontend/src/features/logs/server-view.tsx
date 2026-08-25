@@ -20,10 +20,15 @@ export default function ServerPage() {
 }
 
 export function ServerContent({ embedded = false }: { embedded?: boolean }) {
-  const { capabilities, loading: capabilitiesLoading } = useControllerCapabilities();
+  const { controllerKey } = useControllerCapabilities();
+  return <ServerContentForController key={controllerKey} embedded={embedded} />;
+}
+
+function ServerContentForController({ embedded }: { embedded: boolean }) {
+  const { capabilities, controllerKey, loading: capabilitiesLoading } = useControllerCapabilities();
   const logsCapability = capabilities.features.logs;
   const openapiCapability = capabilities.features.openapi;
-  const logs = useLogs(logsCapability);
+  const logs = useLogs(logsCapability, controllerKey);
   const realtime = useRealtimeStatusStore();
   const { physicalModels } = useServedModels();
   const modelDisplayName = displayNameForModel(
@@ -144,16 +149,17 @@ function ServerHeader({
           <StatusPill tone={running ? "good" : "default"} variant="badge">
             {running ? "inference serving" : "inference idle"}
           </StatusPill>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={onRefresh}
-            disabled={!selectedSession}
-            icon={<RefreshCw className={`h-3.5 w-3.5 ${loadingContent ? "animate-spin" : ""}`} />}
-          >
-            Refresh
-          </Button>
+          {selectedSession ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={onRefresh}
+              icon={<RefreshCw className={`h-3.5 w-3.5 ${loadingContent ? "animate-spin" : ""}`} />}
+            >
+              Refresh
+            </Button>
+          ) : null}
         </div>
       </div>
     </header>
