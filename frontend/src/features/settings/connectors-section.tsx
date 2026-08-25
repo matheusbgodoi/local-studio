@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { Schema } from "effect";
 import {
   ConnectorSshPathResponseSchema,
@@ -99,6 +99,17 @@ const connectorCommand = (connector: ConnectorView): string =>
   connector.transport === "stdio"
     ? [connector.command, ...(connector.args ?? [])].filter(Boolean).join(" ")
     : (connector.url ?? "HTTP endpoint not set");
+
+function AdvancedDetails({ children }: { children: ReactNode }) {
+  return (
+    <details className="mb-6 overflow-hidden rounded-[var(--ui-radius)] border border-(--ui-separator)">
+      <summary className="cursor-pointer px-4 py-3 text-[length:var(--fs-sm)] font-medium text-(--ui-muted) hover:text-(--ui-fg)">
+        Advanced
+      </summary>
+      <div className="border-t border-(--ui-separator) px-4 pt-4">{children}</div>
+    </details>
+  );
+}
 
 function ConnectorDrawer({
   connector,
@@ -208,14 +219,16 @@ function ConnectorDrawer({
         />
       </ResourceDrawerSection>
       {managed ? (
-        <ResourceDrawerSection title="Launch configuration">
-          <ResourceFact label="Command" value={connectorCommand(connector)} mono />
-          <ResourceFact
-            label="Allowed tools"
-            value={connector.allowTools?.join(" · ") || "All declared tools"}
-            mono
-          />
-        </ResourceDrawerSection>
+        <AdvancedDetails>
+          <ResourceDrawerSection title="Launch configuration">
+            <ResourceFact label="Command" value={connectorCommand(connector)} mono />
+            <ResourceFact
+              label="Allowed tools"
+              value={connector.allowTools?.join(" · ") || "All declared tools"}
+              mono
+            />
+          </ResourceDrawerSection>
+        </AdvancedDetails>
       ) : (
         <div className="space-y-4">
           <FormField label="Name">
@@ -358,8 +371,12 @@ function CatalogDrawer({
       <ResourceDrawerSection title="Provider">
         <ResourceFact label="Company" value={entry.company} />
         <ResourceFact label="Transport" value={entry.transport} mono />
-        <ResourceFact label="Command" value={[entry.command, ...entry.args].join(" ")} mono />
       </ResourceDrawerSection>
+      <AdvancedDetails>
+        <ResourceDrawerSection title="Launch configuration">
+          <ResourceFact label="Command" value={[entry.command, ...entry.args].join(" ")} mono />
+        </ResourceDrawerSection>
+      </AdvancedDetails>
       <div className="space-y-4">
         {entry.envFields.map((field) => (
           <FormField key={field.key} label={field.label}>
@@ -391,6 +408,8 @@ function ConnectorRow({
 }) {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
+  const [actionBusy, setActionBusy] = useState<"toggle" | "remove" | null>(null);
+  const [actionError, setActionError] = useState("");
 
   const update = async (init: RequestInit) => {
     const { connectors } = await requestJson(
@@ -401,12 +420,23 @@ function ConnectorRow({
     onChanged(connectors);
   };
 
-  const toggle = () =>
-    update({
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...connector, enabled: !connector.enabled }),
-    });
+  const toggle = async () => {
+    setActionBusy("toggle");
+    setActionError("");
+    try {
+      await update({
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...connector, enabled: !connector.enabled }),
+      });
+    } catch {
+      setActionError(
+        `Could not ${connector.enabled ? "disable" : "enable"} this connector. Open its configuration, verify that the runtime is available, then retry.`,
+      );
+    } finally {
+      setActionBusy(null);
+    }
+  };
 
   const remove = async () => {
     if (
@@ -416,12 +446,22 @@ function ConnectorRow({
     ) {
       return;
     }
-    const { connectors } = await requestJson(
-      `/api/agent/connectors?id=${encodeURIComponent(connector.id)}`,
-      Schema.decodeUnknownSync(ConnectorsResponseSchema),
-      { method: "DELETE" },
-    );
-    onChanged(connectors);
+    setActionBusy("remove");
+    setActionError("");
+    try {
+      const { connectors } = await requestJson(
+        `/api/agent/connectors?id=${encodeURIComponent(connector.id)}`,
+        Schema.decodeUnknownSync(ConnectorsResponseSchema),
+        { method: "DELETE" },
+      );
+      onChanged(connectors);
+    } catch {
+      setActionError(
+        "The connector could not be removed. Verify that the runtime is available, then retry; its saved configuration was left unchanged.",
+      );
+    } finally {
+      setActionBusy(null);
+    }
   };
 
   const test = async () => {
@@ -454,7 +494,11 @@ function ConnectorRow({
           : `${connector.transport} connector`
       }
       leading={<ResourceLogo identity={connector.id} label={connector.name} />}
-      value={<ModelValue mono>{connectorCommand(connector)}</ModelValue>}
+      value={
+        <ModelValue>
+          {connector.transport === "stdio" ? "Local MCP process" : "Remote MCP endpoint"}
+        </ModelValue>
+      }
       status={
         <ModelStatus tone={connector.enabled ? "good" : "default"}>
           {testResult || (connector.enabled ? "enabled" : "disabled")}
@@ -462,21 +506,38 @@ function ConnectorRow({
       }
       actions={
         <>
-          <ModelButton onClick={() => void test()} disabled={testing}>
+          <ModelButton onClick={() => void test()} disabled={testing || actionBusy !== null}>
             {testing ? <Spinner size="xs" /> : "Test"}
           </ModelButton>
-          <ModelButton onClick={() => void toggle()}>
-            {connector.enabled ? "Disable" : "Enable"}
+          <ModelButton onClick={() => void toggle()} disabled={testing || actionBusy !== null}>
+            {actionBusy === "toggle" ? (
+              <Spinner size="xs" />
+            ) : connector.enabled ? (
+              "Disable"
+            ) : (
+              "Enable"
+            )}
           </ModelButton>
           {!connector.origin ? (
-            <ModelButton onClick={() => void remove()} tone="danger" title="Remove connector">
-              <Trash2 className="h-3 w-3" />
+            <ModelButton
+              onClick={() => void remove()}
+              disabled={testing || actionBusy !== null}
+              tone="danger"
+              title="Remove connector"
+            >
+              {actionBusy === "remove" ? <Spinner size="xs" /> : <Trash2 className="h-3 w-3" />}
             </ModelButton>
           ) : null}
         </>
       }
       onClick={onOpen}
-    />
+    >
+      {actionError ? (
+        <p role="alert" className="text-[length:var(--fs-sm)] text-(--ui-danger)">
+          {actionError}
+        </p>
+      ) : null}
+    </ModelRow>
   );
 }
 
@@ -553,7 +614,7 @@ export function ConnectorsSection() {
         ) : null}
         <ModelRow
           label="Search connectors"
-          description="Name, company, transport, command, or endpoint."
+          description="Name, company, transport, or endpoint."
           control={
             <SearchInput
               value={query}
@@ -599,7 +660,7 @@ export function ConnectorsSection() {
               leading={
                 <ResourceLogo identity={entry.id} label={entry.name} company={entry.company} />
               }
-              value={<ModelValue mono>{[entry.command, ...entry.args].join(" ")}</ModelValue>}
+              value={<ModelValue>Local MCP package</ModelValue>}
               status={
                 <ModelStatus tone={installed ? "good" : "default"}>
                   {installed ? "connected" : "available"}
