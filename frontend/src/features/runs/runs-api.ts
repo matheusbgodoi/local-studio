@@ -1,5 +1,6 @@
 import { Effect, Schema } from "effect";
 import {
+  AgenticCurrentRunResponseSchema,
   AgenticRunResponseSchema,
   AgenticRunSnapshotSchema,
   AgenticRunsResponseSchema,
@@ -44,6 +45,22 @@ export function listRuns(): Effect.Effect<AgenticRun[], Error> {
   return Effect.map(
     requestJson("/api/agent/runs", Schema.decodeUnknownSync(AgenticRunsResponseSchema)),
     ({ runs }) => [...runs],
+  );
+}
+
+export function loadCurrentRun(
+  sessionId: string | null,
+  piSessionId: string | null,
+): Effect.Effect<AgenticRun | null, Error> {
+  const params = new URLSearchParams();
+  if (sessionId) params.set("sessionId", sessionId);
+  if (piSessionId) params.set("piSessionId", piSessionId);
+  return Effect.map(
+    requestJson(
+      `/api/agent/runs/current?${params.toString()}`,
+      Schema.decodeUnknownSync(AgenticCurrentRunResponseSchema),
+    ),
+    ({ run }) => run,
   );
 }
 

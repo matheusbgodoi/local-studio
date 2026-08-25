@@ -3,10 +3,10 @@
 import { useCallback, useSyncExternalStore } from "react";
 import type { AgenticRun, AgenticRunSnapshot } from "@shared/agent/agentic-run";
 import {
+  getConversationRunState,
   getRunSnapshotState,
-  getRunsState,
+  subscribeConversationRun,
   subscribeRunSnapshot,
-  subscribeRuns,
   type RunSnapshotState,
 } from "./runs-store";
 
@@ -37,13 +37,19 @@ export function useSessionRunState(
   sessionId: string | null | undefined,
   piSessionId: string | null | undefined,
 ): SessionRunState {
-  const state = useSyncExternalStore(subscribeRuns, getRunsState, getRunsState);
-  const run =
-    state.runs.find(
-      (entry) =>
-        (sessionId && entry.sessionId === sessionId) ||
-        (piSessionId && entry.piSessionId === piSessionId),
-    ) ?? null;
+  const normalizedSessionId = sessionId ?? null;
+  const normalizedPiSessionId = piSessionId ?? null;
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      subscribeConversationRun(normalizedSessionId, normalizedPiSessionId, listener),
+    [normalizedPiSessionId, normalizedSessionId],
+  );
+  const getState = useCallback(
+    () => getConversationRunState(normalizedSessionId, normalizedPiSessionId),
+    [normalizedPiSessionId, normalizedSessionId],
+  );
+  const state = useSyncExternalStore(subscribe, getState, getState);
+  const run = state.run;
   const snapshotState = useRunSnapshotState(run?.id ?? null);
   if (!run) return { run: null, snapshot: null, loading: state.loading };
   return {
