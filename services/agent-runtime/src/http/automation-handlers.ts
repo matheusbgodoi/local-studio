@@ -67,20 +67,22 @@ export async function handleAutomationPatch(request: Request, id: string): Promi
     return jsonError("requiredConnectorIds must be an array of connector ids.");
   }
   try {
-    const automation = await patchAutomation(id, {
-      ...(typeof body.name === "string" ? { name: body.name } : {}),
-      ...(typeof body.prompt === "string" ? { prompt: body.prompt } : {}),
-      ...(typeof body.modelId === "string" ? { modelId: body.modelId } : {}),
-      ...(typeof body.cwd === "string" ? { cwd: body.cwd } : {}),
-      ...(Array.isArray(body.requiredConnectorIds)
-        ? { requiredConnectorIds: body.requiredConnectorIds }
-        : {}),
-      ...(body.status === "active" || body.status === "paused" ? { status: body.status } : {}),
-      ...(typeof body.unread === "boolean" ? { unread: body.unread } : {}),
-      ...(body.schedule !== undefined ? { schedule: body.schedule } : {}),
+    return await withAutomationMutationLock(id, async () => {
+      const automation = await patchAutomation(id, {
+        ...(typeof body.name === "string" ? { name: body.name } : {}),
+        ...(typeof body.prompt === "string" ? { prompt: body.prompt } : {}),
+        ...(typeof body.modelId === "string" ? { modelId: body.modelId } : {}),
+        ...(typeof body.cwd === "string" ? { cwd: body.cwd } : {}),
+        ...(Array.isArray(body.requiredConnectorIds)
+          ? { requiredConnectorIds: body.requiredConnectorIds }
+          : {}),
+        ...(body.status === "active" || body.status === "paused" ? { status: body.status } : {}),
+        ...(typeof body.unread === "boolean" ? { unread: body.unread } : {}),
+        ...(body.schedule !== undefined ? { schedule: body.schedule } : {}),
+      });
+      if (!automation) return jsonError(`Unknown automation '${id}'.`, 404);
+      return Response.json({ automation });
     });
-    if (!automation) return jsonError(`Unknown automation '${id}'.`, 404);
-    return Response.json({ automation });
   } catch (error) {
     return jsonError(errorMessage(error, "Failed to update automation."), 500);
   }

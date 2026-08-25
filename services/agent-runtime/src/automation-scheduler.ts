@@ -5,6 +5,7 @@ import {
   patchAutomation,
   recordAutomationRun,
   type Automation,
+  type AutomationRun,
   type AutomationRunTrigger,
 } from "./automations-store";
 import { getGlobalSingleton } from "./instances";
@@ -19,6 +20,7 @@ import type { PiAgentSession } from "./pi-runtime-types";
 import { withAutomationMutationLock } from "./automation-mutation-lock";
 
 const TICK_MS = 30_000;
+const SETTLEMENT_RETRY_DELAYS_MS = [250, 1_000, 5_000, 15_000, 30_000] as const;
 
 type SchedulerState = {
   timer: ReturnType<typeof setInterval> | null;
@@ -123,6 +125,7 @@ async function executeAutomationRun(claim: AutomationRunClaim): Promise<void> {
   const id = automation.id;
   const runtimeSessionId = `automation:${id}:${Date.now()}`;
   let session: PiAgentSession | null = null;
+  let run: AutomationRun;
   try {
     const connectorPlan = await preflightRequiredConnectors(automation);
     session = piRuntimeManager.getSessionForLookup(runtimeSessionId, null).session;
@@ -152,40 +155,79 @@ async function executeAutomationRun(claim: AutomationRunClaim): Promise<void> {
     const error = automationRunError(status.lastError ?? result.error, result.text);
     const projectId =
       listProjectsFromStore().find((project) => project.path === status.cwd)?.id ?? null;
-    await recordAutomationRun(
-      id,
-      {
-        at: new Date().toISOString(),
-        startedAt,
-        trigger,
-        piSessionId,
-        cwd: status.cwd,
-        projectId,
-        outcome: error ? "error" : "ok",
-        summary: result.text,
-        ...(error ? { error } : {}),
-      },
-      nextRunAt(automation.schedule, new Date()).toISOString(),
-    );
+    run = {
+      at: new Date().toISOString(),
+      startedAt,
+      trigger,
+      piSessionId,
+      cwd: status.cwd,
+      projectId,
+      outcome: error ? "error" : "ok",
+      summary: result.text,
+      ...(error ? { error } : {}),
+    };
   } catch (error) {
-    await recordAutomationRun(
-      id,
-      {
-        at: new Date().toISOString(),
-        startedAt,
-        trigger,
-        piSessionId: null,
-        cwd: automation.cwd,
-        projectId: null,
-        outcome: "error",
-        summary: "",
-        error: error instanceof Error ? error.message : "Automation run failed",
-      },
-      nextRunAt(automation.schedule, new Date()).toISOString(),
-    );
+    run = {
+      at: new Date().toISOString(),
+      startedAt,
+      trigger,
+      piSessionId: null,
+      cwd: automation.cwd,
+      projectId: null,
+      outcome: "error",
+      summary: "",
+      error: error instanceof Error ? error.message : "Automation run failed",
+    };
   } finally {
     await session?.stop().catch(() => undefined);
-    if (session) piRuntimeManager.releaseSession(runtimeSessionId, session);
+    if (session) {
+      try {
+        piRuntimeManager.releaseSession(runtimeSessionId, session);
+      } catch {
+        console.error(`[automations] session cleanup failed id=${id}`);
+      }
+    }
+  }
+  await persistAutomationRun(id, run);
+}
+
+function retryDelay(attempt: number): number {
+  return SETTLEMENT_RETRY_DELAYS_MS[Math.min(attempt - 1, SETTLEMENT_RETRY_DELAYS_MS.length - 1)];
+}
+
+function waitForRetry(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+function reportPersistenceRetry(id: string, attempt: number, delayMs: number): void {
+  if (attempt > SETTLEMENT_RETRY_DELAYS_MS.length && attempt % 10 !== 0) return;
+  console.error(
+    `[automations] result persistence failed id=${id} attempt=${attempt}; retrying in ${delayMs}ms`,
+  );
+}
+
+async function persistAutomationRun(id: string, run: AutomationRun): Promise<void> {
+  let attempt = 0;
+  while (true) {
+    try {
+      const stored = await withAutomationMutationLock(id, async () => {
+        const current = await getAutomation(id);
+        if (!current) return true;
+        const recorded = await recordAutomationRun(
+          id,
+          run,
+          nextRunAt(current.schedule, new Date()).toISOString(),
+        );
+        return recorded !== null;
+      });
+      if (stored) return;
+      throw new Error("Automation result was not stored.");
+    } catch {
+      attempt += 1;
+      const delayMs = retryDelay(attempt);
+      reportPersistenceRetry(id, attempt, delayMs);
+      await waitForRetry(delayMs);
+    }
   }
 }
 
@@ -193,7 +235,9 @@ function superviseAutomationRun(claim: AutomationRunClaim): void {
   const scheduler = state();
   const id = claim.automation.id;
   const execution = executeAutomationRun(claim)
-    .catch(() => undefined)
+    .catch(() => {
+      console.error(`[automations] supervised execution failed id=${id}`);
+    })
     .finally(() => {
       scheduler.running.delete(id);
       scheduler.executions.delete(id);
@@ -223,8 +267,12 @@ async function tick(): Promise<void> {
   for (const automation of automations) {
     if (automation.status !== "active") continue;
     if (!automation.nextRunAt) {
-      await patchAutomation(automation.id, {
-        nextRunAt: nextRunAt(automation.schedule, now).toISOString(),
+      await withAutomationMutationLock(automation.id, async () => {
+        const current = await getAutomation(automation.id);
+        if (!current || current.status !== "active" || current.nextRunAt) return;
+        await patchAutomation(automation.id, {
+          nextRunAt: nextRunAt(current.schedule, now).toISOString(),
+        });
       }).catch(() => undefined);
       continue;
     }
@@ -236,29 +284,44 @@ async function tick(): Promise<void> {
 
 async function recoverInterruptedRuns(): Promise<void> {
   const now = new Date();
-  const automations = await listAutomations();
+  let automations: Automation[];
+  let attempt = 0;
+  while (true) {
+    try {
+      automations = await listAutomations();
+      break;
+    } catch {
+      attempt += 1;
+      const delayMs = retryDelay(attempt);
+      reportPersistenceRetry("recovery-list", attempt, delayMs);
+      await waitForRetry(delayMs);
+    }
+  }
   for (const automation of automations) {
     if (!automation.activeRun) continue;
-    await recordAutomationRun(
-      automation.id,
-      {
-        at: now.toISOString(),
-        startedAt: automation.activeRun.startedAt,
-        trigger: "recovered",
-        piSessionId: null,
-        cwd: automation.cwd,
-        projectId: null,
-        outcome: "error",
-        summary: "",
-        error: "The runtime stopped before this automation recorded a result.",
-      },
-      nextRunAt(automation.schedule, now).toISOString(),
-    );
+    const scheduler = state();
+    scheduler.running.add(automation.id);
+    const recovery = persistAutomationRun(automation.id, {
+      at: now.toISOString(),
+      startedAt: automation.activeRun.startedAt,
+      trigger: "recovered",
+      piSessionId: null,
+      cwd: automation.cwd,
+      projectId: null,
+      outcome: "error",
+      summary: "",
+      error: "The runtime stopped before this automation recorded a result.",
+    }).finally(() => {
+      scheduler.running.delete(automation.id);
+      scheduler.executions.delete(automation.id);
+    });
+    scheduler.executions.set(automation.id, recovery);
+    void recovery;
   }
 }
 
 async function startScheduler(): Promise<void> {
-  await recoverInterruptedRuns().catch(() => undefined);
+  void recoverInterruptedRuns();
   await tick();
 }
 
