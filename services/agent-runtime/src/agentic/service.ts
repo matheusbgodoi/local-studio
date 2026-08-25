@@ -175,6 +175,7 @@ export function capabilityFromRun(run: AgenticRun): AgenticCapability {
   return {
     modelId: run.modelId,
     physicalModelId: run.physicalModelId,
+    displayName: run.modelDisplayName ?? run.physicalModelId,
     behaviorProfile: run.behaviorProfile,
     behaviorProfileLabel: null,
     contextWindow: run.contextWindow,

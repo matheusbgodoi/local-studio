@@ -41,7 +41,7 @@ export const loadSqlDatabase = (): new (filepath: string) => SqlDatabase => {
 };
 
 export const AGENTIC_STORE_FILENAME = "agentic-runtime.sqlite";
-export const AGENTIC_STORE_VERSION = 4;
+export const AGENTIC_STORE_VERSION = 5;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS agentic_metadata (
@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS agentic_runs (
   status TEXT NOT NULL CHECK (status IN ('CREATED','PLANNING','RUNNING','PAUSED','WAITING_USER','COMPLETING','COMPLETED','FAILED','CANCELLED')),
   model_id TEXT NOT NULL,
   physical_model_id TEXT NOT NULL,
+  model_display_name TEXT,
   behavior_profile TEXT,
   network_policy TEXT NOT NULL DEFAULT 'direct' CHECK (network_policy IN ('direct','vpn_protected')),
   context_window INTEGER NOT NULL,
@@ -117,6 +118,7 @@ CREATE TABLE IF NOT EXISTS agentic_agents (
   status TEXT NOT NULL CHECK (status IN ('IDLE','WORKING','COMPACTING','WAITING','INTERRUPTED','FINISHED')),
   model_id TEXT NOT NULL,
   physical_model_id TEXT NOT NULL,
+  model_display_name TEXT,
   behavior_profile TEXT,
   current_task_id TEXT,
   session_id TEXT NOT NULL,
@@ -315,6 +317,8 @@ function addMissingColumns(database: SqlDatabase): void {
       column: "archived_at_ms",
       definition: "INTEGER",
     },
+    { table: "agentic_runs", column: "model_display_name", definition: "TEXT" },
+    { table: "agentic_agents", column: "model_display_name", definition: "TEXT" },
   ];
   for (const addition of additions) {
     const columns = database.prepare(`PRAGMA table_info(${addition.table})`).all() as Array<{

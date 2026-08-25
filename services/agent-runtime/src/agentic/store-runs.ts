@@ -19,6 +19,7 @@ export type CreateRunInput = {
   goal: string;
   modelId: string;
   physicalModelId: string;
+  modelDisplayName: string;
   behaviorProfile: string | null;
   contextWindow: number;
   usableLimit: number;
@@ -51,6 +52,7 @@ const RUN_COLUMNS: Record<string, string> = {
   usableLimit: "usable_limit",
   modelId: "model_id",
   physicalModelId: "physical_model_id",
+  modelDisplayName: "model_display_name",
   behaviorProfile: "behavior_profile",
 };
 
@@ -97,14 +99,15 @@ export function createRunStore(context: AgenticStoreContext) {
       const id = `run_${randomUUID()}`;
       const at = ms();
       context.run(
-        `INSERT INTO agentic_runs(id, goal, status, model_id, physical_model_id, behavior_profile,
+        `INSERT INTO agentic_runs(id, goal, status, model_id, physical_model_id, model_display_name, behavior_profile,
            network_policy, context_window, usable_limit, session_id, pi_session_id, cwd,
            created_at_ms, updated_at_ms)
-         VALUES (?,?,'CREATED',?,?,?,?,?,?,?,?,?,?,?)`,
+         VALUES (?,?,'CREATED',?,?,?,?,?,?,?,?,?,?,?,?)`,
         id,
         input.goal,
         input.modelId,
         input.physicalModelId,
+        input.modelDisplayName,
         input.behaviorProfile,
         input.networkPolicy,
         input.contextWindow,

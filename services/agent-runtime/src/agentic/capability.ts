@@ -14,6 +14,7 @@ import type { AgentModel } from "../../../../shared/agent/models";
 export type AgenticCapability = {
   modelId: string;
   physicalModelId: string;
+  displayName: string;
   behaviorProfile: string | null;
   behaviorProfileLabel: string | null;
   contextWindow: number;
@@ -48,9 +49,11 @@ export function resolveAgenticCapability(model: AgentModel): AgenticCapability {
     contextWindow,
     Math.max(MIN_OUTPUT_TOKENS, positiveInt(model.maxTokens, MIN_OUTPUT_TOKENS)),
   );
+  const physicalModelId = trimmedOrNull(model.physicalModelId) ?? model.id;
   return {
     modelId: model.id,
-    physicalModelId: trimmedOrNull(model.physicalModelId) ?? model.id,
+    physicalModelId,
+    displayName: trimmedOrNull(model.displayName) ?? trimmedOrNull(model.name) ?? physicalModelId,
     behaviorProfile: trimmedOrNull(model.behaviorProfile),
     behaviorProfileLabel: trimmedOrNull(model.behaviorProfileLabel),
     contextWindow,

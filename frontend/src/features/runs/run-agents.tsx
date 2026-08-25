@@ -37,10 +37,7 @@ export function RunAgents({ snapshot }: { snapshot: AgenticRunSnapshot }) {
               { label: "Role", value: agent.role },
               {
                 label: "Model",
-                value: agent.behaviorProfile
-                  ? `${agent.physicalModelId} · ${agent.behaviorProfile}`
-                  : agent.physicalModelId,
-                mono: true,
+                value: agent.modelDisplayName ?? agent.physicalModelId,
               },
               {
                 label: "Context",

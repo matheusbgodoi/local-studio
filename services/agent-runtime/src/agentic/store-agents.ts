@@ -19,6 +19,7 @@ export type CreateAgentInput = {
   role: string;
   modelId: string;
   physicalModelId: string;
+  modelDisplayName: string;
   behaviorProfile: string | null;
   sessionId: string;
   piSessionId: string | null;
@@ -54,14 +55,15 @@ export function createAgentStore(context: AgenticStoreContext) {
     const at = ms();
     context.run(
       `INSERT INTO agentic_agents(id, run_id, name, role, status, model_id, physical_model_id,
-         behavior_profile, session_id, pi_session_id, context_limit, last_heartbeat_ms, created_at_ms)
-       VALUES (?,?,?,?,'IDLE',?,?,?,?,?,?,?,?)`,
+         model_display_name, behavior_profile, session_id, pi_session_id, context_limit, last_heartbeat_ms, created_at_ms)
+       VALUES (?,?,?,?,'IDLE',?,?,?,?,?,?,?,?,?)`,
       id,
       input.runId,
       input.name,
       input.role,
       input.modelId,
       input.physicalModelId,
+      input.modelDisplayName,
       input.behaviorProfile,
       input.sessionId,
       input.piSessionId,

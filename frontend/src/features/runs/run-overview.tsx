@@ -69,15 +69,7 @@ export function RunOverview({
         />
         <Stat className={STAT} label="Session" value={`${formatTokens(cumulative)} cumulative`} />
         <Stat className={STAT} label="Compactions" value={String(run.compactionCount)} />
-        <Stat
-          className={STAT}
-          label="Model"
-          value={
-            run.behaviorProfile
-              ? `${run.physicalModelId} · ${run.behaviorProfile}`
-              : run.physicalModelId
-          }
-        />
+        <Stat className={STAT} label="Model" value={run.modelDisplayName ?? run.physicalModelId} />
         <Stat className={STAT} label="Window" value={formatTokens(run.contextWindow)} />
         {isProtectedPolicy(run.networkPolicy) ? <RunNetworkStat /> : null}
       </div>

@@ -61,6 +61,7 @@ export function createAgenticRunService(options: AgenticRunServiceOptions) {
       goal: input.goal,
       modelId: input.capability.modelId,
       physicalModelId: input.capability.physicalModelId,
+      modelDisplayName: input.capability.displayName,
       behaviorProfile: input.capability.behaviorProfile,
       contextWindow: input.capability.contextWindow,
       usableLimit: budget.usableLimit,
@@ -80,6 +81,7 @@ export function createAgenticRunService(options: AgenticRunServiceOptions) {
       role: input.agentRole ?? "generalist",
       modelId: input.capability.modelId,
       physicalModelId: input.capability.physicalModelId,
+      modelDisplayName: input.capability.displayName,
       behaviorProfile: input.capability.behaviorProfile,
       sessionId: input.sessionId,
       //
