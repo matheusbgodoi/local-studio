@@ -49,3 +49,14 @@ export const firstMetric = (metrics: Record<string, number>, names: string[]): n
   }
   return 0;
 };
+
+export const firstMetricOrUndefined = (
+  metrics: Record<string, number>,
+  names: string[],
+): number | undefined => {
+  for (const name of names) {
+    const value = metrics[name];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+  }
+  return undefined;
+};
