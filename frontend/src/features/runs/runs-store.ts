@@ -2,7 +2,14 @@
 
 import { Effect } from "effect";
 import type { AgenticRun, AgenticRunSnapshot } from "@shared/agent/agentic-run";
-import { cancelRun, listRuns, loadRunSnapshot, resumeRun } from "./runs-api";
+import {
+  cancelRun,
+  deleteRun,
+  listRuns,
+  loadRunSnapshot,
+  resumeRun,
+  setRunArchived,
+} from "./runs-api";
 
 //
 // A Run advances whether or not anyone is looking at it, so its state lives in
@@ -127,6 +134,25 @@ export async function cancelSelectedRun(runId: string): Promise<void> {
     await refreshRuns();
   } catch (cause) {
     publish({ error: failure(cause, "Failed to cancel the run") });
+  }
+}
+
+export async function archiveSelectedRun(runId: string, archived: boolean): Promise<void> {
+  try {
+    await Effect.runPromise(setRunArchived(runId, archived));
+    await refreshRuns();
+  } catch (cause) {
+    publish({ error: failure(cause, "Failed to update the Run archive") });
+  }
+}
+
+export async function deleteSelectedRun(runId: string): Promise<void> {
+  try {
+    await Effect.runPromise(deleteRun(runId));
+    publish({ selectedId: null, snapshot: null });
+    await refreshRuns();
+  } catch (cause) {
+    publish({ error: failure(cause, "Failed to delete the Run") });
   }
 }
 

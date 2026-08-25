@@ -51,7 +51,9 @@ import { handleAgentModels } from "./model-handlers";
 import {
   handleAgenticArtifact,
   handleAgenticRunCancel,
+  handleAgenticRunArchive,
   handleAgenticRunCreate,
+  handleAgenticRunDelete,
   handleAgenticRunGet,
   handleAgenticRunResume,
   handleAgenticRunsList,
@@ -113,6 +115,10 @@ export function createAgentRuntimeApp() {
   app.get("/api/agent/runs", () => handleAgenticRunsList());
   app.post("/api/agent/runs", (c) => handleAgenticRunCreate(c.req.raw));
   app.get("/api/agent/runs/:id", (c) => handleAgenticRunGet(c.req.param("id")));
+  app.patch("/api/agent/runs/:id", (c) =>
+    handleAgenticRunArchive(c.req.raw, c.req.param("id")),
+  );
+  app.delete("/api/agent/runs/:id", (c) => handleAgenticRunDelete(c.req.param("id")));
   app.post("/api/agent/runs/:id/resume", (c) => handleAgenticRunResume(c.req.param("id")));
   app.post("/api/agent/runs/:id/cancel", (c) => handleAgenticRunCancel(c.req.param("id")));
   app.get("/api/agent/artifacts/:id", (c) => handleAgenticArtifact(c.req.raw, c.req.param("id")));

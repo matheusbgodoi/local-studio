@@ -169,6 +169,27 @@ export async function handleAgenticRunCancel(runId: string): Promise<Response> {
   }
 }
 
+export async function handleAgenticRunArchive(request: Request, runId: string): Promise<Response> {
+  const body = await readJsonBody(request);
+  if (typeof body?.archived !== "boolean") {
+    return jsonError("Body must include archived as a boolean.");
+  }
+  try {
+    return Response.json({ ok: true, run: agenticRuntime().archiveRun(runId, body.archived) });
+  } catch (error) {
+    return jsonError(errorMessage(error, "Failed to update the Run archive."), 409);
+  }
+}
+
+export async function handleAgenticRunDelete(runId: string): Promise<Response> {
+  try {
+    agenticRuntime().deleteRun(runId);
+    return Response.json({ ok: true });
+  } catch (error) {
+    return jsonError(errorMessage(error, "Failed to delete the Run."), 409);
+  }
+}
+
 const MAX_ARTIFACT_SLICE = 200_000;
 
 export async function handleAgenticArtifact(request: Request, artifactId: string): Promise<Response> {

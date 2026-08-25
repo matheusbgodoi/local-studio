@@ -46,6 +46,7 @@ const RUN_COLUMNS: Record<string, string> = {
   resultSummary: "result_summary",
   failureReason: "failure_reason",
   recoveryState: "recovery_state",
+  archivedAtMs: "archived_at_ms",
   contextWindow: "context_window",
   usableLimit: "usable_limit",
   modelId: "model_id",

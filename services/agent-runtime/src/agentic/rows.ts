@@ -88,6 +88,7 @@ export const toRun = (row: Row): AgenticRun => ({
   resultSummary: nullableText(row.result_summary),
   failureReason: nullableText(row.failure_reason),
   recoveryState: nullableText(row.recovery_state),
+  archivedAtMs: row.archived_at_ms === null || row.archived_at_ms === undefined ? null : int(row.archived_at_ms),
   createdAtMs: int(row.created_at_ms),
   updatedAtMs: int(row.updated_at_ms),
 });

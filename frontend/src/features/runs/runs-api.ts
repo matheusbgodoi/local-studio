@@ -75,3 +75,30 @@ export function cancelRun(runId: string): Effect.Effect<AgenticRun, Error> {
     ({ run }) => run,
   );
 }
+
+export function setRunArchived(runId: string, archived: boolean): Effect.Effect<AgenticRun, Error> {
+  return Effect.map(
+    requestJson(
+      `/api/agent/runs/${encodeURIComponent(runId)}`,
+      Schema.decodeUnknownSync(AgenticRunResponseSchema),
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ archived }),
+      },
+    ),
+    ({ run }) => run,
+  );
+}
+
+const DeleteRunResponseSchema = Schema.Struct({ ok: Schema.Literal(true) });
+
+export function deleteRun(runId: string): Effect.Effect<void, Error> {
+  return Effect.asVoid(
+    requestJson(
+      `/api/agent/runs/${encodeURIComponent(runId)}`,
+      Schema.decodeUnknownSync(DeleteRunResponseSchema),
+      { method: "DELETE" },
+    ),
+  );
+}

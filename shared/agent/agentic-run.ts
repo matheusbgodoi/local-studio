@@ -97,6 +97,7 @@ export const AgenticRunSchema = Schema.Struct({
   resultSummary: nullableString,
   failureReason: nullableString,
   recoveryState: nullableString,
+  archivedAtMs: Schema.NullOr(Schema.Number),
   createdAtMs: Schema.Number,
   updatedAtMs: Schema.Number,
 });

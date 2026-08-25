@@ -41,7 +41,7 @@ export const loadSqlDatabase = (): new (filepath: string) => SqlDatabase => {
 };
 
 export const AGENTIC_STORE_FILENAME = "agentic-runtime.sqlite";
-export const AGENTIC_STORE_VERSION = 3;
+export const AGENTIC_STORE_VERSION = 4;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS agentic_metadata (
@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS agentic_runs (
   result_summary TEXT,
   failure_reason TEXT,
   recovery_state TEXT,
+  archived_at_ms INTEGER,
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL
 ) STRICT;
@@ -308,6 +309,11 @@ function addMissingColumns(database: SqlDatabase): void {
       column: "network_policy",
       definition:
         "TEXT NOT NULL DEFAULT 'direct' CHECK (network_policy IN ('direct','vpn_protected'))",
+    },
+    {
+      table: "agentic_runs",
+      column: "archived_at_ms",
+      definition: "INTEGER",
     },
   ];
   for (const addition of additions) {

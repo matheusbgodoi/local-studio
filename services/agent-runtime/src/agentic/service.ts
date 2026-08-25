@@ -403,6 +403,13 @@ export function agenticRuntime() {
       state.store.appendEvent({ runId, type: "RUN_CANCELLED", summary: "cancelled by the owner" });
       return state.store.requireRun(runId);
     },
+    archiveRun: (runId: string, archived: boolean): AgenticRun =>
+      state.store.archiveRun(runId, archived),
+    deleteRun: (runId: string): void => {
+      state.store.deleteRun(runId);
+      state.capabilities.delete(runId);
+      state.cancelled.delete(runId);
+    },
     readArtifact: (artifactId: string, offset: number, length: number): string | null =>
       state.store.readArtifactSlice(artifactId, offset, length),
   };
