@@ -1,8 +1,14 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 import type { AgenticRun, AgenticRunSnapshot } from "@shared/agent/agentic-run";
-import { getRunsState, subscribeRuns, watchSessionRun } from "./runs-store";
+import {
+  getRunSnapshotState,
+  getRunsState,
+  subscribeRunSnapshot,
+  subscribeRuns,
+  type RunSnapshotState,
+} from "./runs-store";
 
 //
 // The Run this conversation is driving, if any. Subscribing is what starts the
@@ -19,9 +25,8 @@ export type SessionRunState = {
   /** The run row this conversation owns, as the list reports it. */
   run: AgenticRun | null;
   /**
-   * Its full snapshot, and only ever its own: the store holds one selection at
-   * a time, so while a freshly focused conversation's Run is still loading this
-   * is null rather than the previous conversation's Run.
+   * Its full snapshot, keyed by Run id so another chat or the Runs page cannot
+   * replace it while this conversation is open.
    */
   snapshot: AgenticRunSnapshot | null;
   /** The first list request has not answered yet, so "no run" is not yet known. */
@@ -39,13 +44,22 @@ export function useSessionRunState(
         (sessionId && entry.sessionId === sessionId) ||
         (piSessionId && entry.piSessionId === piSessionId),
     ) ?? null;
+  const snapshotState = useRunSnapshotState(run?.id ?? null);
   if (!run) return { run: null, snapshot: null, loading: state.loading };
-  watchSessionRun(run.id);
   return {
     run,
-    snapshot: state.snapshot?.run.id === run.id ? state.snapshot : null,
-    loading: state.loading,
+    snapshot: snapshotState.snapshot?.run.id === run.id ? snapshotState.snapshot : null,
+    loading: state.loading || snapshotState.loading,
   };
+}
+
+export function useRunSnapshotState(runId: string | null): RunSnapshotState {
+  const subscribe = useCallback(
+    (listener: () => void) => (runId ? subscribeRunSnapshot(runId, listener) : () => undefined),
+    [runId],
+  );
+  const getSnapshot = useCallback(() => getRunSnapshotState(runId), [runId]);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
 export function useSessionRun(

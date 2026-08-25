@@ -16,6 +16,7 @@ import {
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 import { humanStatus, runTone } from "./run-formatters";
 import { RunDetail } from "./run-detail";
+import { useRunSnapshotState } from "./use-session-run";
 import {
   archiveSelectedRun,
   cancelSelectedRun,
@@ -27,7 +28,9 @@ import {
 import { useRuns } from "./use-runs";
 
 export default function RunsPage() {
-  const { runs, snapshot, selectedId, loading, error } = useRuns();
+  const { runs, selectedId, loading, error } = useRuns();
+  const selectedSnapshot = useRunSnapshotState(selectedId);
+  const snapshot = selectedSnapshot.snapshot;
   const requestedId = useSearchParams().get("run");
   const [view, setView] = useState<"current" | "history" | "archived">("current");
   const terminal = new Set(["COMPLETED", "FAILED", "CANCELLED"]);
@@ -53,6 +56,7 @@ export default function RunsPage() {
   const canCancel =
     snapshot !== null && !["COMPLETED", "FAILED", "CANCELLED"].includes(snapshot.run.status);
   const selectedVisible = visibleRuns.some((run) => run.id === selectedId);
+  const displayedError = error ?? selectedSnapshot.error;
 
   const selectView = (next: "current" | "history" | "archived") => {
     setView(next);
@@ -61,7 +65,7 @@ export default function RunsPage() {
       if (run.archivedAtMs !== null) return false;
       return next === "history" ? terminal.has(run.status) : !terminal.has(run.status);
     });
-    if (first) selectRun(first.id);
+    selectRun(first?.id ?? null);
   };
 
   return (
@@ -80,7 +84,7 @@ export default function RunsPage() {
           }
         />
 
-        {error ? <ErrorBox>{error}</ErrorBox> : null}
+        {displayedError ? <ErrorBox>{displayedError}</ErrorBox> : null}
 
         <div className="flex w-fit gap-1 rounded-lg border border-(--ui-separator) p-1">
           {(["current", "history", "archived"] as const).map((item) => (
@@ -156,12 +160,15 @@ export default function RunsPage() {
                       {terminal.has(snapshot.run.status) ? (
                         <Button
                           variant="secondary"
-                          onClick={() =>
+                          onClick={() => {
+                            const nextId = nextRunIdAfterRemoval(visibleRuns, snapshot.run.id);
                             void archiveSelectedRun(
                               snapshot.run.id,
                               snapshot.run.archivedAtMs === null,
-                            )
-                          }
+                            ).then((updated) => {
+                              if (updated) selectRun(nextId);
+                            });
+                          }}
                         >
                           {snapshot.run.archivedAtMs === null ? "Archive" : "Restore"}
                         </Button>
@@ -182,10 +189,12 @@ export default function RunsPage() {
                     </>
                   }
                 />
-              ) : (
+              ) : selectedVisible && selectedSnapshot.loading ? (
                 <div className="flex justify-center py-16">
                   <Spinner />
                 </div>
+              ) : (
+                <Card className="p-6 text-(--ui-muted)">Select a Run to inspect it.</Card>
               )}
             </div>
           </div>
@@ -193,4 +202,10 @@ export default function RunsPage() {
       </PageContainer>
     </AppPage>
   );
+}
+
+function nextRunIdAfterRemoval(runs: readonly { id: string }[], currentId: string): string | null {
+  const index = runs.findIndex((run) => run.id === currentId);
+  if (index < 0) return runs[0]?.id ?? null;
+  return runs[index + 1]?.id ?? runs[index - 1]?.id ?? null;
 }
