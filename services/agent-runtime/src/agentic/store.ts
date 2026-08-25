@@ -14,6 +14,7 @@ import { createOperationStore } from "./store-operations";
 import { createRunStore } from "./store-runs";
 import { createSignalStore } from "./store-signals";
 import { openAgenticDatabase, withTransaction } from "./schema";
+import { drainDeleteCleanupQueue, queueDeleteCleanup } from "./delete-cleanup";
 
 export const AGENTIC_ARTIFACTS_DIRNAME = "agentic-artifacts";
 
@@ -39,6 +40,7 @@ export function createAgenticStore(dataDir: string, now: () => Date = () => new 
       ? path.join(process.cwd(), ".agentic-artifacts")
       : path.join(dataDir, AGENTIC_ARTIFACTS_DIRNAME);
   const runStore = createRunStore(context);
+  drainDeleteCleanupQueue(dataDir);
 
   const archiveRun = (runId: string, archived: boolean) => {
     const run = runStore.requireRun(runId);
@@ -61,6 +63,7 @@ export function createAgenticStore(dataDir: string, now: () => Date = () => new 
     const quarantined = existsSync(artifactDir);
     if (quarantined) renameSync(artifactDir, quarantineDir);
     try {
+      if (quarantined) queueDeleteCleanup(dataDir, [quarantineDir]);
       withTransaction(database, () => {
         for (const table of RUN_CHILD_TABLES) {
           context.run(`DELETE FROM ${table} WHERE run_id = ?`, runId);
@@ -71,7 +74,14 @@ export function createAgenticStore(dataDir: string, now: () => Date = () => new 
       if (quarantined && existsSync(quarantineDir)) renameSync(quarantineDir, artifactDir);
       throw error;
     }
-    if (quarantined) rmSync(quarantineDir, { recursive: true, force: true });
+    if (quarantined) {
+      try {
+        rmSync(quarantineDir, { recursive: true, force: true });
+      } catch {
+        // The durable cleanup queue is drained again on the next store open.
+      }
+      drainDeleteCleanupQueue(dataDir);
+    }
   };
 
   return {
@@ -80,10 +90,13 @@ export function createAgenticStore(dataDir: string, now: () => Date = () => new 
     now: context.ms,
     appendEvent: context.appendEvent,
     close: (): void => database.close(),
+    transaction: <T>(task: () => T): T => withTransaction(database, task),
     tableNames: (): string[] =>
-      (context.all("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name") as {
-        name?: unknown;
-      }[]).map((row) => String(row.name ?? "")),
+      (
+        context.all("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name") as {
+          name?: unknown;
+        }[]
+      ).map((row) => String(row.name ?? "")),
     ...runStore,
     archiveRun,
     deleteRun,

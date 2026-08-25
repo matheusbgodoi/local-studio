@@ -31,13 +31,23 @@ import {
   type StallState,
 } from "./stall";
 import type { AgenticStore, TaskSeed } from "./store";
-import { applyEvidence, acceptanceRejection, parseTurnReport, type TurnReport } from "./turn-report";
+import {
+  applyEvidence,
+  acceptanceRejection,
+  parseTurnReport,
+  type TurnReport,
+} from "./turn-report";
 import type { AgenticTurnSignal } from "./store-signals";
 import { buildWorkingSet, renderWorkingSet, workingSetTokens } from "./working-set";
+import { settleTerminalWork } from "./terminal-settlement";
 
 export const MAX_INEFFECTIVE_COMPACTIONS = 2;
 
-export const TERMINAL_RUN_STATUSES: readonly AgenticRunStatus[] = ["COMPLETED", "FAILED", "CANCELLED"];
+export const TERMINAL_RUN_STATUSES: readonly AgenticRunStatus[] = [
+  "COMPLETED",
+  "FAILED",
+  "CANCELLED",
+];
 
 export type SchedulerStep =
   | { kind: "idle"; reason: string }
@@ -73,6 +83,7 @@ export type AgenticSchedulerOptions = {
   budgetPolicy?: ContextBudgetPolicy;
   stallPolicy?: StallPolicy;
   replan?: (input: ReplanInput) => TaskSeed[];
+  isCancelled?: (runId: string) => boolean;
 };
 
 const defaultReplan = ({ tasks, failingTask, reason }: ReplanInput): TaskSeed[] => {
@@ -183,7 +194,12 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
 
   const applyReadiness = (runId: string): AgenticTask[] => sharedApplyReadiness(store, runId);
 
-  const currentWorkingSet = (run: AgenticRun, activeTask: AgenticTask | null, tail: string[], errors: string[]) =>
+  const currentWorkingSet = (
+    run: AgenticRun,
+    activeTask: AgenticTask | null,
+    tail: string[],
+    errors: string[],
+  ) =>
     buildWorkingSet({
       run,
       tasks: store.listTasks(run.id),
@@ -287,6 +303,7 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     tail: string[],
     errors: string[],
   ): Promise<SchedulerStep> => {
+    if (options.isCancelled?.(run.id)) return { kind: "idle", reason: "run is cancelling" };
     const agent = agentForTask(run.id, task);
     const session = sessionFor(run, agent);
     const budget = budgetFor(run, capability);
@@ -320,7 +337,11 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
         taskId: task.id,
         type: "BUDGET_EXCEEDED",
         summary: "the working set itself exceeds the usable budget; proceeding without compacting",
-        detail: { activeTokens: reading.tokens, requiredTokens: required, usableLimit: budget.usableLimit },
+        detail: {
+          activeTokens: reading.tokens,
+          requiredTokens: required,
+          usableLimit: budget.usableLimit,
+        },
       });
     } else if (decision.action !== "proceed") {
       const result = await compactAndRebuild(
@@ -328,7 +349,9 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
         task,
         session,
         budget,
-        decision.action === "externalize" ? "pending payload exceeds the tool reserve" : "context preflight",
+        decision.action === "externalize"
+          ? "pending payload exceeds the tool reserve"
+          : "context preflight",
         tail,
         errors,
       );
@@ -345,8 +368,16 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
         // to raise the budget, not to compact harder.
         //
         const reason = `compaction cannot create headroom: the usable budget is ${budget.usableLimit} tokens and the session will not go below ${reading.tokens}; refusing to compact in a circle`;
-        store.updateRun(run.id, { status: "FAILED", failureReason: reason });
-        store.appendEvent({ runId: run.id, taskId: task.id, type: "RUN_FAILED", summary: reason });
+        store.transaction(() => {
+          settleTerminalWork(store, run.id, "FAILED", reason);
+          store.updateRun(run.id, { status: "FAILED", failureReason: reason });
+          store.appendEvent({
+            runId: run.id,
+            taskId: task.id,
+            type: "RUN_FAILED",
+            summary: reason,
+          });
+        });
         return { kind: "failed", reason };
       }
     }
@@ -357,6 +388,7 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     // status. Writing RUNNING now would resurrect the Run into a state with
     // no loop driving it, and nothing would ever settle it again.
     //
+    if (options.isCancelled?.(run.id)) return { kind: "idle", reason: "run is cancelling" };
     const refreshed = store.requireRun(run.id);
     if (TERMINAL_RUN_STATUSES.includes(refreshed.status)) {
       return { kind: "idle", reason: `run is ${refreshed.status.toLowerCase()}` };
@@ -406,12 +438,23 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
       // the view and the restart reconciliation.
       //
       const message = error instanceof Error ? error.message : String(error);
-      for (const open of store.listAttempts(task.id).filter((entry) => entry.status === "RUNNING")) {
-        store.settleAttempt(open.id, { status: "FAILED", outcome: "the turn was rejected", error: message });
+      for (const open of store
+        .listAttempts(task.id)
+        .filter((entry) => entry.status === "RUNNING")) {
+        store.settleAttempt(open.id, {
+          status: "FAILED",
+          outcome: "the turn was rejected",
+          error: message,
+        });
       }
       store.updateTask(task.id, { status: "PENDING", blocker: message });
       if (agent) store.updateAgent(agent.id, { status: "INTERRUPTED", currentTaskId: null });
-      store.appendEvent({ runId: refreshed.id, taskId: task.id, type: "TASK_FAILED", summary: message });
+      store.appendEvent({
+        runId: refreshed.id,
+        taskId: task.id,
+        type: "TASK_FAILED",
+        summary: message,
+      });
       throw error;
     }
     return { kind: "resumed", taskId: task.id, compacted };
@@ -468,7 +511,13 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     //
     const signals = alreadyConsumed ? [] : store.takePendingSignals(run.id);
     const report = alreadyConsumed
-      ? { evidence: [], claimedComplete: false, blockedReason: null, userQuestion: null, errors: [] }
+      ? {
+          evidence: [],
+          claimedComplete: false,
+          blockedReason: null,
+          userQuestion: null,
+          errors: [],
+        }
       : signals.length > 0
         ? reportFromSignals(signals, run.activeTaskId)
         : parseTurnReport(finalText);
@@ -502,7 +551,9 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
           store.settleAttempt(attempt.id, {
             status,
             outcome: status,
-            evidence: outcome.acceptance.filter((c) => c.satisfied).map((c) => `${c.id}: ${c.evidence ?? ""}`),
+            evidence: outcome.acceptance
+              .filter((c) => c.satisfied)
+              .map((c) => `${c.id}: ${c.evidence ?? ""}`),
             error,
           });
         }
@@ -568,20 +619,26 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
         stallByTask.set(activeTask.id, evaluated.state);
 
         if (evaluated.verdict.kind === "give-up") {
-          store.updateTask(activeTask.id, {
-            status: "FAILED",
-            blocker: evaluated.verdict.reason,
-            settledAtMs: store.now(),
+          const reason = evaluated.verdict.reason;
+          store.transaction(() => {
+            store.updateTask(activeTask.id, {
+              status: "FAILED",
+              blocker: reason,
+              settledAtMs: store.now(),
+            });
+            settleTerminalWork(store, run.id, "FAILED", reason);
+            store.updateRun(run.id, {
+              status: "FAILED",
+              failureReason: reason,
+            });
+            store.appendEvent({
+              runId: run.id,
+              taskId: activeTask.id,
+              type: "RUN_FAILED",
+              summary: reason,
+            });
           });
-          store.updateRun(run.id, { status: "FAILED", failureReason: evaluated.verdict.reason });
-          if (agent) store.updateAgent(agent.id, { status: "FINISHED", currentTaskId: null });
-          store.appendEvent({
-            runId: run.id,
-            taskId: activeTask.id,
-            type: "RUN_FAILED",
-            summary: evaluated.verdict.reason,
-          });
-          return { kind: "failed", reason: evaluated.verdict.reason };
+          return { kind: "failed", reason };
         }
 
         if (evaluated.verdict.kind === "replan") {
@@ -608,7 +665,11 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
             store.updateTask(activeTask.id, { status: "PENDING" });
             if (agent) store.updateAgent(agent.id, { status: "IDLE", currentTaskId: null });
             applyReadiness(run.id);
-            return { kind: "replanned", revision: revised.revision, reason: evaluated.verdict.reason };
+            return {
+              kind: "replanned",
+              revision: revised.revision,
+              reason: evaluated.verdict.reason,
+            };
           }
         }
 
@@ -628,7 +689,10 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
       //
       const waiting = tasks.filter((task) => task.status === "WAITING_USER");
       if (waiting.length > 0) {
-        store.updateRun(settledRun.id, { status: "WAITING_USER", activeTaskId: waiting[0]?.id ?? null });
+        store.updateRun(settledRun.id, {
+          status: "WAITING_USER",
+          activeTaskId: waiting[0]?.id ?? null,
+        });
         if (agent) store.updateAgent(agent.id, { status: "WAITING" });
         return {
           kind: "waiting-user",
@@ -638,17 +702,24 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
       }
       const allSucceeded = tasks.every((task) => task.status === "SUCCEEDED");
       const status = allSucceeded ? "COMPLETED" : "FAILED";
-      store.updateRun(settledRun.id, {
-        status,
-        activeTaskId: null,
-        resultSummary: allSucceeded ? firstLine(finalText) : null,
-        failureReason: allSucceeded ? null : "no task is runnable and the plan is not satisfied",
-      });
-      if (agent) store.updateAgent(agent.id, { status: "FINISHED", currentTaskId: null });
-      store.appendEvent({
-        runId: settledRun.id,
-        type: allSucceeded ? "RUN_COMPLETED" : "RUN_FAILED",
-        summary: allSucceeded ? "all tasks satisfied" : "no runnable task remains",
+      store.transaction(() => {
+        settleTerminalWork(
+          store,
+          settledRun.id,
+          status,
+          allSucceeded ? "all tasks satisfied" : "no runnable task remains",
+        );
+        store.updateRun(settledRun.id, {
+          status,
+          activeTaskId: null,
+          resultSummary: allSucceeded ? firstLine(finalText) : null,
+          failureReason: allSucceeded ? null : "no task is runnable and the plan is not satisfied",
+        });
+        store.appendEvent({
+          runId: settledRun.id,
+          type: allSucceeded ? "RUN_COMPLETED" : "RUN_FAILED",
+          summary: allSucceeded ? "all tasks satisfied" : "no runnable task remains",
+        });
       });
       return allSucceeded
         ? { kind: "completed" }
@@ -665,6 +736,34 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     launch,
     budgetFor,
     sessionFor,
+    abortRun: async (runId: string): Promise<void> => {
+      const targets = [...sessions.entries()]
+        .filter(([key]) => key === runId || key.startsWith(`${runId}#`))
+        .map(([, session]) => session.abort?.())
+        .filter((request): request is Promise<void> => Boolean(request));
+      const results = await Promise.allSettled(targets);
+      const failures = results.filter(
+        (result): result is PromiseRejectedResult => result.status === "rejected",
+      );
+      if (failures.length > 0) {
+        throw new AggregateError(
+          failures.map((failure) => failure.reason),
+          "The Run could not confirm that every inference session became idle",
+        );
+      }
+    },
+    forgetRun: (runId: string, taskIds?: readonly string[]): void => {
+      for (const key of [...sessions.keys()]) {
+        if (key === runId || key.startsWith(`${runId}#`)) sessions.delete(key);
+      }
+      for (const taskId of taskIds ?? store.listTasks(runId).map((task) => task.id)) {
+        stallByTask.delete(taskId);
+      }
+      ineffectiveCompactions.delete(runId);
+      for (const key of [...consumedTurns.keys()]) {
+        if (key === runId || key.startsWith(`${runId}#`)) consumedTurns.delete(key);
+      }
+    },
   };
 }
 

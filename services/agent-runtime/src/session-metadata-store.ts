@@ -1,11 +1,4 @@
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import lockfile from "proper-lockfile";
 import { resolveDataDir } from "./data-dir";
@@ -284,6 +277,21 @@ export async function forgetSessionMetadata(sessionId: string): Promise<void> {
     if (!store.sessions[id]) return;
     delete store.sessions[id];
     writeStore(store);
+  });
+}
+
+export async function forgetSessionMetadataMany(sessionIds: readonly string[]): Promise<void> {
+  const ids = new Set(sessionIds.map((id) => id.trim()).filter(Boolean));
+  if (ids.size === 0) return;
+  await withStoreLock(() => {
+    const store = readStore();
+    let changed = false;
+    for (const id of ids) {
+      if (!store.sessions[id]) continue;
+      delete store.sessions[id];
+      changed = true;
+    }
+    if (changed) writeStore(store);
   });
 }
 

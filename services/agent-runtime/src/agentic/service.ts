@@ -8,7 +8,11 @@
 // time, with no event listener able to advance a Run twice.
 //
 
-import { resolveAgenticCapability, withRuntimeContextWindow, type AgenticCapability } from "./capability";
+import {
+  resolveAgenticCapability,
+  withRuntimeContextWindow,
+  type AgenticCapability,
+} from "./capability";
 import {
   computeContextBudget,
   DEFAULT_CONTEXT_BUDGET_POLICY,
@@ -26,9 +30,16 @@ import { resolveDataDir } from "../data-dir";
 import { getGlobalSingleton } from "../instances";
 import { piRuntimeManager } from "../pi-runtime";
 import { refreshPiModels } from "../pi-runtime-models";
-import { setSessionInternal } from "../session-metadata-store";
+import {
+  forgetSessionMetadataMany,
+  readSessionListMetadata,
+  setSessionInternal,
+} from "../session-metadata-store";
 import type { AgentModel } from "../../../../shared/agent/models";
 import { networkService } from "../network";
+import { randomUUID } from "node:crypto";
+import { existsSync, renameSync, rmSync } from "node:fs";
+import { findSessionFile } from "../sessions-store";
 
 export const AGENTIC_USABLE_CONTEXT_ENV = "LOCAL_STUDIO_AGENTIC_USABLE_CONTEXT";
 
@@ -54,6 +65,7 @@ type RuntimeState = {
   store: AgenticStore;
   service: ReturnType<typeof createAgenticRunService>;
   loops: Map<string, Promise<void>>;
+  cancellations: Map<string, Promise<void>>;
   cancelled: Set<string>;
   capabilities: Map<string, AgenticCapability>;
   hiddenRollouts: Set<string>;
@@ -91,8 +103,7 @@ const hideExecutionRollout = (
   piSessionId: string,
 ): Promise<void> => {
   const goal = run.goal.replace(/\s+/g, " ").trim();
-  const short =
-    goal.length > ROLLOUT_TITLE_CHARS ? `${goal.slice(0, ROLLOUT_TITLE_CHARS)}…` : goal;
+  const short = goal.length > ROLLOUT_TITLE_CHARS ? `${goal.slice(0, ROLLOUT_TITLE_CHARS)}…` : goal;
   return setSessionInternal(piSessionId, {
     cwd: run.cwd,
     title: `Run: ${short} — ${agent.name}`,
@@ -103,6 +114,7 @@ function createRuntime(): RuntimeState {
   const store = createAgenticStore(resolveDataDir());
   const capabilities = new Map<string, AgenticCapability>();
   const hiddenRollouts = new Set<string>();
+  const cancelled = new Set<string>();
 
   const capabilityFor = (run: AgenticRun): AgenticCapability => {
     const cached = capabilities.get(run.id);
@@ -117,6 +129,7 @@ function createRuntime(): RuntimeState {
     session: sessionFor,
     capabilityFor,
     budgetPolicy: agenticBudgetPolicy(),
+    isCancelled: (runId) => cancelled.has(runId),
   });
 
   service.recover();
@@ -135,7 +148,8 @@ function createRuntime(): RuntimeState {
     store,
     service,
     loops: new Map(),
-    cancelled: new Set(),
+    cancellations: new Map(),
+    cancelled,
     capabilities,
     hiddenRollouts,
   };
@@ -186,8 +200,22 @@ export function capabilityFromRun(run: AgenticRun): AgenticCapability {
     contextWindowDeclared: true,
   };
 }
-const TERMINAL = new Set(["COMPLETED", "FAILED", "CANCELLED", "WAITING_USER"]);
+const FINAL_TERMINAL = new Set(["COMPLETED", "FAILED", "CANCELLED"]);
+const DRIVE_STOPPED = new Set([...FINAL_TERMINAL, "WAITING_USER"]);
 const MAX_LOOP_STEPS = 10_000;
+const CANCEL_CONFIRMATION_TIMEOUT_MS = 15_000;
+
+async function settlesWithin(task: Promise<void>, timeoutMs: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), timeoutMs);
+  });
+  try {
+    return await Promise.race([task.then(() => true as const), deadline]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 export function agenticRuntime() {
   const state = getGlobalSingleton("agenticRuntime", createRuntime);
@@ -208,7 +236,7 @@ export function agenticRuntime() {
     for (let step = 0; step < MAX_LOOP_STEPS; step += 1) {
       if (state.cancelled.has(runId)) return;
       const run = state.store.requireRun(runId);
-      if (TERMINAL.has(run.status)) return;
+      if (DRIVE_STOPPED.has(run.status)) return;
       //
       // THE GATE HAS TO BE HERE, because this is the loop that actually takes
       // turns. run-service exposes startRun/resumeRun, but nothing in
@@ -251,6 +279,7 @@ export function agenticRuntime() {
           } catch {}
         }
       }
+      if (state.cancelled.has(runId)) return;
       await state.service.scheduler.advance(runId, observed);
     }
   };
@@ -260,6 +289,7 @@ export function agenticRuntime() {
     state.cancelled.delete(runId);
     const loop = drive(runId)
       .catch((error: unknown) => {
+        if (state.cancelled.has(runId)) return;
         //
         // The backend going away is an accident of the moment, not a verdict
         // on the goal, so it takes the road a killed process takes rather than
@@ -276,7 +306,7 @@ export function agenticRuntime() {
         // had asked for any more.
         //
         const status = state.store.getRun(runId)?.status;
-        if (status && TERMINAL.has(status)) networkService().releaseRun(runId);
+        if (status && FINAL_TERMINAL.has(status)) networkService().releaseRun(runId);
       });
     state.loops.set(runId, loop);
   };
@@ -393,21 +423,118 @@ export function agenticRuntime() {
     },
     resumeRun: async (runId: string): Promise<AgenticRun> => {
       const run = state.store.requireRun(runId);
-      if (TERMINAL.has(run.status) && run.status !== "WAITING_USER") return run;
+      if (FINAL_TERMINAL.has(run.status)) return run;
+      if (state.cancellations.has(runId) || state.loops.has(runId)) {
+        throw new Error("This Run is still settling. Wait a moment before resuming it.");
+      }
+      state.cancelled.delete(runId);
       state.store.updateRun(runId, { status: "RUNNING" });
       startLoop(runId);
       return state.store.requireRun(runId);
     },
-    cancelRun: (runId: string): AgenticRun => {
+    cancelRun: async (
+      runId: string,
+    ): Promise<{ run: AgenticRun; cancellationPending: boolean }> => {
+      const initial = state.store.requireRun(runId);
+      if (FINAL_TERMINAL.has(initial.status)) {
+        return { run: initial, cancellationPending: false };
+      }
+      const existing = state.cancellations.get(runId);
+      if (existing) {
+        const settled = await settlesWithin(existing, CANCEL_CONFIRMATION_TIMEOUT_MS);
+        return { run: state.store.requireRun(runId), cancellationPending: !settled };
+      }
       state.cancelled.add(runId);
-      state.store.updateRun(runId, { status: "CANCELLED", activeTaskId: null });
-      state.store.appendEvent({ runId, type: "RUN_CANCELLED", summary: "cancelled by the owner" });
-      return state.store.requireRun(runId);
+      const settle = (async () => {
+        await state.service.scheduler.abortRun(runId);
+        await state.loops.get(runId)?.catch(() => undefined);
+        const current = state.store.requireRun(runId);
+        if (!FINAL_TERMINAL.has(current.status)) state.service.cancelRun(runId);
+      })()
+        .catch((error: unknown) => {
+          const current = state.store.getRun(runId);
+          if (current && !FINAL_TERMINAL.has(current.status)) {
+            state.store.transaction(() => {
+              state.store.updateRun(runId, { status: "PAUSED" });
+              state.store.appendEvent({
+                runId,
+                type: "RUN_CANCELLATION_PAUSED",
+                summary: "cancellation could not confirm that inference became idle; Run paused",
+              });
+            });
+          }
+          throw error;
+        })
+        .finally(() => state.cancellations.delete(runId));
+      state.cancellations.set(runId, settle);
+      const settled = await settlesWithin(settle, CANCEL_CONFIRMATION_TIMEOUT_MS);
+      return {
+        run: state.store.requireRun(runId),
+        cancellationPending: !settled,
+      };
     },
     archiveRun: (runId: string, archived: boolean): AgenticRun =>
       state.store.archiveRun(runId, archived),
-    deleteRun: (runId: string): void => {
-      state.store.deleteRun(runId);
+    deleteRun: async (runId: string): Promise<void> => {
+      if (state.loops.has(runId) || state.cancellations.has(runId)) {
+        throw new Error("The Run is still settling and cannot be deleted yet.");
+      }
+      const run = state.store.requireRun(runId);
+      const taskIds = state.store.listTasks(runId).map((task) => task.id);
+      const rolloutIds = state.store
+        .listAgents(runId)
+        .map((agent) => agent.piSessionId)
+        .filter((id): id is string => Boolean(id));
+      const usedElsewhere = new Set(
+        state.store
+          .listRuns()
+          .filter((entry) => entry.id !== runId)
+          .flatMap((entry) => state.store.listAgents(entry.id))
+          .map((agent) => agent.piSessionId)
+          .filter((id): id is string => Boolean(id)),
+      );
+      const metadataFor = readSessionListMetadata();
+      const targets: Array<{ source: string; quarantine: string }> = [];
+      for (const id of rolloutIds) {
+        if (id === run.piSessionId || usedElsewhere.has(id)) {
+          throw new Error(
+            "A Run rollout is shared with another durable record and was not deleted.",
+          );
+        }
+        const source = findSessionFile(run.cwd, id);
+        if (!source) continue;
+        if (!metadataFor(id).internal) {
+          throw new Error("A Run rollout is not marked internal and was not deleted.");
+        }
+        targets.push({ source, quarantine: `${source}.run-delete-${randomUUID()}` });
+      }
+      const quarantined: Array<{ source: string; quarantine: string }> = [];
+      try {
+        for (const target of targets) {
+          renameSync(target.source, target.quarantine);
+          quarantined.push(target);
+        }
+        state.store.deleteRun(runId);
+        state.service.forgetRun(runId, taskIds);
+      } catch (error) {
+        for (const item of quarantined.reverse()) {
+          if (existsSync(item.quarantine)) renameSync(item.quarantine, item.source);
+        }
+        throw error;
+      }
+      for (const item of quarantined) {
+        try {
+          rmSync(item.quarantine, { force: true });
+        } catch {
+          // A quarantined rollout no longer appears in session listings. It is
+          // safer to leave an orphaned file than persist an arbitrary session
+          // path in the recursive artifact-cleanup manifest.
+        }
+      }
+      await forgetSessionMetadataMany(rolloutIds).catch((error) => {
+        console.warn("[agentic] Run deleted but internal rollout metadata cleanup failed", error);
+      });
+      for (const id of rolloutIds) state.hiddenRollouts.delete(id);
       state.capabilities.delete(runId);
       state.cancelled.delete(runId);
     },

@@ -163,7 +163,11 @@ export async function handleAgenticRunResume(runId: string): Promise<Response> {
 
 export async function handleAgenticRunCancel(runId: string): Promise<Response> {
   try {
-    return Response.json({ ok: true, run: agenticRuntime().cancelRun(runId) });
+    const result = await agenticRuntime().cancelRun(runId);
+    return Response.json(
+      { ok: true, ...result },
+      { status: result.cancellationPending ? 202 : 200 },
+    );
   } catch (error) {
     return jsonError(errorMessage(error, "Failed to cancel the run."), 500);
   }
@@ -183,7 +187,7 @@ export async function handleAgenticRunArchive(request: Request, runId: string): 
 
 export async function handleAgenticRunDelete(runId: string): Promise<Response> {
   try {
-    agenticRuntime().deleteRun(runId);
+    await agenticRuntime().deleteRun(runId);
     return Response.json({ ok: true });
   } catch (error) {
     return jsonError(errorMessage(error, "Failed to delete the Run."), 409);
@@ -192,10 +196,16 @@ export async function handleAgenticRunDelete(runId: string): Promise<Response> {
 
 const MAX_ARTIFACT_SLICE = 200_000;
 
-export async function handleAgenticArtifact(request: Request, artifactId: string): Promise<Response> {
+export async function handleAgenticArtifact(
+  request: Request,
+  artifactId: string,
+): Promise<Response> {
   const params = new URL(request.url).searchParams;
   const offset = Math.max(0, Number(params.get("offset") ?? 0) || 0);
-  const length = Math.min(MAX_ARTIFACT_SLICE, Math.max(1, Number(params.get("length") ?? 4_000) || 4_000));
+  const length = Math.min(
+    MAX_ARTIFACT_SLICE,
+    Math.max(1, Number(params.get("length") ?? 4_000) || 4_000),
+  );
   try {
     const content = agenticRuntime().readArtifact(artifactId, offset, length);
     if (content === null) return jsonError("Unknown artifact.", 404);
