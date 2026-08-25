@@ -109,7 +109,10 @@ export function createAgenticControlExtension(getSessionId: () => string | null)
         type: "object",
         required: ["goal", "tasks"],
         properties: {
-          goal: { type: "string", description: "What the owner asked for, in one or two sentences" },
+          goal: {
+            type: "string",
+            description: "What the owner asked for, in one or two sentences",
+          },
           tasks: { type: "array", items: TASK_ITEM },
           agents: { type: "array", items: AGENT_ITEM },
         },
@@ -119,8 +122,9 @@ export function createAgenticControlExtension(getSessionId: () => string | null)
         if (!host) return text("The durable runtime is unavailable; continue without a run.");
         const sessionId = getSessionId();
         if (!sessionId) return text("This session has no id yet; continue without a run.");
+        const piSessionId = ctx.sessionManager.getSessionId() ?? null;
 
-        const existing = host.activeRunForSession(sessionId);
+        const existing = host.activeRunForSession(sessionId, piSessionId);
         if (existing) {
           return text(
             `This conversation is already driving run ${existing.id}. Use revise_agentic_plan to change the plan.`,
@@ -128,7 +132,8 @@ export function createAgenticControlExtension(getSessionId: () => string | null)
         }
 
         const validated = validateProposal(params);
-        if (!validated.ok) return text(`The plan was rejected: ${validated.reason}. Propose a corrected plan.`);
+        if (!validated.ok)
+          return text(`The plan was rejected: ${validated.reason}. Propose a corrected plan.`);
 
         const modelId = ctx.model?.id;
         if (!modelId) return text("No model is selected; continue without a run.");
@@ -137,7 +142,7 @@ export function createAgenticControlExtension(getSessionId: () => string | null)
           plan: validated,
           modelId,
           sessionId,
-          piSessionId: ctx.sessionManager.getSessionId() ?? null,
+          piSessionId,
           cwd: ctx.cwd,
         });
         const lines = started.tasks.map(
@@ -160,7 +165,8 @@ export function createAgenticControlExtension(getSessionId: () => string | null)
       label: "Revise the plan",
       description:
         "Replace the plan of the run this conversation is driving. Use this when what you learned means the current plan cannot work — split a task, add a diagnostic step, reorder dependencies. Tasks carried across by the same title keep their status and evidence.",
-      promptSnippet: "revise_agentic_plan — replace the current run's plan when the approach must change",
+      promptSnippet:
+        "revise_agentic_plan — replace the current run's plan when the approach must change",
       parameters: schema({
         type: "object",
         required: ["reason", "tasks"],
@@ -170,18 +176,29 @@ export function createAgenticControlExtension(getSessionId: () => string | null)
           agents: { type: "array", items: AGENT_ITEM },
         },
       }),
-      async execute(_id, params) {
+      async execute(_id, params, _signal, _onUpdate, ctx) {
         const host = agenticControlHost();
         const sessionId = getSessionId();
-        const run = host && sessionId ? host.activeRunForSession(sessionId) : null;
+        const run =
+          host && sessionId
+            ? host.activeRunForSession(sessionId, ctx.sessionManager.getSessionId() ?? null)
+            : null;
         if (!host || !run) return text("This conversation is not driving a run.");
 
         const record = (params ?? {}) as Record<string, unknown>;
-        const validated = validateProposal({ goal: run.goal, tasks: record.tasks, agents: record.agents });
+        const validated = validateProposal({
+          goal: run.goal,
+          tasks: record.tasks,
+          agents: record.agents,
+        });
         if (!validated.ok) return text(`The revision was rejected: ${validated.reason}.`);
 
         const reason = typeof record.reason === "string" ? record.reason.trim() : "";
-        const revised = host.revisePlan({ runId: run.id, reason: reason || "the approach changed", plan: validated });
+        const revised = host.revisePlan({
+          runId: run.id,
+          reason: reason || "the approach changed",
+          plan: validated,
+        });
         return text(
           [
             `Plan revised to revision ${revised.run.planRevision}.`,
@@ -218,10 +235,13 @@ export function createAgenticControlExtension(getSessionId: () => string | null)
           needsUser: { type: "string", description: "A question only the owner can answer" },
         },
       }),
-      async execute(_id, params) {
+      async execute(_id, params, _signal, _onUpdate, ctx) {
         const host = agenticControlHost();
         const sessionId = getSessionId();
-        const run = host && sessionId ? host.activeRunForSession(sessionId) : null;
+        const run =
+          host && sessionId
+            ? host.activeRunForSession(sessionId, ctx.sessionManager.getSessionId() ?? null)
+            : null;
         if (!host || !run) return text("This conversation is not driving a run.");
 
         const record = (params ?? {}) as Record<string, unknown>;
@@ -229,7 +249,8 @@ export function createAgenticControlExtension(getSessionId: () => string | null)
         if (!taskId) return text("taskId is required.");
 
         const validated = validateProgress(record);
-        if ("ok" in validated && validated.ok === false) return text(`Rejected: ${validated.reason}`);
+        if ("ok" in validated && validated.ok === false)
+          return text(`Rejected: ${validated.reason}`);
 
         const outcome = host.reportProgress({
           runId: run.id,

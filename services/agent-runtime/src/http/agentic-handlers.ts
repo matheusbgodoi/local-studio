@@ -98,6 +98,22 @@ export async function handleAgenticRunsList(): Promise<Response> {
   }
 }
 
+export async function handleAgenticCurrentRun(request: Request): Promise<Response> {
+  const params = new URL(request.url).searchParams;
+  const sessionId = asString(params.get("sessionId"));
+  const piSessionId = asString(params.get("piSessionId"));
+  if (!sessionId && !piSessionId) {
+    return jsonError("sessionId or piSessionId is required.");
+  }
+  try {
+    return Response.json({
+      run: agenticRuntime().currentRunForConversation(sessionId, piSessionId || null),
+    });
+  } catch (error) {
+    return jsonError(errorMessage(error, "Failed to resolve the conversation Run."), 500);
+  }
+}
+
 export async function handleAgenticRunGet(runId: string): Promise<Response> {
   try {
     return Response.json(agenticRuntime().snapshot(runId));

@@ -16,7 +16,7 @@ import type { AgenticStore } from "./store";
 export type AgenticControlHost = {
   store: AgenticStore;
   /** The Run this chat session is currently driving, if any. */
-  activeRunForSession: (sessionId: string) => AgenticRun | null;
+  activeRunForSession: (sessionId: string, piSessionId?: string | null) => AgenticRun | null;
   /** Commit a validated plan and start driving it. */
   startRun: (input: {
     plan: ValidatedPlan;
@@ -25,12 +25,16 @@ export type AgenticControlHost = {
     piSessionId: string | null;
     cwd: string;
   }) => Promise<{ run: AgenticRun; tasks: AgenticTask[]; agentNames: string[] }>;
-  revisePlan: (input: {
+  revisePlan: (input: { runId: string; reason: string; plan: ValidatedPlan }) => {
+    run: AgenticRun;
+    tasks: AgenticTask[];
+    agentNames: string[];
+  };
+  reportProgress: (input: {
     runId: string;
-    reason: string;
-    plan: ValidatedPlan;
-  }) => { run: AgenticRun; tasks: AgenticTask[]; agentNames: string[] };
-  reportProgress: (input: { runId: string; taskId: string; report: ProgressReport }) => ProgressOutcome;
+    taskId: string;
+    report: ProgressReport;
+  }) => ProgressOutcome;
   readArtifact: (artifactId: string, offset: number, length: number) => string | null;
   capabilityForRun: (run: AgenticRun) => AgenticCapability;
 };

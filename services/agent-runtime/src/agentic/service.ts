@@ -354,9 +354,21 @@ export function agenticRuntime() {
   //
   const chatSessionOf = (sessionId: string): string => sessionId.split("#")[0] ?? sessionId;
 
-  const activeRunForSession = (sessionId: string): AgenticRun | null => {
-    const chat = chatSessionOf(sessionId);
-    return state.store.listUnfinishedRuns().find((run) => run.sessionId === chat) ?? null;
+  const currentRunForConversation = (
+    sessionId: string,
+    piSessionId: string | null = null,
+  ): AgenticRun | null =>
+    state.store.currentRunForConversation({
+      sessionId: chatSessionOf(sessionId),
+      piSessionId,
+    });
+
+  const activeRunForSession = (
+    sessionId: string,
+    piSessionId: string | null = null,
+  ): AgenticRun | null => {
+    const run = currentRunForConversation(sessionId, piSessionId);
+    return run && !FINAL_TERMINAL.has(run.status) ? run : null;
   };
 
   //
@@ -412,6 +424,7 @@ export function agenticRuntime() {
     service: state.service,
     resolveCapability,
     activeRunForSession,
+    currentRunForConversation,
     listRuns: (): AgenticRun[] => state.store.listRuns(),
     snapshot: (runId: string): AgenticRunSnapshot => state.service.snapshot(runId),
     startRun: async (input: Omit<StartRunInput, "capability"> & { modelId: string }) => {
