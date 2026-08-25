@@ -132,6 +132,7 @@ function processKey(process: ProcessInfo | null | undefined): string {
     process.port,
     process.served_model_name ?? "",
     process.model_path ?? "",
+    process.started_at ?? "unknown-start",
   ].join("|");
 }
 

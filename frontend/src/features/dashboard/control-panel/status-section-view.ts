@@ -90,8 +90,14 @@ export function resolveStatusSectionView({
   const isRunning = Boolean(currentProcess);
   const perf = resolvePerformanceMetrics(metrics, gpus);
   const performanceObservedAt = firstMeasured(metrics?.performance_observed_at_ms) ?? 0;
-  const performanceFresh =
-    performanceObservedAt > 0 && Date.now() - performanceObservedAt <= PERFORMANCE_FRESHNESS_MS;
+  const performanceIdentityMatches = matchesPerformanceEpoch(
+    metrics,
+    physicalModelId,
+    currentProcess?.started_at,
+    performanceObservedAt,
+  );
+  const performanceFresh = isFreshPerformance(performanceObservedAt, performanceIdentityMatches);
+  const performanceSample = resolvePerformanceSample(metrics, perf, performanceIdentityMatches);
   return {
     backend: currentProcess?.backend,
     compactMetrics: compactMetricViews(perf),
@@ -102,12 +108,7 @@ export function resolveStatusSectionView({
     modelName: resolveModelName(currentProcess, currentRecipe, modelDisplayName),
     sampleInput: {
       key: resolveProcessSampleKey(currentProcess, currentRecipe, physicalModelId),
-      generation: perf.genTps,
-      generationPeak: peakFor(metrics, "generation") ?? perf.genTps,
-      prefill: perf.prefillTps,
-      prefillPeak: peakFor(metrics, "prefill") ?? perf.prefillTps,
-      ttft: perf.observedTtftMs,
-      ttftPeak: peakFor(metrics, "ttft") ?? perf.ttftMs,
+      ...performanceSample,
       requests: perf.sessions,
       requestPeak: perf.peakReq ?? perf.sessions,
       queued: perf.queued,
@@ -119,8 +120,53 @@ export function resolveStatusSectionView({
       powerWatts: perf.totalPower,
       temperatureC: perf.temperatureC,
       active: isRunning,
-      performanceObservedAt,
+      performanceObservedAt: performanceIdentityMatches ? performanceObservedAt : 0,
     },
+  };
+}
+
+function matchesPerformanceEpoch(
+  metrics: Metrics | null,
+  physicalModelId: string | null | undefined,
+  processStartedAt: string | null | undefined,
+  observedAt: number,
+) {
+  if (observedAt <= 0) return true;
+  if (!metrics?.performance_model_id || !physicalModelId || !processStartedAt) return false;
+  const startedAt = Date.parse(processStartedAt);
+  return (
+    Number.isFinite(startedAt) &&
+    metrics.performance_model_id === physicalModelId &&
+    observedAt >= startedAt
+  );
+}
+
+function isFreshPerformance(observedAt: number, identityMatches: boolean) {
+  return identityMatches && observedAt > 0 && Date.now() - observedAt <= PERFORMANCE_FRESHNESS_MS;
+}
+
+function resolvePerformanceSample(
+  metrics: Metrics | null,
+  perf: ReturnType<typeof resolvePerformanceMetrics>,
+  identityMatches: boolean,
+) {
+  if (!identityMatches) {
+    return {
+      generation: null,
+      generationPeak: null,
+      prefill: null,
+      prefillPeak: null,
+      ttft: null,
+      ttftPeak: null,
+    };
+  }
+  return {
+    generation: perf.genTps,
+    generationPeak: peakFor(metrics, "generation") ?? perf.genTps,
+    prefill: perf.prefillTps,
+    prefillPeak: peakFor(metrics, "prefill") ?? perf.prefillTps,
+    ttft: perf.observedTtftMs,
+    ttftPeak: peakFor(metrics, "ttft") ?? perf.ttftMs,
   };
 }
 
@@ -131,7 +177,7 @@ function resolveProcessSampleKey(
 ): string {
   const modelKey = physicalModelId ?? resolveModelSampleKey(currentProcess, currentRecipe);
   if (!currentProcess) return `${modelKey}::idle`;
-  return `${modelKey}::${currentProcess.pid}|${currentProcess.backend}|${currentProcess.port}`;
+  return `${modelKey}::${currentProcess.pid}|${currentProcess.backend}|${currentProcess.port}|${currentProcess.started_at ?? "unknown-start"}`;
 }
 
 function resolveModelName(
@@ -195,24 +241,25 @@ function metricColumnViews(
   perf: ReturnType<typeof resolvePerformanceMetrics>,
   performanceFresh: boolean,
 ): MetricColumnView[] {
+  const peak = (kind: PeakKind) => (performanceFresh ? peakDetailFor(metrics, kind) : {});
   return [
     {
       label: "Decode",
       value: metricValue(performanceFresh ? perf.genTps : null, 1),
       unit: "tok/s",
-      ...peakDetailFor(metrics, "generation"),
+      ...peak("generation"),
     },
     {
       label: "TTFT",
       value: metricValue(performanceFresh ? perf.ttftMs : null, 0),
       unit: "ms",
-      ...peakDetailFor(metrics, "ttft"),
+      ...peak("ttft"),
     },
     {
       label: "Prefill",
       value: metricValue(performanceFresh ? perf.prefillTps : null, 1),
       unit: "t/s",
-      ...peakDetailFor(metrics, "prefill"),
+      ...peak("prefill"),
     },
   ];
 }

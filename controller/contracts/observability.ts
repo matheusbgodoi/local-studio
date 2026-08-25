@@ -33,6 +33,7 @@ export interface Metrics {
   avg_ttft_ms?: number;
   observed_ttft_ms?: number;
   performance_observed_at_ms?: number;
+  performance_model_id?: string | null;
   kv_cache_usage?: number;
   generation_throughput?: number;
   prompt_throughput?: number;
@@ -128,6 +129,7 @@ export interface ProcessInfo {
   model_path: string | null;
   port: number;
   served_model_name?: string | null;
+  started_at?: string | null;
 }
 
 export interface LogSession {
