@@ -460,7 +460,8 @@ export async function refreshPiModels(
     requestedControllers && requestedControllers.length > 0
       ? requestedControllers
       : await loadPersistedControllers(agentDir);
-  const controllers = mergeControllers(settings, persisted);
+  const ownerControllers = settings.controllers.length > 0 ? settings.controllers : persisted;
+  const controllers = mergeControllers(settings, ownerControllers);
   await savePersistedControllers(agentDir, controllers);
   // A dead controller must not hide signed-in cloud providers: collect the
   // failure and only surface it when nothing else can serve models.

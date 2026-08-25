@@ -30,6 +30,7 @@ import {
 import { getUpdateState, initializeAutoUpdates, startUpdate } from "./logic/update-manager";
 import { addProject, listProjectsWithMeta, removeProject } from "./logic/projects-store";
 import { deployController } from "./logic/controller-deploy";
+import { migrateControllerCredentials } from "./logic/controller-credential-migration";
 import {
   getKittylitterPairingJson,
   normalizeKittylitterPairingJson,
@@ -92,6 +93,7 @@ async function processMemorySummary(): Promise<string> {
 
 async function bootstrap(): Promise<void> {
   if (!frontendServer) {
+    migrateControllerCredentials(app.getPath("userData"));
     frontendServer = await startFrontendServer({ onExit: handleFrontendServerExit });
     registerNavigationPolicy(new URL(frontendServer.runtime.url).origin);
     startFrontendHealthMonitor();
@@ -499,6 +501,7 @@ function registerIpcHandlers(): void {
           typeof entry[0] === "string" && typeof entry[1] === "string",
       ),
     );
+    delete stringPrefs["local-studio.controllers"];
     writeUiPreferencesFile(stringPrefs);
   });
 
@@ -780,12 +783,14 @@ function readUiPreferencesFile(): Record<string, string> {
     const raw = readFileSync(filePath, "utf8");
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    return Object.fromEntries(
+    const preferences = Object.fromEntries(
       Object.entries(parsed as Record<string, unknown>).filter(
         (entry): entry is [string, string] =>
           typeof entry[0] === "string" && typeof entry[1] === "string",
       ),
     );
+    delete preferences["local-studio.controllers"];
+    return preferences;
   } catch {
     return {};
   }

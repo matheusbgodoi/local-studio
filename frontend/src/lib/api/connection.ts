@@ -3,7 +3,7 @@
  * browser-stored backend URL) and how we authenticate against it (API key).
  */
 import { pickFirstNonEmpty } from "@shared/agent/backend-url";
-import { getControllerApiKey, normalizeControllerUrl } from "./controllers";
+import { normalizeControllerUrl } from "./controllers";
 
 // --- Env-derived defaults ---
 
@@ -132,11 +132,6 @@ let runtimeApiKey = "";
  */
 export function getApiKey(): string {
   if (runtimeApiKey) return runtimeApiKey;
-
-  if (typeof window !== "undefined") {
-    return getControllerApiKey(getStoredBackendUrl());
-  }
-
   return process.env.LOCAL_STUDIO_API_KEY?.trim() || "";
 }
 

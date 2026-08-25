@@ -5,9 +5,7 @@ import { Effect, Fiber, Schedule } from "effect";
 import { createApiClient } from "@/lib/api/create-api-client";
 import {
   BACKEND_URL_CHANGED_EVENT,
-  clearApiKey,
   getStoredBackendUrl,
-  setApiKey,
   setStoredBackendUrl,
 } from "@/lib/api/connection";
 import {
@@ -180,7 +178,6 @@ async function pollController(
     baseUrl: "/api/proxy",
     useProxy: true,
     backendUrlOverride: controller.url,
-    apiKeyOverride: controller.apiKey,
   });
   try {
     const status = await api.getStatus(POLL_REQUEST);
@@ -254,16 +251,11 @@ export function useControllerMatrixStore(): ControllerMatrixSnapshot {
 }
 
 export function activateController(controller: ControllerSnapshot): void {
-  // Clear when the target has no key — runtimeApiKey is a process-global, so a
-  // leftover key from the previous controller would otherwise be sent to this
-  // controller's (different) host.
-  if (controller.apiKey) setApiKey(controller.apiKey);
-  else clearApiKey();
   setStoredBackendUrl(controller.url);
   reload();
   void fetch("/api/settings", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ backendUrl: controller.url, apiKey: controller.apiKey || "" }),
+    body: JSON.stringify({ activateControllerUrl: controller.url }),
   });
 }
