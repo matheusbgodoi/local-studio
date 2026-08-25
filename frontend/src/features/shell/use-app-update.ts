@@ -16,6 +16,8 @@ export type AppUpdateStatus =
 export type AppUpdate = {
   currentVersion: string | null;
   releaseChannel: "dev" | "stable" | null;
+  distribution: "owner-fork" | null;
+  updatePolicy: "manual-merge" | "owner-feed" | null;
   latestVersion: string | null;
   updateAvailable: boolean;
   phase: AppUpdatePhase;
@@ -84,6 +86,8 @@ function snapshotProgress(snapshot: { progress?: number; message?: string }): nu
 export function useAppUpdate(): AppUpdate {
   const [currentVersion, setCurrentVersion] = useState<string | null>(null);
   const [releaseChannel, setReleaseChannel] = useState<"dev" | "stable" | null>(null);
+  const [distribution, setDistribution] = useState<"owner-fork" | null>(null);
+  const [updatePolicy, setUpdatePolicy] = useState<"manual-merge" | "owner-feed" | null>(null);
   const [latestVersion, setLatestVersion] = useState<string | null>(null);
   const [phase, setPhase] = useState<AppUpdatePhase>("idle");
   const [status, setStatus] = useState<AppUpdateStatus>("idle");
@@ -128,6 +132,8 @@ export function useAppUpdate(): AppUpdate {
         if (!cancelled && runtime.packaged) {
           setCurrentVersion(runtime.appVersion);
           setReleaseChannel(runtime.releaseChannel);
+          setDistribution(runtime.distribution);
+          setUpdatePolicy(runtime.updatePolicy);
         }
       })
       .catch(() => undefined);
@@ -138,7 +144,9 @@ export function useAppUpdate(): AppUpdate {
     };
   }, [syncDesktopPhase]);
 
-  const updateAvailable = isReleaseUpdateAvailable(latestVersion, currentVersion, releaseChannel);
+  const updateAvailable =
+    updatePolicy === "owner-feed" &&
+    isReleaseUpdateAvailable(latestVersion, currentVersion, releaseChannel);
 
   const startUpdate = useCallback(() => {
     const desktop = bridge();
@@ -160,6 +168,8 @@ export function useAppUpdate(): AppUpdate {
   return {
     currentVersion,
     releaseChannel,
+    distribution,
+    updatePolicy,
     latestVersion,
     updateAvailable,
     phase,

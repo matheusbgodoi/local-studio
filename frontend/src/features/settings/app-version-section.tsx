@@ -8,21 +8,26 @@ import { useAppUpdate } from "@/features/shell/use-app-update";
 export function AppVersionSection() {
   const update = useAppUpdate();
   const devChannel = update.releaseChannel === "dev";
+  const manualMerge = update.updatePolicy === "manual-merge";
   const progress = update.progress === null ? null : Math.round(update.progress);
   const onLatest = update.currentVersion && update.latestVersion && !update.updateAvailable;
   const description = devChannel
     ? "Dev builds update through the local installer."
-    : update.updateAvailable
-      ? update.phase === "ready"
-        ? `v${update.latestVersion} is downloaded — restart to finish updating.`
-        : update.status === "downloading"
-          ? `Downloading v${update.latestVersion}${progress === null ? "." : ` — ${progress}%.`}`
-          : `v${update.latestVersion} is available on GitHub.`
-      : onLatest
-        ? "You are on the latest version."
-        : update.latestVersion
-          ? `Latest release: v${update.latestVersion}.`
-          : "Release check unavailable.";
+    : manualMerge
+      ? update.latestVersion
+        ? `Customized owner build. Upstream v${update.latestVersion} is reference-only; updates are merged and rebuilt.`
+        : "Customized owner build. Updates are merged into the owner fork and rebuilt."
+      : update.updateAvailable
+        ? update.phase === "ready"
+          ? `v${update.latestVersion} is downloaded — restart to finish updating.`
+          : update.status === "downloading"
+            ? `Downloading v${update.latestVersion}${progress === null ? "." : ` — ${progress}%.`}`
+            : `v${update.latestVersion} is available on GitHub.`
+        : onLatest
+          ? "You are on the latest version."
+          : update.latestVersion
+            ? `Latest release: v${update.latestVersion}.`
+            : "Release check unavailable.";
   return (
     <SettingsGroup title="Application" description="Version and updates.">
       <SettingsRow

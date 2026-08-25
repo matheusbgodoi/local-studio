@@ -8,6 +8,8 @@ interface Window {
       platform: string;
       packaged: boolean;
       releaseChannel: "dev" | "stable";
+      distribution: "owner-fork";
+      updatePolicy: "manual-merge" | "owner-feed";
     }>;
     getUpdateStatus?(): Promise<{
       status: string;

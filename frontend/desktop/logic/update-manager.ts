@@ -40,7 +40,7 @@ function resolveFeedUrl(): string | null {
   return raw.replace(/\/+$/, "");
 }
 
-function ensureFeedConfigured(): { ok: true; url: string } {
+function ensureFeedConfigured(): { ok: true; url: string } | { ok: false } {
   const feedUrl = resolveFeedUrl();
   if (feedUrl) {
     autoUpdater.setFeedURL({
@@ -50,16 +50,7 @@ function ensureFeedConfigured(): { ok: true; url: string } {
     });
     return { ok: true, url: feedUrl };
   }
-
-  // Default feed: the public GitHub releases, which ship latest-mac.yml plus
-  // signed zip/dmg assets. electron-updater verifies the download's code
-  // signature against the running app before installing.
-  autoUpdater.setFeedURL({
-    provider: "github",
-    owner: "sybil-solutions",
-    repo: "local-studio",
-  });
-  return { ok: true, url: "github:sybil-solutions/local-studio" };
+  return { ok: false };
 }
 
 export function getUpdateState(): DesktopUpdateSnapshot {
@@ -67,18 +58,11 @@ export function getUpdateState(): DesktopUpdateSnapshot {
 }
 
 function installDownloadedUpdate(): void {
-  // Refuses on principle: replacing this binary with an upstream artefact would
-  // discard the fork's changes. See initializeAutoUpdates.
-  log.warn(
-    "[update] Refusing to install an upstream artefact over the owner-fork build. " +
-      "Upgrade by merging upstream into matheusbgodoi/local-studio and rebuilding " +
-      "(docs/upstream-updates.md).",
-  );
-  setUpdateState({
-    status: "error",
-    message:
-      "This is a customized build. Upgrade by merging upstream into the fork and rebuilding.",
-  });
+  if (!resolveFeedUrl()) {
+    setUpdateState({ status: "idle", message: "Owner build updates through merge and rebuild" });
+    return;
+  }
+  autoUpdater.quitAndInstall(false, true);
 }
 
 export async function checkForUpdates(force = false): Promise<DesktopUpdateSnapshot> {
@@ -89,6 +73,15 @@ export async function checkForUpdates(force = false): Promise<DesktopUpdateSnaps
     } satisfies DesktopUpdateSnapshot;
     setUpdateState(disabledState);
     return disabledState;
+  }
+
+  if (!resolveFeedUrl()) {
+    const ownerState = {
+      status: "idle",
+      message: "Customized owner build — upstream releases require merge and rebuild",
+    } satisfies DesktopUpdateSnapshot;
+    setUpdateState(ownerState);
+    return ownerState;
   }
 
   // Dev-channel builds install via the dev mirror, never the stable releases —
@@ -103,7 +96,8 @@ export async function checkForUpdates(force = false): Promise<DesktopUpdateSnaps
     return devChannelState;
   }
 
-  ensureFeedConfigured();
+  const feed = ensureFeedConfigured();
+  if (!feed.ok) return latestUpdateState;
 
   if (!app.isPackaged && !force) {
     const devState = {
@@ -166,7 +160,17 @@ export function initializeAutoUpdates(): void {
     return;
   }
 
+  if (!resolveFeedUrl()) {
+    setUpdateState({
+      status: "idle",
+      message: "Customized owner build — update by merging upstream and rebuilding",
+    });
+    log.info("[update] Owner build without an explicit feed; automatic updates disabled");
+    return;
+  }
+
   const feed = ensureFeedConfigured();
+  if (!feed.ok) return;
   log.info(`[update] Feed: ${feed.url}`);
 
   // OWNER FORK BUILD - this app is built from matheusbgodoi/local-studio and

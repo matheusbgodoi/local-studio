@@ -283,6 +283,8 @@ function registerIpcHandlers(): void {
     appVersion: app.getVersion(),
     packaged: app.isPackaged,
     releaseChannel: isDevChannelBuild ? "dev" : "stable",
+    distribution: "owner-fork",
+    updatePolicy: process.env.LOCAL_STUDIO_UPDATE_URL?.trim() ? "owner-feed" : "manual-merge",
     chromeVersion: process.versions.chrome,
     electronVersion: process.versions.electron,
   }));

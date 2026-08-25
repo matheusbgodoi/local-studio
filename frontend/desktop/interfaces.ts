@@ -138,6 +138,8 @@ export interface DesktopBridge {
     appVersion: string;
     packaged: boolean;
     releaseChannel: "dev" | "stable";
+    distribution: "owner-fork";
+    updatePolicy: "manual-merge" | "owner-feed";
     chromeVersion: string;
     electronVersion: string;
   }>;

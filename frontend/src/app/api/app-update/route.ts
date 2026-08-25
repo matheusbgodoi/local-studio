@@ -8,7 +8,6 @@ export const dynamic = "force-dynamic";
 // assets, so "what is the newest version" is one small fetch with no GitHub
 // API rate limits. The stable-name DMG below always points at that release.
 const RELEASE_BASE = "https://github.com/sybil-solutions/local-studio/releases/latest/download";
-const LATEST_DMG_URL = `${RELEASE_BASE}/Local-Studio-arm64.dmg`;
 
 const CACHE_MS = 10 * 60 * 1000;
 let cached: { at: number; latest: string | null } | null = null;
@@ -30,5 +29,5 @@ export async function GET(request: NextRequest) {
     }
     cached = { at: Date.now(), latest };
   }
-  return Response.json({ latest: cached.latest, downloadUrl: LATEST_DMG_URL });
+  return Response.json({ latest: cached.latest, kind: "upstream-reference" });
 }
