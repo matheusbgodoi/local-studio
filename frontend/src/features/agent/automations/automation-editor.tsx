@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Button, Checkbox, FormField, Input, Select, Textarea } from "@/ui";
 import { Clock, Plug, Pause, Play, Plus, Trash2, X } from "@/ui/icon-registry";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
@@ -77,11 +77,16 @@ export function AutomationEditor({
     automation ? draftFromAutomation(automation) : NEW_AUTOMATION_DRAFT,
   );
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const modelGroups = useMemo(() => groupAutomationModels(models), [models]);
+  const selectedModelGroup = modelGroups.find((group) =>
+    group.profiles.some((profile) => profile.id === draft.modelId),
+  );
+  const canSave = draftIsValid(draft) && Boolean(selectedModelGroup);
 
   useMountSubscription(() => {
-    if (draft.modelId || models.length === 0) return;
-    setDraft((current) => ({ ...current, modelId: models[0]?.id ?? "" }));
-  }, [draft.modelId, models]);
+    if (draft.modelId || modelGroups.length === 0) return;
+    setDraft((current) => ({ ...current, modelId: modelGroups[0]?.primary.id ?? "" }));
+  }, [draft.modelId, modelGroups]);
 
   const updateSchedule = (schedule: AutomationSchedule) => {
     setDraft((current) => ({ ...current, schedule }));
@@ -106,7 +111,7 @@ export function AutomationEditor({
         className="min-h-0 flex-1 overflow-y-auto"
         onSubmit={(event) => {
           event.preventDefault();
-          if (draftIsValid(draft) && !busy) onSave(draft);
+          if (canSave && !busy) onSave(draft);
         }}
       >
         <div className="mx-auto w-full max-w-2xl space-y-5 px-5 py-5 sm:px-7">
@@ -160,19 +165,42 @@ export function AutomationEditor({
           <div className="grid gap-4 border-t border-(--ui-separator) pt-5 sm:grid-cols-2">
             <FormField label="Model" required>
               <Select
-                value={draft.modelId}
-                onChange={(event) =>
-                  setDraft((current) => ({ ...current, modelId: event.target.value }))
-                }
+                value={selectedModelGroup?.physicalModelId ?? ""}
+                onChange={(event) => {
+                  const group = modelGroups.find(
+                    (candidate) => candidate.physicalModelId === event.target.value,
+                  );
+                  setDraft((current) => ({ ...current, modelId: group?.primary.id ?? "" }));
+                }}
               >
-                {models.length === 0 ? <option value="">No models available</option> : null}
-                {models.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.name}
+                {!selectedModelGroup ? (
+                  <option value="">
+                    {modelGroups.length === 0 ? "No models available" : "Select a model"}
+                  </option>
+                ) : null}
+                {modelGroups.map((group) => (
+                  <option key={group.physicalModelId} value={group.physicalModelId}>
+                    {group.displayName}
                   </option>
                 ))}
               </Select>
             </FormField>
+            {selectedModelGroup && selectedModelGroup.profiles.length > 1 ? (
+              <FormField label="Behavior">
+                <Select
+                  value={draft.modelId}
+                  onChange={(event) =>
+                    setDraft((current) => ({ ...current, modelId: event.target.value }))
+                  }
+                >
+                  {selectedModelGroup.profiles.map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.behaviorProfileLabel ?? "Default"}
+                    </option>
+                  ))}
+                </Select>
+              </FormField>
+            ) : null}
             <FormField
               label="Working directory"
               description="Optional. Leave empty to use the Local Studio default."
@@ -205,7 +233,7 @@ export function AutomationEditor({
             action={action}
             busy={busy}
             running={running}
-            canSave={draftIsValid(draft)}
+            canSave={canSave}
             confirmDelete={confirmDelete}
             onConfirmDelete={() => setConfirmDelete(true)}
             onCancelDelete={() => setConfirmDelete(false)}
@@ -215,6 +243,32 @@ export function AutomationEditor({
       </form>
     </section>
   );
+}
+
+type AutomationModelGroup = {
+  physicalModelId: string;
+  displayName: string;
+  profiles: AutomationModel[];
+  primary: AutomationModel;
+};
+
+function groupAutomationModels(models: readonly AutomationModel[]): AutomationModelGroup[] {
+  const profilesByModel = new Map<string, AutomationModel[]>();
+  for (const model of models) {
+    const key = model.physicalModelId?.trim() || model.id;
+    profilesByModel.set(key, [...(profilesByModel.get(key) ?? []), model]);
+  }
+  return [...profilesByModel.entries()].map(([physicalModelId, profiles]) => {
+    const primary = profiles.find((profile) => profile.behaviorProfileDefault) ?? profiles[0];
+    return {
+      physicalModelId,
+      displayName:
+        profiles.find((profile) => profile.displayName?.trim())?.displayName ??
+        "Model identity unavailable",
+      profiles,
+      primary,
+    };
+  });
 }
 
 function RequiredConnections({

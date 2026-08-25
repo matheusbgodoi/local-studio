@@ -244,7 +244,6 @@ function ChatTranscript({
 type Props = {
   paneId: string;
   modelId: string;
-  modelName: string | null;
   modelSupportsVision: boolean;
   modelThinkingLevels: readonly AgentThinkingLevel[];
   modelsLoading: boolean;
@@ -291,7 +290,6 @@ function renderComposerModelSelector(
 export function ChatPane({
   paneId,
   modelId,
-  modelName,
   modelSupportsVision,
   modelThinkingLevels,
   modelsLoading,

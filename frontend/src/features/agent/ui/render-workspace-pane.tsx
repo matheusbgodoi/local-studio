@@ -171,7 +171,6 @@ const WorkspacePane = memo(function WorkspacePane({
     <ChatPane
       paneId={view.paneId}
       modelId={view.modelId}
-      modelName={view.model?.name ?? view.modelId ?? null}
       modelSupportsVision={view.model?.vision ?? false}
       modelThinkingLevels={view.model?.thinkingLevels ?? ["off"]}
       modelsLoading={modelsLoading}

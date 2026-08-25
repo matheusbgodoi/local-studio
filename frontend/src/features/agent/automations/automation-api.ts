@@ -13,6 +13,11 @@ import {
 const AgentModelSchema = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
+  physicalModelId: Schema.optional(Schema.String),
+  displayName: Schema.optional(Schema.String),
+  behaviorProfile: Schema.optional(Schema.String),
+  behaviorProfileLabel: Schema.optional(Schema.String),
+  behaviorProfileDefault: Schema.optional(Schema.Boolean),
 });
 
 const AgentModelsResponseSchema = Schema.Struct({

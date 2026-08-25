@@ -109,7 +109,7 @@ export function AgentModelPicker({
     [visible.visibleModels],
   );
   const disabled = loading;
-  const modelLabel = modelTriggerLabel(selection, selectedModel, visible.controllerModels.length);
+  const modelLabel = modelTriggerLabel(selection, visible.controllerModels.length);
   // ONE TURN LOCK, TWO LISTS. `reasoningDisabled` is Boolean(running) at the call
   // site, and the Behavior list freezes with it. No longer because picking a
   // profile moves the reasoning level — the pick now states that the checkpoint is
@@ -162,7 +162,7 @@ export function AgentModelPicker({
     >
       <ModelPickerTrigger
         label={triggerLabel}
-        title={active?.name || triggerLabel}
+        title={triggerLabel}
         disabled={disabled}
         open={open}
         notRunning={selectedModelNotRunning}
@@ -594,7 +594,7 @@ function ModelOption({
 }) {
   // The label the shared layer computed. Recomputing it here is how the popover
   // root came to read "qwen-daily" over a list reading "Qwen3.8-27B".
-  const label = physical.displayName;
+  const label = officialPhysicalLabel(physical) ?? "Model identity unavailable";
   const selected = ownsProfile(physical, selectedModel);
   const targetId = resolveProfileId(physical, selectedModel, defaultModel);
   return (
@@ -662,8 +662,8 @@ function DefaultModelPin({
   // differ in exactly the way that matters.
   const nameOf = (profile: AgentModel) =>
     multiProfile
-      ? `${physical.displayName} · ${behaviorProfileLabel(profile)}`
-      : physical.displayName;
+      ? `${officialPhysicalLabel(physical) ?? "Model"} · ${behaviorProfileLabel(profile)}`
+      : (officialPhysicalLabel(physical) ?? "Model");
   const current = physical.profiles.find((profile) => profile.id === defaultModel);
   return (
     <button
@@ -700,17 +700,21 @@ function handleMenuKeyDown(
 
 /** ONE LABEL. The trigger names the physical model with the very string the
  *  Model list renders, so the two halves of the same popover cannot disagree. */
-function modelTriggerLabel(
-  selection: ModelSelection,
-  selectedModel: string,
-  modelCount: number,
-): string {
-  const fallbackLabel = selectedModel || (modelCount === 0 ? "No models" : "model");
-  return selection.label || selection.active?.rawId || selection.active?.name || fallbackLabel;
+function modelTriggerLabel(selection: ModelSelection, modelCount: number): string {
+  return selection.label ?? (modelCount === 0 ? "No models" : "Model identity unavailable");
 }
 
 function behaviorProfileLabel(model: AgentModel): string {
-  return model.behaviorProfileLabel || model.behaviorProfile || model.rawId || model.name;
+  return (
+    model.behaviorProfileLabel?.trim() ||
+    (model.behaviorProfileDefault ? "Standard" : "Alternate behavior")
+  );
+}
+
+function officialPhysicalLabel(physical: PhysicalModel): string | undefined {
+  return physical.profiles
+    .map((profile) => profile.displayName?.trim())
+    .find((label): label is string => Boolean(label));
 }
 
 function resolveModelSelection(models: AgentModel[], selectedModel: string): ModelSelection {
@@ -720,7 +724,7 @@ function resolveModelSelection(models: AgentModel[], selectedModel: string): Mod
   const multiProfile = (physical?.profiles.length ?? 0) > 1;
   return {
     active,
-    label: physical?.displayName,
+    label: physical ? officialPhysicalLabel(physical) : undefined,
     profiles: multiProfile && physical ? physical.profiles : [],
     behaviorLabel: multiProfile && active ? behaviorProfileLabel(active) : undefined,
   };
@@ -738,11 +742,13 @@ function groupModelsByController(models: AgentModel[]): ModelGroup[] {
     if (existing) existing.models.push(model);
     else groups.set(key, { key, name: model.controllerName ?? "local", models: [model] });
   }
-  return [...groups.values()].map((group) => ({
-    key: group.key,
-    name: group.name,
-    physicalModels: groupByPhysicalModel(group.models),
-  }));
+  return [...groups.values()]
+    .map((group) => ({
+      key: group.key,
+      name: group.name,
+      physicalModels: groupByPhysicalModel(group.models).filter(officialPhysicalLabel),
+    }))
+    .filter((group) => group.physicalModels.length > 0);
 }
 
 function stopToolbarEvent(event: MouseEvent | PointerEvent) {

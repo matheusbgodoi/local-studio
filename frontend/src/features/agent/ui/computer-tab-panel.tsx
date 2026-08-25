@@ -132,7 +132,6 @@ function SideChatTab({
       <ChatPane
         paneId="computer-side-chat"
         modelId={modelId}
-        modelName={selectedModel?.name ?? modelId}
         modelSupportsVision={selectedModel?.vision ?? false}
         modelThinkingLevels={selectedModel?.thinkingLevels ?? ["off"]}
         modelsLoading={modelsLoading}
