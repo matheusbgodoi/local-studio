@@ -22,6 +22,7 @@ import type {
   AgenticInferenceSession,
   AgenticTurnUsage,
 } from "./scheduler-session";
+import type { InferenceActivityObserver } from "./inference-activity";
 
 const FALLBACK_CONTEXT_WINDOW = 8_192;
 
@@ -32,6 +33,7 @@ export type PiAgenticSessionInput = {
   piSessionId: string | null;
   fallbackContextWindow: number;
   startOptions?: RuntimeStartOptions;
+  inferenceObserver?: InferenceActivityObserver;
 };
 
 export function createPiAgenticSession(input: PiAgenticSessionInput): AgenticInferenceSession {
@@ -121,6 +123,7 @@ export function createPiAgenticSession(input: PiAgenticSessionInput): AgenticInf
       await session.prompt(text, () => undefined, {
         source: "rpc",
         inferencePriority: "background",
+        inferenceObserver: input.inferenceObserver,
       });
       await captureUsage();
     },
@@ -129,7 +132,7 @@ export function createPiAgenticSession(input: PiAgenticSessionInput): AgenticInf
     },
     compact: async (instructions: string): Promise<void> => {
       await ensureStarted();
-      await session.compact(instructions);
+      await session.compact(instructions, input.inferenceObserver);
     },
     lastAssistantText: (): string => {
       const status = session.status;

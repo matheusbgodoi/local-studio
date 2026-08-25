@@ -199,9 +199,16 @@ function RunInlineBody({ snapshot }: { snapshot: AgenticRunSnapshot }) {
   const [expanded, setExpanded] = useState(false);
   const { run, tasks, agents, events } = snapshot;
   const done = tasks.filter((task) => task.status === "SUCCEEDED").length;
-  const agent = agents.find((entry) => entry.status === "WORKING") ?? agents[0];
-  const latest = events[events.length - 1];
   const active = tasks.find((task) => task.id === run.activeTaskId) ?? null;
+  const activeAgent = active?.agentId
+    ? agents.find((entry) => entry.id === active.agentId)
+    : undefined;
+  const agent =
+    activeAgent ??
+    agents.find((entry) => entry.status === "COMPACTING") ??
+    agents.find((entry) => entry.status === "WORKING") ??
+    agents[0];
+  const latest = events[events.length - 1];
   //
   // Collapsed, it keeps whatever is actually happening rather than the first N
   // in plan order: the active task, the ones still to come, and enough finished

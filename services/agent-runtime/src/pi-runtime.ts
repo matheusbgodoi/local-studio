@@ -720,8 +720,11 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     this.promptAbortControllers.add(controller);
     return Effect.tryPromise({
       try: () =>
-        withInferenceContext(priority, controller.signal, () =>
-          this.promptSession(message, options),
+        withInferenceContext(
+          priority,
+          controller.signal,
+          () => this.promptSession(message, options),
+          options.inferenceObserver,
         ),
       catch: (error) => error,
     }).pipe(
@@ -770,7 +773,12 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
       Effect.andThen(
         Effect.tryPromise({
           try: () =>
-            withInferenceContext(priority, signal, () => this.promptSession(message, options)),
+            withInferenceContext(
+              priority,
+              signal,
+              () => this.promptSession(message, options),
+              options.inferenceObserver,
+            ),
           catch: (error) => error,
         }),
       ),
@@ -833,18 +841,27 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     if (next && !this.currentPiSessionId) this.currentPiSessionId = next;
   }
 
-  compact(customInstructions?: string): Promise<unknown> {
-    return Effect.runPromise(this.compactEffect(customInstructions));
+  compact(
+    customInstructions?: string,
+    inferenceObserver?: import("./agentic/inference-activity").InferenceActivityObserver,
+  ): Promise<unknown> {
+    return Effect.runPromise(this.compactEffect(customInstructions, inferenceObserver));
   }
 
-  private compactEffect(customInstructions?: string): Effect.Effect<unknown, unknown> {
+  private compactEffect(
+    customInstructions?: string,
+    inferenceObserver?: import("./agentic/inference-activity").InferenceActivityObserver,
+  ): Effect.Effect<unknown, unknown> {
     if (this.activePromptCount > 0) {
       return Effect.fail(new Error("Cannot compact while the agent is running."));
     }
     return Effect.tryPromise({
       try: () =>
-        withInferenceContext("background", undefined, () =>
-          Promise.resolve(this.requireSession().compact(customInstructions)),
+        withInferenceContext(
+          "background",
+          undefined,
+          () => Promise.resolve(this.requireSession().compact(customInstructions)),
+          inferenceObserver,
         ),
       catch: (error) => error,
     });
@@ -885,6 +902,9 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
       // Queue restoration belongs to interactive Stop; durable cancel only needs idle confirmation.
     }
     return (async () => {
+      try {
+        session.abortCompaction();
+      } catch {}
       try {
         await session.abort();
       } catch {

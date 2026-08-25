@@ -20,6 +20,11 @@ import {
 } from "./context-budget";
 import type { AgenticAgent, AgenticRun, AgenticRunSnapshot } from "./contract";
 import { createPiAgenticSession } from "./pi-session-adapter";
+import {
+  createInferenceActivityRegistry,
+  type InferenceActivityObserver,
+  type InferenceActivityRegistry,
+} from "./inference-activity";
 import { settleDriveFailure } from "./recovery";
 import { createAgenticRunService, type StartRunInput } from "./run-service";
 import { setAgenticControlHost } from "./control-host";
@@ -69,6 +74,7 @@ type RuntimeState = {
   cancelled: Set<string>;
   capabilities: Map<string, AgenticCapability>;
   hiddenRollouts: Set<string>;
+  inferenceActivity: InferenceActivityRegistry;
 };
 
 //
@@ -86,13 +92,18 @@ const piSessionFor = (run: AgenticRun, agent: AgenticAgent | null) =>
     agent ? agent.piSessionId : run.piSessionId,
   ).session;
 
-const sessionFor = (run: AgenticRun, agent: AgenticAgent | null) =>
+const sessionFor = (
+  run: AgenticRun,
+  agent: AgenticAgent | null,
+  inferenceObserver?: InferenceActivityObserver,
+) =>
   createPiAgenticSession({
     session: piSessionFor(run, agent),
     modelId: run.modelId,
     cwd: run.cwd,
     piSessionId: agent ? agent.piSessionId : run.piSessionId,
     fallbackContextWindow: run.contextWindow,
+    inferenceObserver,
   });
 
 const ROLLOUT_TITLE_CHARS = 72;
@@ -115,6 +126,7 @@ function createRuntime(): RuntimeState {
   const capabilities = new Map<string, AgenticCapability>();
   const hiddenRollouts = new Set<string>();
   const cancelled = new Set<string>();
+  const inferenceActivity = createInferenceActivityRegistry();
 
   const capabilityFor = (run: AgenticRun): AgenticCapability => {
     const cached = capabilities.get(run.id);
@@ -126,7 +138,12 @@ function createRuntime(): RuntimeState {
 
   const service = createAgenticRunService({
     store,
-    session: sessionFor,
+    session: (run, agent) =>
+      sessionFor(
+        run,
+        agent,
+        agent ? inferenceActivity.observer(run.id, agent.id) : undefined,
+      ),
     capabilityFor,
     budgetPolicy: agenticBudgetPolicy(),
     isCancelled: (runId) => cancelled.has(runId),
@@ -152,6 +169,7 @@ function createRuntime(): RuntimeState {
     cancelled,
     capabilities,
     hiddenRollouts,
+    inferenceActivity,
   };
 }
 
@@ -426,7 +444,13 @@ export function agenticRuntime() {
     activeRunForSession,
     currentRunForConversation,
     listRuns: (): AgenticRun[] => state.store.listRuns(),
-    snapshot: (runId: string): AgenticRunSnapshot => state.service.snapshot(runId),
+    snapshot: (runId: string): AgenticRunSnapshot => {
+      const snapshot = state.service.snapshot(runId);
+      return {
+        ...snapshot,
+        inferenceActivity: state.inferenceActivity.snapshot(snapshot.run, snapshot.agents),
+      };
+    },
     startRun: async (input: Omit<StartRunInput, "capability"> & { modelId: string }) => {
       const capability = await resolveCapability(input.modelId);
       const run = state.service.createRun({ ...input, capability });
@@ -529,6 +553,7 @@ export function agenticRuntime() {
         }
         state.store.deleteRun(runId);
         state.service.forgetRun(runId, taskIds);
+        state.inferenceActivity.clearRun(runId);
       } catch (error) {
         for (const item of quarantined.reverse()) {
           if (existsSync(item.quarantine)) renameSync(item.quarantine, item.source);

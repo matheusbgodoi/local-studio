@@ -182,6 +182,7 @@ export function createAgenticRunService(options: AgenticRunServiceOptions) {
       events: store.listEvents(runId),
       checkpoints: store.listCheckpoints(runId),
       artifacts: store.listArtifacts(runId),
+      inferenceActivity: [],
     };
   };
 

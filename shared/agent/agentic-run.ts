@@ -58,11 +58,14 @@ export const AGENTIC_OPERATION_STATUSES = [
   "UNKNOWN",
 ] as const;
 
+export const AGENT_INFERENCE_PHASES = ["QUEUED_FOR_INFERENCE", "GENERATING"] as const;
+
 export const AgenticRunStatusSchema = Schema.Literals(AGENTIC_RUN_STATUSES);
 export const AgenticTaskStatusSchema = Schema.Literals(AGENTIC_TASK_STATUSES);
 export const AgenticAgentStatusSchema = Schema.Literals(AGENTIC_AGENT_STATUSES);
 export const AgenticAttemptStatusSchema = Schema.Literals(AGENTIC_ATTEMPT_STATUSES);
 export const AgenticOperationStatusSchema = Schema.Literals(AGENTIC_OPERATION_STATUSES);
+export const AgentInferencePhaseSchema = Schema.Literals(AGENT_INFERENCE_PHASES);
 
 const nullableString = Schema.NullOr(Schema.String);
 
@@ -212,6 +215,12 @@ export const AgenticEventSchema = Schema.Struct({
   createdAtMs: Schema.Number,
 });
 
+export const AgentInferenceActivitySchema = Schema.Struct({
+  agentId: Schema.String,
+  phase: AgentInferencePhaseSchema,
+  sinceMs: Schema.Number,
+});
+
 export const AgenticRunSnapshotSchema = Schema.Struct({
   run: AgenticRunSchema,
   tasks: Schema.Array(AgenticTaskSchema),
@@ -219,6 +228,7 @@ export const AgenticRunSnapshotSchema = Schema.Struct({
   events: Schema.Array(AgenticEventSchema),
   checkpoints: Schema.Array(AgenticCheckpointSchema),
   artifacts: Schema.Array(AgenticArtifactSchema),
+  inferenceActivity: Schema.Array(AgentInferenceActivitySchema),
 });
 
 export const AgenticRunsResponseSchema = Schema.Struct({ runs: Schema.Array(AgenticRunSchema) });
@@ -235,6 +245,7 @@ export type AgenticTaskStatus = (typeof AGENTIC_TASK_STATUSES)[number];
 export type AgenticAgentStatus = (typeof AGENTIC_AGENT_STATUSES)[number];
 export type AgenticAttemptStatus = (typeof AGENTIC_ATTEMPT_STATUSES)[number];
 export type AgenticOperationStatus = (typeof AGENTIC_OPERATION_STATUSES)[number];
+export type AgentInferencePhase = (typeof AGENT_INFERENCE_PHASES)[number];
 export type AcceptanceCriterion = typeof AcceptanceCriterionSchema.Type;
 export type AgenticRun = typeof AgenticRunSchema.Type;
 export type AgenticTask = typeof AgenticTaskSchema.Type;
@@ -243,4 +254,5 @@ export type AgenticWorkingSet = typeof AgenticWorkingSetSchema.Type;
 export type AgenticCheckpoint = typeof AgenticCheckpointSchema.Type;
 export type AgenticArtifact = typeof AgenticArtifactSchema.Type;
 export type AgenticEvent = typeof AgenticEventSchema.Type;
+export type AgentInferenceActivity = typeof AgentInferenceActivitySchema.Type;
 export type AgenticRunSnapshot = typeof AgenticRunSnapshotSchema.Type;

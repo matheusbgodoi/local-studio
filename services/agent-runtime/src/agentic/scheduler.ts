@@ -224,6 +224,15 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     const rendered = renderWorkingSet(workingSet);
     const required = workingSetTokens(workingSet);
     const target = resolvePostCompactionTarget(budget, required);
+    const compactingAgent = task ? agentForTask(run.id, task) : null;
+
+    if (compactingAgent) {
+      store.updateAgent(compactingAgent.id, {
+        status: "COMPACTING",
+        currentTaskId: task?.id ?? null,
+        lastHeartbeatMs: store.now(),
+      });
+    }
 
     store.appendEvent({
       runId: run.id,
@@ -249,7 +258,19 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
         type: "COMPACTION_REFUSED",
         summary: message,
       });
+      if (compactingAgent) {
+        store.updateAgent(compactingAgent.id, {
+          status: "WORKING",
+          lastHeartbeatMs: store.now(),
+        });
+      }
       return { prompt: rendered, effective: false, recorded: false };
+    }
+    if (compactingAgent) {
+      store.updateAgent(compactingAgent.id, {
+        status: "WORKING",
+        lastHeartbeatMs: store.now(),
+      });
     }
     const checkpoint = store.recordCheckpoint({
       runId: run.id,

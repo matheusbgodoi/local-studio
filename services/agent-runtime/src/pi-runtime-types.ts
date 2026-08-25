@@ -2,6 +2,7 @@ import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { AgentImageInput } from "../../../shared/agent/agent-image-input";
 import type { AgentQueueAction } from "../../../shared/agent/agent-turn";
 import type { RuntimeStartOptions } from "./pi-runtime-helpers";
+import type { InferenceActivityObserver } from "./agentic/inference-activity";
 
 // Pi event surface seen by the rest of the app. Upstream consumers
 // (`sessions/engine.ts`, `pane-controller.ts`, etc.) duck-type on string event
@@ -26,6 +27,7 @@ export type PiPromptOptions = {
   inferencePriority?: "interactive" | "background";
   preflightResult?: (success: boolean) => void;
   restartOnContinuationError?: boolean;
+  inferenceObserver?: InferenceActivityObserver;
 };
 
 /** Outcome of applying a personal-MCP selection to one agent session. */
@@ -101,7 +103,10 @@ export interface PiAgentSession {
   abort(): Promise<{ steering: string[]; followUp: string[] }>;
   /** Abort for durable runtime cancellation. Rejects unless the session is confirmed idle. */
   abortStrict(): Promise<void>;
-  compact(customInstructions?: string): Promise<unknown>;
+  compact(
+    customInstructions?: string,
+    inferenceObserver?: InferenceActivityObserver,
+  ): Promise<unknown>;
   /** Activate/deactivate personal MCP connectors for this session only. Never
    *  restarts the runtime and never writes connectors.json. */
   setConnectorSelection(connectorIds: string[]): Promise<ConnectorSelectionResult>;
