@@ -13,7 +13,7 @@ import {
   runtimeOptionsFor,
 } from "@/features/recipes/serve-runtime-options";
 
-const PIPELINE_STEPS = ["Get", "Runtime", "Configure", "Serve"];
+const PIPELINE_STEPS = ["Get", "Runtime", "Configure", "Launch"];
 
 function ServePipelineRail({ recipe }: { recipe: RecipeEditor }) {
   const completed = recipe.model_path ? (recipe.runtime?.ref ? 2 : 1) : 0;
@@ -86,9 +86,9 @@ export function RecipeModalTabGeneral({
 
       <FormSection icon={<Cpu className="h-4 w-4" />} title="Runtime">
         <FormField
-          label="How this Serve runs"
+          label="How this profile runs"
           required
-          description="This choice is stored on the Serve and is the runtime used at launch."
+          description="This choice is stored with the profile and used whenever it launches."
         >
           <Select
             value={selected.id}
@@ -135,7 +135,7 @@ export function RecipeModalTabGeneral({
         {runtimeInstallMessage ? <Alert variant="info">{runtimeInstallMessage}</Alert> : null}
       </FormSection>
 
-      <FormSection icon={<Info className="h-4 w-4" />} title="Serve Identity">
+      <FormSection icon={<Info className="h-4 w-4" />} title="Profile identity">
         <FormField label="Name" required>
           <Input
             value={recipe.name ?? ""}
@@ -207,7 +207,7 @@ export function RecipeModalTabGeneral({
 
         <div className="flex items-center gap-2 rounded-md border border-(--ui-separator) bg-(--ui-bg) px-3 py-2 text-[length:var(--fs-xs)] text-(--ui-muted)">
           <Rocket className="h-3.5 w-3.5 text-(--ui-info)" />
-          Save this Serve, then launch it from the Serves tab with the same runtime and settings.
+          Save this profile, then launch it from Launch profiles with the same runtime and settings.
         </div>
       </FormSection>
     </div>

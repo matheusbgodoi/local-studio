@@ -76,7 +76,7 @@ export async function refreshServedModels(): Promise<void> {
         physicalModels: lastKnown ?? [],
         loading: false,
         stale: lastKnown !== undefined,
-        error: cause instanceof Error ? cause.message : "Served models could not be read",
+        error: cause instanceof Error ? cause.message : "Available models could not be read",
         controllerKey: key,
       });
       scheduleRetry();

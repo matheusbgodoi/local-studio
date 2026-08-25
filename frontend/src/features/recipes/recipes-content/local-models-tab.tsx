@@ -129,8 +129,8 @@ export function LocalModelsTab() {
       </ModelSection>
 
       <ModelSection
-        title="Served models"
-        description="Every alias this backend serves, grouped by the checkpoint behind it."
+        title="Available models"
+        description="The model identities available here, grouped by the checkpoint behind them."
         actions={
           <div className="flex items-center gap-2.5">
             <ModelStatus tone={served.tone}>{served.label}</ModelStatus>

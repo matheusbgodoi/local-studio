@@ -207,7 +207,7 @@ function ConfigurePageForController({ controllerKey }: { controllerKey: string }
                   recipesCapability === "supported"
                     ? "Models · serving recipes"
                     : recipesCapability === "unsupported"
-                      ? "Served model inventory"
+                      ? "Available model inventory"
                       : "Capabilities not reported"
                 }
                 onOpen={() => window.location.assign("/models")}

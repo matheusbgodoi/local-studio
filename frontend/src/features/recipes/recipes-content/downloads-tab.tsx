@@ -33,7 +33,7 @@ export function downloadCompletedText(
 export function DownloadsTab({
   onCreateServe,
 }: {
-  onCreateServe: (download: ModelDownload) => void;
+  onCreateServe?: (download: ModelDownload) => void;
 }) {
   const { downloads, error, unsupported, pauseDownload, resumeDownload, cancelDownload } =
     useDownloads();
@@ -113,10 +113,10 @@ export function DownloadsTab({
                       <X className="h-3 w-3" />
                     </ModelButton>
                   ) : null}
-                  {download.status === "completed" ? (
+                  {download.status === "completed" && onCreateServe ? (
                     <ModelButton tone="primary" onClick={() => onCreateServe(download)}>
                       <Plus className="h-3 w-3" />
-                      Create Serve
+                      Create launch profile
                     </ModelButton>
                   ) : null}
                 </>
