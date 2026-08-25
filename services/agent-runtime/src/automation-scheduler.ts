@@ -145,6 +145,7 @@ export async function runAutomationNow(id: string): Promise<Automation | null> {
     );
   } finally {
     await session?.stop().catch(() => undefined);
+    if (session) piRuntimeManager.releaseSession(runtimeSessionId, session);
     scheduler.running.delete(id);
   }
 }

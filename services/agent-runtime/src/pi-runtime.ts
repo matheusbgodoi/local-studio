@@ -1131,6 +1131,11 @@ class PiRuntimeManager {
   listSessions(): Array<{ sessionId: string; session: PiAgentSession }> {
     return [...this.sessions.entries()].map(([sessionId, session]) => ({ sessionId, session }));
   }
+
+  releaseSession(sessionId: string, session: PiAgentSession): boolean {
+    if (this.sessions.get(sessionId) !== session || session.status.running) return false;
+    return this.sessions.delete(sessionId);
+  }
 }
 
 export const piRuntimeManager = getGlobalSingleton(
