@@ -55,15 +55,26 @@ export function DictationShortcutSettings() {
   const save = (mode: DictationShortcutMode, hotkey: string) => {
     const api = bridge();
     if (!api) return;
-    void api.set({ mode, hotkey }).then((result) => {
-      setState(result);
-      if (result.ok) {
-        setError("");
-        setSaved(true);
-      } else {
-        setError(result.error ?? result.reason ?? "Could not activate the shortcut");
-      }
-    });
+    setSaved(false);
+    setError("");
+    void api
+      .set({ mode, hotkey })
+      .then((result) => {
+        setState(result);
+        if (result.ok) {
+          setSaved(true);
+        } else {
+          setError(result.error ?? result.reason ?? "Could not activate the shortcut");
+        }
+      })
+      .catch((cause: unknown) => {
+        setSaved(false);
+        setError(
+          cause instanceof Error
+            ? `Dictation shortcut was not changed: ${cause.message}`
+            : "Dictation shortcut was not changed. Reopen Settings and try again.",
+        );
+      });
   };
 
   useMountSubscription(() => {

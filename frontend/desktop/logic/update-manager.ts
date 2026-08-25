@@ -16,9 +16,25 @@ function setUpdateState(nextState: DesktopUpdateSnapshot): void {
 
 function setUpdateError(error: unknown): void {
   installIntent.clear();
-  const message = String(error);
+  const message = redactUrlDetails(String(error));
   setUpdateState({ status: "error", message });
   log.error(`Auto update error: ${message}`);
+}
+
+function redactUrlDetails(message: string): string {
+  return message.replace(/https?:\/\/[^\s"'<>]+/gi, (candidate) => {
+    try {
+      const parsed = new URL(candidate);
+      return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+    } catch {
+      return "[update URL]";
+    }
+  });
+}
+
+function feedLogLabel(feedUrl: string): string {
+  const parsed = new URL(feedUrl);
+  return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
 }
 
 export function resolveFeedUrl(): string | null {
@@ -29,15 +45,21 @@ export function resolveFeedUrl(): string | null {
   // (local testing of an update server).
   try {
     const parsed = new URL(raw);
+    if (parsed.username || parsed.password) {
+      log.warn("[update] Ignoring update feed containing embedded credentials");
+      return null;
+    }
     if (parsed.protocol !== "https:" && !isLoopbackHttpUrl(raw)) {
       log.warn(`[update] Ignoring non-https update feed: ${parsed.protocol}//${parsed.host}`);
       return null;
     }
+    parsed.hash = "";
+    parsed.pathname = parsed.pathname.replace(/\/+$/, "");
+    return parsed.toString();
   } catch {
     log.warn("[update] Ignoring malformed LOCAL_STUDIO_UPDATE_URL");
     return null;
   }
-  return raw.replace(/\/+$/, "");
 }
 
 export function resolveUpdatePolicy(): "manual-merge" | "owner-feed" {
@@ -126,7 +148,7 @@ export async function checkForUpdates(force = false): Promise<DesktopUpdateSnaps
   } catch (error) {
     const errorState = {
       status: "error",
-      message: String(error),
+      message: redactUrlDetails(String(error)),
     } satisfies DesktopUpdateSnapshot;
     setUpdateState(errorState);
     return errorState;
@@ -184,7 +206,7 @@ export function initializeAutoUpdates(): void {
 
   const feed = ensureFeedConfigured();
   if (!feed.ok) return;
-  log.info(`[update] Feed: ${feed.url}`);
+  log.info(`[update] Feed: ${feedLogLabel(feed.url)}`);
 
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
@@ -232,7 +254,7 @@ export function initializeAutoUpdates(): void {
   if (app.isPackaged) {
     setTimeout(() => {
       void checkForUpdates().catch((error) => {
-        log.error(`Background update check failed: ${String(error)}`);
+        log.error(`Background update check failed: ${redactUrlDetails(String(error))}`);
       });
     }, 4_000);
   }
