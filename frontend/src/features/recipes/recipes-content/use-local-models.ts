@@ -1,16 +1,9 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
-import api from "@/lib/api/client";
-import {
-  groupByPhysicalModel,
-  normalizeOpenAIModels,
-  type AgentModel,
-  type OpenAIModelListItem,
-  type PhysicalModel,
-} from "@/features/agent/models";
-import { useMountSubscription } from "@/hooks/use-mount-subscription";
+import { useMemo } from "react";
+import { type AgentModel, type PhysicalModel } from "@/features/agent/models";
 import { useRealtimeStatusStore } from "@/hooks/realtime-status-store";
+import { refreshServedModels, useServedModels } from "@/hooks/served-models-store";
 import { toGBFromMB } from "@/lib/formatters";
 import type { GPU } from "@/lib/types";
 
@@ -86,30 +79,8 @@ function buildCard(physical: PhysicalModel, residentAlias: string | null): Local
 }
 
 export function useLocalModels() {
-  const [physicalModels, setPhysicalModels] = useState<PhysicalModel[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { physicalModels, loading, error } = useServedModels();
   const { status, statusLoading, gpus, connected } = useRealtimeStatusStore();
-
-  const refresh = useCallback(async () => {
-    // `loading` goes back up here, not only down in the `finally`. Without this the Refresh
-    // button was inert from the first paint on: it never disabled and never spun, so repeated
-    // clicks fired concurrent requests at a 30 s timeout with three retries each.
-    setLoading(true);
-    try {
-      const payload = await api.getOpenAIModels();
-      setPhysicalModels(groupByPhysicalModel(normalizeOpenAIModels(payload)));
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Served models could not be read");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useMountSubscription(() => {
-    void refresh();
-  }, [refresh]);
 
   const residentAlias = status?.process?.served_model_name?.trim() || null;
 
@@ -131,6 +102,6 @@ export function useLocalModels() {
     statusKnown: !statusLoading,
     residentAlias,
     pool,
-    refresh,
+    refresh: refreshServedModels,
   };
 }

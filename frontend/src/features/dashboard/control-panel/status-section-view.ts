@@ -61,6 +61,7 @@ const PEAK_DISPLAY: Record<PeakKind, { digits: number; suffix: string; label: st
 type StatusSectionViewInput = {
   currentProcess: ProcessInfo | null;
   currentRecipe: RecipeWithStatus | null;
+  modelDisplayName?: string | null;
   gpus: GPU[];
   inferencePort?: number;
   metrics: Metrics | null;
@@ -70,6 +71,7 @@ type StatusSectionViewInput = {
 export function resolveStatusSectionView({
   currentProcess,
   currentRecipe,
+  modelDisplayName,
   gpus,
   inferencePort,
   metrics,
@@ -84,7 +86,7 @@ export function resolveStatusSectionView({
     displayPort: inferencePort || currentProcess?.port || undefined,
     isRunning,
     metricColumns: metricColumnViews(metrics, perf),
-    modelName: resolveModelName(currentProcess, currentRecipe),
+    modelName: resolveModelName(currentProcess, currentRecipe, modelDisplayName),
     sampleInput: {
       key: resolveModelSampleKey(currentProcess, currentRecipe),
       generation: perf.genTps ?? 0,
@@ -103,8 +105,10 @@ export function resolveStatusSectionView({
 function resolveModelName(
   currentProcess: ProcessInfo | null,
   currentRecipe: RecipeWithStatus | null,
+  modelDisplayName?: string | null,
 ): string {
   return (
+    modelDisplayName ||
     currentRecipe?.name ||
     currentProcess?.served_model_name ||
     currentProcess?.model_path?.split("/").pop() ||

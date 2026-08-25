@@ -85,6 +85,7 @@ export function LocalModelsTab() {
     useLocalModels();
   const served = servedSummary(loading, error, cards.length);
   const link = connection(statusKnown, connected);
+  const residentDisplayName = cards.find((card) => card.resident)?.displayName ?? residentAlias;
 
   return (
     <div className="space-y-6">
@@ -106,8 +107,10 @@ export function LocalModelsTab() {
         ) : null}
         <ModelRow
           label="Resident model"
-          description="The alias currently loaded into the inference process."
-          value={residentAlias ? <ModelValue mono>{residentAlias}</ModelValue> : undefined}
+          description="The model currently held in VRAM."
+          value={
+            residentDisplayName ? <ModelValue mono>{residentDisplayName}</ModelValue> : undefined
+          }
           status={
             <ModelStatus tone={residentAlias ? "good" : "default"}>
               {residentAlias ? "loaded" : "idle"}
