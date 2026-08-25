@@ -67,7 +67,13 @@ function LocalModelRow({ card }: { card: LocalModelCard }) {
 
 type ServedSummary = { tone: ModelStatusTone; label: string; empty: string };
 
-function servedSummary(loading: boolean, error: string | null, count: number): ServedSummary {
+function servedSummary(
+  loading: boolean,
+  stale: boolean,
+  error: string | null,
+  count: number,
+): ServedSummary {
+  if (stale && count > 0) return { tone: "warning", label: "cached", empty: "" };
   if (error) return { tone: "danger", label: "error", empty: error };
   if (loading) return { tone: "info", label: "loading", empty: "Waiting for the backend…" };
   if (count === 0) return { tone: "default", label: "empty", empty: "Nothing served" };
@@ -82,9 +88,9 @@ function connection(statusKnown: boolean, connected: boolean): ServedSummary {
 }
 
 export function LocalModelsTab() {
-  const { cards, loading, error, connected, statusKnown, residentAlias, pool, refresh } =
+  const { cards, loading, stale, error, connected, statusKnown, residentAlias, pool, refresh } =
     useLocalModels();
-  const served = servedSummary(loading, error, cards.length);
+  const served = servedSummary(loading, stale, error, cards.length);
   const link = connection(statusKnown, connected);
   const residentDisplayName = cards.find((card) => card.resident)?.displayName ?? residentAlias;
 
@@ -136,7 +142,11 @@ export function LocalModelsTab() {
         {error ? (
           <ModelRow
             label="The served model list could not be read"
-            description="This is the one route the page depends on, so nothing below is current."
+            description={
+              stale
+                ? "The last list from this controller remains visible below."
+                : "No served model list is available for this controller."
+            }
             value={<ModelValue dim>{error}</ModelValue>}
             status={<ModelStatus tone="danger">error</ModelStatus>}
           />

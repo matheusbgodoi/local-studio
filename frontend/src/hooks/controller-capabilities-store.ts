@@ -9,11 +9,13 @@ import {
   type ControllerFeatures,
 } from "@local-studio/contracts/capabilities";
 import api from "@/lib/api/client";
-import { BACKEND_URL_CHANGED_EVENT } from "@/lib/api/connection";
-import { useMountSubscription } from "@/hooks/use-mount-subscription";
+import { BACKEND_URL_CHANGED_EVENT, getStoredBackendUrl } from "@/lib/api/connection";
 
 type CapabilitiesSnapshot = {
   loading: boolean;
+  stale: boolean;
+  error: string | null;
+  controllerKey: string;
   capabilities: ControllerCapabilities;
 };
 
@@ -50,11 +52,29 @@ const endpoints: Record<Exclude<keyof ControllerFeatures, "lifecycle">, string> 
 };
 
 let snapshot: CapabilitiesSnapshot = {
-  loading: false,
+  loading: true,
+  stale: false,
+  error: null,
+  controllerKey: "default",
   capabilities: unknownCapabilities(),
 };
-let inFlight: Promise<void> | null = null;
+let inFlight: { key: string; promise: Promise<void> } | null = null;
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+let generation = 0;
 const listeners = new Set<() => void>();
+const knownByController = new Map<string, ControllerCapabilities>();
+
+function currentControllerKey(): string {
+  return getStoredBackendUrl() || "default";
+}
+
+function scheduleRetry(): void {
+  if (retryTimer || listeners.size === 0) return;
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    void refreshControllerCapabilities();
+  }, 3_000);
+}
 
 const emit = (next: CapabilitiesSnapshot): void => {
   snapshot = next;
@@ -82,7 +102,7 @@ const probeLegacyController = async (): Promise<ControllerCapabilities> => {
   >;
   const features: ControllerFeatures = {
     ...probed,
-    lifecycle: probed.recipes,
+    lifecycle: "unknown",
   };
   return {
     schemaVersion: 1,
@@ -93,40 +113,99 @@ const probeLegacyController = async (): Promise<ControllerCapabilities> => {
 };
 
 export const refreshControllerCapabilities = (): Promise<void> => {
-  if (inFlight) return inFlight;
-  emit({ ...snapshot, loading: true });
-  inFlight = (async () => {
+  const key = currentControllerKey();
+  if (inFlight?.key === key) return inFlight.promise;
+  const requestGeneration = ++generation;
+  const cached = knownByController.get(key);
+  emit({
+    loading: true,
+    stale: cached !== undefined,
+    error: null,
+    controllerKey: key,
+    capabilities: cached ?? unknownCapabilities(),
+  });
+  const promise = (async () => {
     try {
       const declared = await api.getControllerCapabilities({ timeout: 3_000, retries: 0 });
+      if (requestGeneration !== generation || key !== currentControllerKey()) return;
+      const capabilities = Schema.decodeUnknownSync(ControllerCapabilitiesSchema)(declared);
+      knownByController.set(key, capabilities);
       emit({
         loading: false,
-        capabilities: Schema.decodeUnknownSync(ControllerCapabilitiesSchema)(declared),
+        stale: false,
+        error: null,
+        controllerKey: key,
+        capabilities,
       });
-    } catch {
-      emit({ loading: false, capabilities: await probeLegacyController() });
+    } catch (cause) {
+      let capabilities: ControllerCapabilities;
+      try {
+        capabilities = await probeLegacyController();
+      } catch {
+        capabilities = unknownCapabilities();
+      }
+      if (requestGeneration !== generation || key !== currentControllerKey()) return;
+      const hasKnownFeature = Object.values(capabilities.features).some(
+        (feature) => feature !== "unknown",
+      );
+      if (hasKnownFeature) knownByController.set(key, capabilities);
+      const lastKnown = knownByController.get(key);
+      emit({
+        loading: false,
+        stale: !hasKnownFeature && lastKnown !== undefined,
+        error: hasKnownFeature
+          ? null
+          : cause instanceof Error
+            ? cause.message
+            : "Controller capabilities are unavailable",
+        controllerKey: key,
+        capabilities: hasKnownFeature ? capabilities : (lastKnown ?? capabilities),
+      });
+      if (!hasKnownFeature) scheduleRetry();
     }
   })().finally(() => {
-    inFlight = null;
+    if (inFlight?.promise === promise) inFlight = null;
   });
-  return inFlight;
+  inFlight = { key, promise };
+  return promise;
 };
 
 export const useControllerCapabilities = (): CapabilitiesSnapshot => {
-  useMountSubscription(() => {
-    void refreshControllerCapabilities();
-    const reset = () => {
-      emit({ loading: false, capabilities: unknownCapabilities() });
-      void refreshControllerCapabilities();
-    };
-    window.addEventListener(BACKEND_URL_CHANGED_EVENT, reset);
-    return () => window.removeEventListener(BACKEND_URL_CHANGED_EVENT, reset);
-  }, []);
   return useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe,
     () => snapshot,
     () => snapshot,
   );
 };
+
+function resetForController(): void {
+  generation += 1;
+  inFlight = null;
+  if (retryTimer) clearTimeout(retryTimer);
+  retryTimer = null;
+  const key = currentControllerKey();
+  const cached = knownByController.get(key);
+  emit({
+    loading: true,
+    stale: cached !== undefined,
+    error: null,
+    controllerKey: key,
+    capabilities: cached ?? unknownCapabilities(),
+  });
+  if (listeners.size > 0) void refreshControllerCapabilities();
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  if (listeners.size === 1) {
+    window.addEventListener(BACKEND_URL_CHANGED_EVENT, resetForController);
+    void refreshControllerCapabilities();
+  }
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size > 0) return;
+    window.removeEventListener(BACKEND_URL_CHANGED_EVENT, resetForController);
+    if (retryTimer) clearTimeout(retryTimer);
+    retryTimer = null;
+  };
+}

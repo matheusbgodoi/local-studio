@@ -77,7 +77,7 @@ function buildCard(physical: PhysicalModel, residentAlias: string | null): Local
 }
 
 export function useLocalModels() {
-  const { physicalModels, loading, error } = useServedModels();
+  const { physicalModels, loading, stale, error } = useServedModels();
   const { status, statusLoading, gpus, connected } = useRealtimeStatusStore();
 
   const residentAlias = status?.process?.served_model_name?.trim() || null;
@@ -92,6 +92,7 @@ export function useLocalModels() {
   return {
     cards,
     loading,
+    stale,
     error,
     connected,
     // "not connected" and "we have not asked yet" are different states, and the store starts
