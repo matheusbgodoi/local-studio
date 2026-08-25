@@ -23,12 +23,14 @@ const TICK_MS = 30_000;
 type SchedulerState = {
   timer: ReturnType<typeof setInterval> | null;
   running: Set<string>;
+  executions: Map<string, Promise<void>>;
 };
 
 function state(): SchedulerState {
   return getGlobalSingleton("automationScheduler", () => ({
     timer: null,
     running: new Set<string>(),
+    executions: new Map<string, Promise<void>>(),
   }));
 }
 
@@ -82,34 +84,43 @@ async function preflightRequiredConnectors(automation: Automation): Promise<Requ
   return plan;
 }
 
-export async function runAutomationNow(
+type AutomationRunClaim = {
+  automation: Automation;
+  startedAt: string;
+  trigger: AutomationRunTrigger;
+};
+
+export type AutomationStartResult = "started" | "missing" | "busy";
+
+async function claimAutomationRun(
   id: string,
-  trigger: AutomationRunTrigger = "manual",
-): Promise<Automation | null> {
+  trigger: AutomationRunTrigger,
+): Promise<AutomationRunClaim | AutomationStartResult> {
   const scheduler = state();
-  const claimed = await withAutomationMutationLock(id, async () => {
-    if (scheduler.running.has(id)) return null;
+  return withAutomationMutationLock(id, async () => {
+    if (scheduler.running.has(id)) return "busy";
+    const automation = await getAutomation(id);
+    if (!automation) return "missing";
+    if (automation.activeRun) return "busy";
+    const startedAt = new Date().toISOString();
     scheduler.running.add(id);
     try {
-      const automation = await getAutomation(id);
-      if (!automation || automation.activeRun) {
-        scheduler.running.delete(id);
-        return null;
-      }
-      const startedAt = new Date().toISOString();
       const started = await patchAutomation(id, { activeRun: { startedAt, trigger } });
       if (!started) {
         scheduler.running.delete(id);
-        return null;
+        return "missing";
       }
-      return { automation, startedAt };
+      return { automation, startedAt, trigger };
     } catch (error) {
       scheduler.running.delete(id);
       throw error;
     }
   });
-  if (!claimed) return null;
-  const { automation, startedAt } = claimed;
+}
+
+async function executeAutomationRun(claim: AutomationRunClaim): Promise<void> {
+  const { automation, startedAt, trigger } = claim;
+  const id = automation.id;
   const runtimeSessionId = `automation:${id}:${Date.now()}`;
   let session: PiAgentSession | null = null;
   try {
@@ -141,7 +152,7 @@ export async function runAutomationNow(
     const error = automationRunError(status.lastError ?? result.error, result.text);
     const projectId =
       listProjectsFromStore().find((project) => project.path === status.cwd)?.id ?? null;
-    return await recordAutomationRun(
+    await recordAutomationRun(
       id,
       {
         at: new Date().toISOString(),
@@ -157,7 +168,7 @@ export async function runAutomationNow(
       nextRunAt(automation.schedule, new Date()).toISOString(),
     );
   } catch (error) {
-    return await recordAutomationRun(
+    await recordAutomationRun(
       id,
       {
         at: new Date().toISOString(),
@@ -175,8 +186,30 @@ export async function runAutomationNow(
   } finally {
     await session?.stop().catch(() => undefined);
     if (session) piRuntimeManager.releaseSession(runtimeSessionId, session);
-    scheduler.running.delete(id);
   }
+}
+
+function superviseAutomationRun(claim: AutomationRunClaim): void {
+  const scheduler = state();
+  const id = claim.automation.id;
+  const execution = executeAutomationRun(claim)
+    .catch(() => undefined)
+    .finally(() => {
+      scheduler.running.delete(id);
+      scheduler.executions.delete(id);
+    });
+  scheduler.executions.set(id, execution);
+  void execution;
+}
+
+export async function startAutomationRun(
+  id: string,
+  trigger: AutomationRunTrigger = "manual",
+): Promise<AutomationStartResult> {
+  const claimed = await claimAutomationRun(id, trigger);
+  if (typeof claimed === "string") return claimed;
+  superviseAutomationRun(claimed);
+  return "started";
 }
 
 async function tick(): Promise<void> {
@@ -196,7 +229,7 @@ async function tick(): Promise<void> {
       continue;
     }
     if (new Date(automation.nextRunAt) <= now) {
-      void runAutomationNow(automation.id, "scheduled");
+      void startAutomationRun(automation.id, "scheduled").catch(() => undefined);
     }
   }
 }

@@ -10,7 +10,7 @@ import {
   listAutomations,
   patchAutomation,
 } from "../automations-store";
-import { runAutomationNow } from "../automation-scheduler";
+import { startAutomationRun } from "../automation-scheduler";
 import { withAutomationMutationLock } from "../automation-mutation-lock";
 import { clearGoal, readGoal, writeGoal, type GoalStatus } from "../goals-store";
 import { GOAL_STATUSES } from "../../../../shared/agent/session-goal";
@@ -102,11 +102,14 @@ export async function handleAutomationDelete(id: string): Promise<Response> {
 }
 
 export async function handleAutomationRun(id: string): Promise<Response> {
-  const automation = await getAutomation(id);
-  if (!automation) return jsonError(`Unknown automation '${id}'.`, 404);
-  const completed = await runAutomationNow(id);
-  if (!completed) return jsonError("This automation is already running.", 409);
-  return Response.json({ ok: true, started: completed !== null });
+  try {
+    const result = await startAutomationRun(id);
+    if (result === "missing") return jsonError(`Unknown automation '${id}'.`, 404);
+    if (result === "busy") return jsonError("This automation is already running.", 409);
+    return Response.json({ ok: true, started: true }, { status: 202 });
+  } catch (error) {
+    return jsonError(errorMessage(error, "Failed to start automation."), 500);
+  }
 }
 
 // ─── Goals ────────────────────────────────────────────────────────────────
