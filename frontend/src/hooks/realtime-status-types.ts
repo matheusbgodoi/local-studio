@@ -95,7 +95,7 @@ export function sidebarStatusFromSnapshot(
   const activityLine = launchMessage
     ? launchMessage
     : inferenceOnline
-      ? model || "Ready"
+      ? "Inference ready"
       : connected
         ? "No model"
         : "Offline";
