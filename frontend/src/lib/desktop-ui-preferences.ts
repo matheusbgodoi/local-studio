@@ -1,5 +1,10 @@
 import { CONTROLLERS_STORAGE_KEY } from "@/lib/api/controllers";
-import { BACKEND_URL_CHANGED_EVENT, BACKEND_URL_STORAGE_KEY } from "@/lib/api/connection";
+import {
+  BACKEND_URL_CHANGED_EVENT,
+  BACKEND_URL_STORAGE_KEY,
+  getStoredBackendUrl,
+  setStoredBackendUrl,
+} from "@/lib/api/connection";
 
 type DesktopUiPreferencesBridge = {
   loadUiPreferences?: () => Promise<Record<string, string>>;
@@ -25,9 +30,15 @@ const UI_PREFERENCES_TIMEOUT_MS = 1_500;
 let saveTimer: number | null = null;
 
 type StudioSettingsPayload = {
+  backendUrl?: string;
   persisted?: {
     ui_preferences?: Record<string, string>;
   };
+};
+
+type ControllerUiPreferences = {
+  backendUrl: string;
+  preferences: Record<string, string>;
 };
 
 function bridge(): DesktopUiPreferencesBridge | null {
@@ -67,17 +78,20 @@ function withoutControllerCredentials(prefs: Record<string, string>): Record<str
   return rest;
 }
 
-async function loadControllerUiPreferences(): Promise<Record<string, string>> {
+async function loadControllerUiPreferences(): Promise<ControllerUiPreferences> {
   try {
     const response = await fetch("/api/settings", {
       cache: "no-store",
       signal: AbortSignal.timeout(UI_PREFERENCES_TIMEOUT_MS),
     });
-    if (!response.ok) return {};
+    if (!response.ok) return { backendUrl: "", preferences: {} };
     const settings = (await response.json()) as StudioSettingsPayload;
-    return withoutControllerCredentials(settings.persisted?.ui_preferences ?? {});
+    return {
+      backendUrl: settings.backendUrl?.trim() ?? "",
+      preferences: withoutControllerCredentials(settings.persisted?.ui_preferences ?? {}),
+    };
   } catch {
-    return {};
+    return { backendUrl: "", preferences: {} };
   }
 }
 
@@ -117,8 +131,11 @@ function dispatchHydratedPreferenceEvents(keys: ReadonlySet<string>): void {
 export async function hydrateDurableUiPreferences(): Promise<void> {
   if (typeof window === "undefined") return;
   const desktop = bridge();
-  const controllerPrefs = await loadControllerUiPreferences();
-  const applied = applyMissingPreferences(controllerPrefs);
+  const controller = await loadControllerUiPreferences();
+  if (controller.backendUrl && controller.backendUrl !== getStoredBackendUrl()) {
+    setStoredBackendUrl(controller.backendUrl);
+  }
+  const applied = applyMissingPreferences(controller.preferences);
   if (!desktop?.loadUiPreferences) {
     dispatchHydratedPreferenceEvents(applied);
     return;

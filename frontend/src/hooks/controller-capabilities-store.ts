@@ -95,11 +95,25 @@ const inferredMode = (features: ControllerFeatures): ControllerCapabilities["mod
     : "inference-gateway";
 };
 
+const probeLegacyFeature = async (
+  feature: Exclude<keyof ControllerFeatures, "lifecycle">,
+  endpoint: string,
+): Promise<CapabilityState> => {
+  if (feature !== "logs") return api.probeControllerCapability(endpoint);
+  try {
+    const payload = await api.getLogSessions({ timeout: 3_000, retries: 0 });
+    return Array.isArray(payload.sessions) ? "supported" : "unsupported";
+  } catch {
+    const transport = await api.probeControllerCapability(endpoint);
+    return transport === "supported" ? "unsupported" : transport;
+  }
+};
+
 const probeLegacyController = async (): Promise<ControllerCapabilities> => {
   const entries = await Promise.all(
     Object.entries(endpoints).map(async ([feature, endpoint]) => [
       feature,
-      await api.probeControllerCapability(endpoint),
+      await probeLegacyFeature(feature as Exclude<keyof ControllerFeatures, "lifecycle">, endpoint),
     ]),
   );
   const probed = Object.fromEntries(entries) as Record<
