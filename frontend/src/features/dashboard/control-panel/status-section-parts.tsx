@@ -247,7 +247,7 @@ export function StatusMetricStrip({
         <MetricCell
           key={metric.label}
           label={metric.label}
-          value={metric.value ?? "0"}
+          value={metric.value ?? "—"}
           unit={metric.value ? metric.unit : undefined}
           detail={metric.detail ?? undefined}
           detailTitle={metric.detailTitle ?? undefined}

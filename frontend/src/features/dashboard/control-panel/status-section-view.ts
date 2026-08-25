@@ -216,7 +216,7 @@ function peakDetailFor(metrics: Metrics | null, kind: PeakKind) {
 function metricValue(value: number | null, digits: number): string | null {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? value.toFixed(digits)
-    : (0).toFixed(digits);
+    : null;
 }
 
 function ratioMetric(

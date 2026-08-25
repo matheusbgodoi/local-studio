@@ -51,7 +51,7 @@ export function useMetricSamples({
     sampleKeyRef.current = scopedKey;
     samplesRef.current = samplesByKey.get(scopedKey) ?? [];
   }
-  if (!active) return { samples: zeroSamples(), peaks };
+  if (!active) return { samples: [], peaks };
 
   const next: MetricSample = {
     at: Date.now(),
@@ -74,16 +74,25 @@ export function useMetricSamples({
     samplesByKey.set(scopedKey, nextSamples);
   }
 
-  return { samples: samplesRef.current.length > 0 ? samplesRef.current : zeroSamples(), peaks };
+  return { samples: samplesRef.current, peaks };
 }
 
 export function MetricTrends({ samples, peaks }: { samples: MetricSample[]; peaks: MetricPeak }) {
+  if (samples.length < 2) {
+    return (
+      <div className="mt-4 border-t border-(--separator) pt-3 text-[length:var(--fs-sm)] text-(--dim)">
+        Waiting for live telemetry samples. Missing metrics remain unavailable rather than being
+        drawn as zero.
+      </div>
+    );
+  }
+  const sampleLabel = `${samples.length} live samples`;
   return (
     <div className="mt-4 border-t border-(--separator) pt-3 sm:mt-6">
       <div className="grid gap-4 sm:gap-5 lg:grid-cols-[minmax(0,1.35fr)_minmax(18rem,0.65fr)]">
         <TrendPanel
           label="Throughput (tok/s)"
-          meta="Last 30 minutes"
+          meta={sampleLabel}
           lines={[
             { values: samples.map((sample) => sample.prefill), className: "text-(--fg)/80" },
             { values: samples.map((sample) => sample.generation), className: "text-(--dim)/35" },
@@ -95,7 +104,7 @@ export function MetricTrends({ samples, peaks }: { samples: MetricSample[]; peak
         />
         <TrendPanel
           label="TTFT (ms) & requests"
-          meta="Last 30 minutes"
+          meta={sampleLabel}
           lines={[
             { values: samples.map((sample) => sample.ttft), className: "text-(--fg)/80" },
             { values: samples.map((sample) => sample.requests), className: "text-(--dim)/35" },
@@ -230,14 +239,4 @@ function yForValue(value: number, max: number): number {
 
 function finitePositive(value: number): number {
   return Number.isFinite(value) && value > 0 ? value : 0;
-}
-
-function zeroSamples(): MetricSample[] {
-  return Array.from({ length: 34 }, (_, index) => ({
-    at: Date.now() - (34 - index) * 52_000,
-    generation: 0,
-    prefill: 0,
-    requests: 0,
-    ttft: 0,
-  }));
 }
