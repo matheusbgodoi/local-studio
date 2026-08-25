@@ -160,7 +160,7 @@ export function DictationShortcutSettings() {
             description={state?.reason}
             value={state ? readinessLabel(state) : "Checking…"}
           />
-          {state?.mode === "hold" ? (
+          {state?.platform === "darwin" ? (
             <SettingsRow
               label="macOS permissions"
               description="Hold-to-talk listens only for this combination. Enable Local Studio under System Settings → Privacy & Security → Input Monitoring or Accessibility, then reopen the app."

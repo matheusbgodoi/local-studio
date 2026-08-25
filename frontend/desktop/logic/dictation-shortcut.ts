@@ -59,6 +59,7 @@ function readLines(stream: NodeJS.ReadableStream, onLine: (line: string) => void
 function decodeProbe(message: Record<string, unknown>): HoldProbe {
   const inputMonitoring = message.inputMonitoring === true;
   const accessibility = message.accessibility === true;
+  const rawReason = typeof message.reason === "string" ? message.reason : undefined;
   const readiness =
     message.ready === true
       ? "ready"
@@ -69,7 +70,14 @@ function decodeProbe(message: Record<string, unknown>): HoldProbe {
     readiness,
     inputMonitoring,
     accessibility,
-    ...(typeof message.reason === "string" ? { reason: message.reason } : {}),
+    ...(rawReason
+      ? {
+          reason:
+            rawReason === "permission_required"
+              ? "Enable Input Monitoring or Accessibility for Local Studio, then reopen the app."
+              : rawReason,
+        }
+      : {}),
   };
 }
 

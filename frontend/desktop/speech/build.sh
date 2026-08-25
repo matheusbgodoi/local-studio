@@ -71,5 +71,20 @@ if not d.get('available'):
     raise SystemExit(1)
 print('    locale       %s  (supported: %s)' % (d.get('locale'), d.get('localeSupported')))
 "
+
+  echo "==> probing hold-to-talk listener (no key events are captured by --probe)"
+  if ! out=$(probe "$HOTKEY_OUT"); then
+    echo "error: hold-to-talk probe failed or timed out" >&2
+    exit 1
+  fi
+  printf '%s\n' "$out" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+if d.get('type') != 'probe':
+    print('error: invalid hold-to-talk probe response', file=sys.stderr)
+    raise SystemExit(1)
+print('    input monitoring  %s' % ('on' if d.get('inputMonitoring') else 'off'))
+print('    accessibility     %s' % ('on' if d.get('accessibility') else 'off'))
+"
   echo "==> probes OK"
 fi
