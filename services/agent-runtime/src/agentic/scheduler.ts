@@ -537,6 +537,7 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
           summary: activeTask.title,
         });
         stallByTask.delete(activeTask.id);
+        if (agent) store.updateAgent(agent.id, { status: "IDLE", currentTaskId: null });
       } else {
         const rejection = acceptanceRejection(outcome, report);
         if (rejection) {
@@ -573,6 +574,7 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
             settledAtMs: store.now(),
           });
           store.updateRun(run.id, { status: "FAILED", failureReason: evaluated.verdict.reason });
+          if (agent) store.updateAgent(agent.id, { status: "FINISHED", currentTaskId: null });
           store.appendEvent({
             runId: run.id,
             taskId: activeTask.id,
@@ -604,12 +606,14 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
             });
             stallByTask.delete(activeTask.id);
             store.updateTask(activeTask.id, { status: "PENDING" });
+            if (agent) store.updateAgent(agent.id, { status: "IDLE", currentTaskId: null });
             applyReadiness(run.id);
             return { kind: "replanned", revision: revised.revision, reason: evaluated.verdict.reason };
           }
         }
 
         store.updateTask(activeTask.id, { status: "PENDING" });
+        if (agent) store.updateAgent(agent.id, { status: "IDLE", currentTaskId: null });
       }
     }
 

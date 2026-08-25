@@ -18,21 +18,10 @@ export type GatePriority = "interactive" | "background";
 
 type Waiter = { start: () => void };
 
-export type GateOptions = { waitMs?: number };
-
 export type InferenceGate = {
-  run: <T>(priority: GatePriority, task: () => Promise<T>, options?: GateOptions) => Promise<T>;
+  run: <T>(priority: GatePriority, task: () => Promise<T>) => Promise<T>;
   depth: () => { interactive: number; background: number; busy: boolean };
 };
-
-//
-// How long an interactive turn will wait for the card before going ahead
-// anyway. A turn can legitimately stay open for minutes — a tool asking the
-// owner a question, a long build — and wedging every other conversation behind
-// it is a worse failure than a brief overlap on a server that queues requests
-// itself. Background work has no such escape: a Run always waits its turn.
-//
-export const INTERACTIVE_MAX_WAIT_MS = 20_000;
 
 export function createPriorityInferenceGate(): InferenceGate {
   const interactive: Waiter[] = [];
@@ -53,10 +42,10 @@ export function createPriorityInferenceGate(): InferenceGate {
   };
 
   return {
-    run<T>(priority: GatePriority, task: () => Promise<T>, options?: GateOptions): Promise<T> {
+    run<T>(priority: GatePriority, task: () => Promise<T>): Promise<T> {
       return new Promise<T>((resolve, reject) => {
         let started = false;
-        const begin = (holdsSlot: boolean) => {
+        const begin = () => {
           if (started) return;
           started = true;
           void (async () => {
@@ -65,28 +54,14 @@ export function createPriorityInferenceGate(): InferenceGate {
             } catch (error) {
               reject(error);
             } finally {
-              if (holdsSlot) release();
+              release();
             }
           })();
         };
 
-        const waiter: Waiter = { start: () => begin(true) };
+        const waiter: Waiter = { start: begin };
         if (priority === "interactive") interactive.push(waiter);
         else background.push(waiter);
-
-        const waitMs = options?.waitMs ?? (priority === "interactive" ? INTERACTIVE_MAX_WAIT_MS : 0);
-        if (waitMs > 0) {
-          const timer = setTimeout(() => {
-            const queue = priority === "interactive" ? interactive : background;
-            const index = queue.indexOf(waiter);
-            if (index === -1) return;
-            queue.splice(index, 1);
-            begin(false);
-          }, waitMs);
-          if (typeof timer === "object" && timer && "unref" in timer) {
-            (timer as { unref: () => void }).unref();
-          }
-        }
         pump();
       });
     },
