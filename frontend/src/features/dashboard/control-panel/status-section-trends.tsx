@@ -9,6 +9,7 @@ import type { MetricSampleInput } from "./status-section-view";
 
 type MetricSample = {
   at: number;
+  performanceAt: number | null;
   generation: number | null;
   prefill: number | null;
   requests: number | null;
@@ -27,7 +28,7 @@ type MetricPeak = {
   ttft: number | null;
 };
 
-type MetricKey = Exclude<keyof MetricSample, "at">;
+type MetricKey = Exclude<keyof MetricSample, "at" | "performanceAt">;
 type RangeKey = "5m" | "30m" | "session";
 
 const METRICS: Record<
@@ -97,6 +98,7 @@ export function useMetricSamples(input: MetricSampleInput, observedAt: number) {
     }
     const next: MetricSample = {
       at: observedAt,
+      performanceAt: input.performanceObservedAt > 0 ? input.performanceObservedAt : null,
       generation: measured(input.generation),
       prefill: measured(input.prefill),
       requests: measured(input.requests),
@@ -108,7 +110,11 @@ export function useMetricSamples(input: MetricSampleInput, observedAt: number) {
       temperatureC: measured(input.temperatureC),
     };
     const previous = current.at(-1);
-    if (!previous || next.at - previous.at >= 4_000) {
+    if (
+      !previous ||
+      next.at - previous.at >= 4_000 ||
+      next.performanceAt !== previous.performanceAt
+    ) {
       const nextSamples = [...current, next].slice(-21_600);
       samplesByKey.delete(scopedKey);
       samplesByKey.set(scopedKey, nextSamples);
@@ -134,6 +140,7 @@ export function useMetricSamples(input: MetricSampleInput, observedAt: number) {
     input.vramPercent,
     input.powerWatts,
     input.temperatureC,
+    input.performanceObservedAt,
   ]);
 
   return {
@@ -147,13 +154,14 @@ export function MetricTrends({ samples, peaks }: { samples: MetricSample[]; peak
   const [range, setRange] = useState<RangeKey>("5m");
   const [now, setNow] = useState(Date.now);
   useMountSubscription(() => effectInterval(() => setNow(Date.now()), 5_000).cancel, []);
-  const visible = samples.filter((sample) => now - sample.at <= RANGE_MS[range]);
+  const metricSamples = samplesForMetric(samples, metric);
+  const visible = metricSamples.filter((sample) => now - sample.at <= RANGE_MS[range]);
   const definition = METRICS[metric];
   const values = visible.map((sample) => sample[metric]);
   const availableCount = values.filter((value) => value !== null).length;
   const current = [...values].reverse().find((value) => value !== null) ?? null;
   const peak = definition.peak ? peaks[definition.peak] : null;
-  const lastSampleAt = samples.at(-1)?.at ?? 0;
+  const lastSampleAt = metricSamples.at(-1)?.at ?? 0;
   const stale = lastSampleAt > 0 && now - lastSampleAt > 15_000;
 
   return (
@@ -224,6 +232,16 @@ export function MetricTrends({ samples, peaks }: { samples: MetricSample[]; peak
       ) : null}
     </div>
   );
+}
+
+function samplesForMetric(samples: MetricSample[], metric: MetricKey): MetricSample[] {
+  if (metric !== "generation" && metric !== "prefill" && metric !== "ttft") return samples;
+  const byObservation = new Map<number, MetricSample>();
+  for (const sample of samples) {
+    if (sample.performanceAt === null) continue;
+    byObservation.set(sample.performanceAt, { ...sample, at: sample.performanceAt });
+  }
+  return [...byObservation.values()];
 }
 
 function Sparkline({

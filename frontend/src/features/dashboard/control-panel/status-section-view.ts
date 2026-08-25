@@ -17,6 +17,7 @@ export type MetricSampleInput = {
   powerWatts: number | null;
   temperatureC: number | null;
   active: boolean;
+  performanceObservedAt: number;
 };
 
 export type MetricColumnView = {
@@ -34,6 +35,8 @@ export type CompactMetricView = {
 
 type PeakKind = "generation" | "prefill" | "ttft";
 type PeakTier = "session" | "bestSession" | "all";
+
+const PERFORMANCE_FRESHNESS_MS = 15_000;
 
 const PEAK_FIELDS: Record<PeakKind, Record<PeakTier, readonly (keyof Metrics)[]>> = {
   generation: {
@@ -86,13 +89,16 @@ export function resolveStatusSectionView({
 }: StatusSectionViewInput) {
   const isRunning = Boolean(currentProcess);
   const perf = resolvePerformanceMetrics(metrics, gpus);
+  const performanceObservedAt = firstMeasured(metrics?.performance_observed_at_ms) ?? 0;
+  const performanceFresh =
+    performanceObservedAt > 0 && Date.now() - performanceObservedAt <= PERFORMANCE_FRESHNESS_MS;
   return {
     backend: currentProcess?.backend,
     compactMetrics: compactMetricViews(perf),
     displayPlatformKind: platformKind ?? null,
     displayPort: inferencePort || currentProcess?.port || undefined,
     isRunning,
-    metricColumns: metricColumnViews(metrics, perf),
+    metricColumns: metricColumnViews(metrics, perf, performanceFresh),
     modelName: resolveModelName(currentProcess, currentRecipe, modelDisplayName),
     sampleInput: {
       key: resolveProcessSampleKey(currentProcess, currentRecipe, physicalModelId),
@@ -100,7 +106,7 @@ export function resolveStatusSectionView({
       generationPeak: peakFor(metrics, "generation") ?? perf.genTps,
       prefill: perf.prefillTps,
       prefillPeak: peakFor(metrics, "prefill") ?? perf.prefillTps,
-      ttft: perf.ttftMs,
+      ttft: perf.observedTtftMs,
       ttftPeak: peakFor(metrics, "ttft") ?? perf.ttftMs,
       requests: perf.sessions,
       requestPeak: perf.peakReq ?? perf.sessions,
@@ -113,6 +119,7 @@ export function resolveStatusSectionView({
       powerWatts: perf.totalPower,
       temperatureC: perf.temperatureC,
       active: isRunning,
+      performanceObservedAt,
     },
   };
 }
@@ -150,7 +157,8 @@ function resolvePerformanceMetrics(metrics: Metrics | null, gpus: GPU[]) {
   return {
     genTps: firstMeasured(metrics?.generation_throughput, metrics?.session_avg_generation),
     prefillTps: firstMeasured(metrics?.prompt_throughput, metrics?.session_avg_prefill),
-    ttftMs: firstMeasured(metrics?.avg_ttft_ms),
+    ttftMs: firstMeasured(metrics?.observed_ttft_ms),
+    observedTtftMs: firstMeasured(metrics?.observed_ttft_ms),
     sessions: firstMeasured(metrics?.running_requests),
     peakReq: firstMeasured(metrics?.session_peak_running_requests),
     queued: firstMeasured(metrics?.pending_requests),
@@ -185,23 +193,24 @@ function resolveGpuTotals(gpus: GPU[]) {
 function metricColumnViews(
   metrics: Metrics | null,
   perf: ReturnType<typeof resolvePerformanceMetrics>,
+  performanceFresh: boolean,
 ): MetricColumnView[] {
   return [
     {
       label: "Decode",
-      value: metricValue(perf.genTps, 1),
+      value: metricValue(performanceFresh ? perf.genTps : null, 1),
       unit: "tok/s",
       ...peakDetailFor(metrics, "generation"),
     },
     {
       label: "TTFT",
-      value: metricValue(perf.ttftMs, 0),
+      value: metricValue(performanceFresh ? perf.ttftMs : null, 0),
       unit: "ms",
       ...peakDetailFor(metrics, "ttft"),
     },
     {
       label: "Prefill",
-      value: metricValue(perf.prefillTps, 1),
+      value: metricValue(performanceFresh ? perf.prefillTps : null, 1),
       unit: "t/s",
       ...peakDetailFor(metrics, "prefill"),
     },

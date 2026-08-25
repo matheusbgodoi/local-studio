@@ -31,6 +31,8 @@ export interface Metrics {
   gpu_utilization?: number;
   memory_used?: number;
   avg_ttft_ms?: number;
+  observed_ttft_ms?: number;
+  performance_observed_at_ms?: number;
   kv_cache_usage?: number;
   generation_throughput?: number;
   prompt_throughput?: number;
