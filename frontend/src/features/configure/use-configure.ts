@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import type { CapabilityState } from "@local-studio/contracts/capabilities";
 import api from "@/lib/api/client";
 import type { RigNodePayload } from "@/lib/api/rigs";
 import { readPageCache, writePageCache } from "@/lib/page-data-cache";
@@ -25,15 +26,18 @@ export interface ConfigureState {
   deleteNode: (rigId: string, nodeId: string) => Promise<void>;
 }
 
-export function useConfigure(): ConfigureState {
+export function useConfigure(rigsCapability: CapabilityState): ConfigureState {
   const [rigsPayload, setRigsPayload] = useState<RigsPayload | null>(() =>
-    readPageCache<RigsPayload>(RIGS_CACHE_KEY),
+    rigsCapability === "supported" ? readPageCache<RigsPayload>(RIGS_CACHE_KEY) : null,
   );
-  const [loading, setLoading] = useState(rigsPayload === null);
+  const [loading, setLoading] = useState(
+    rigsCapability === "unknown" || (rigsCapability === "supported" && rigsPayload === null),
+  );
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
+    if (rigsCapability !== "supported") return;
     setRefreshing(true);
     setError(null);
     try {
@@ -46,11 +50,18 @@ export function useConfigure(): ConfigureState {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [rigsCapability]);
 
   useMountSubscription(() => {
-    void reload();
-  }, [reload]);
+    if (rigsCapability === "supported") {
+      void reload();
+      return;
+    }
+    setRigsPayload(null);
+    setLoading(rigsCapability === "unknown");
+    setRefreshing(false);
+    setError(null);
+  }, [reload, rigsCapability]);
 
   const applyRig = useCallback((rig: Rig) => {
     setRigsPayload((current) => {
@@ -66,58 +77,65 @@ export function useConfigure(): ConfigureState {
 
   const createRig = useCallback(
     async (name: string) => {
+      if (rigsCapability !== "supported") throw new Error("Machines are unavailable");
       const result = await api.createRig({ name });
       applyRig(result.rig);
     },
-    [applyRig],
+    [applyRig, rigsCapability],
   );
 
   const renameRig = useCallback(
     async (rigId: string, name: string) => {
+      if (rigsCapability !== "supported") throw new Error("Machines are unavailable");
       const result = await api.updateRig(rigId, { name });
       applyRig(result.rig);
     },
-    [applyRig],
+    [applyRig, rigsCapability],
   );
 
   const describeRig = useCallback(
     async (rigId: string, description: string) => {
+      if (rigsCapability !== "supported") throw new Error("Machines are unavailable");
       const result = await api.updateRig(rigId, { description: description || null });
       applyRig(result.rig);
     },
-    [applyRig],
+    [applyRig, rigsCapability],
   );
 
   const deleteRig = useCallback(
     async (rigId: string) => {
+      if (rigsCapability !== "supported") throw new Error("Machines are unavailable");
       await api.deleteRig(rigId);
       await reload();
     },
-    [reload],
+    [reload, rigsCapability],
   );
 
   const addNode = useCallback(
     async (rigId: string, payload: RigNodePayload & { name: string }) => {
+      if (rigsCapability !== "supported") throw new Error("Machines are unavailable");
       const result = await api.addRigNode(rigId, payload);
       applyRig(result.rig);
     },
-    [applyRig],
+    [applyRig, rigsCapability],
   );
 
   const updateNode = useCallback(
     async (rigId: string, nodeId: string, payload: RigNodePayload) => {
+      if (rigsCapability !== "supported") throw new Error("Machines are unavailable");
       const result = await api.updateRigNode(rigId, nodeId, payload);
       applyRig(result.rig);
     },
-    [applyRig],
+    [applyRig, rigsCapability],
   );
 
   const deleteNode = useCallback(
     async (rigId: string, nodeId: string) => {
+      if (rigsCapability !== "supported") throw new Error("Machines are unavailable");
       const result = await api.deleteRigNode(rigId, nodeId);
       applyRig(result.rig);
     },
-    [applyRig],
+    [applyRig, rigsCapability],
   );
 
   return {

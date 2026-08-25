@@ -4,6 +4,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import { ExternalLink, RefreshCw } from "@/ui/icon-registry";
 import { AppPage, Button, Checkbox, KeyValueRow, StatusPill, Tabs } from "@/ui";
 import { useLogs } from "@/features/logs/use-logs";
+import { useControllerCapabilities } from "@/hooks/controller-capabilities-store";
 import { useRealtimeStatusStore } from "@/hooks/realtime-status-store";
 import type { RealtimeStatusSnapshot } from "@/hooks/realtime-status-types";
 import { getStoredBackendUrl } from "@/lib/api/connection";
@@ -18,9 +19,17 @@ export default function ServerPage() {
 }
 
 export function ServerContent({ embedded = false }: { embedded?: boolean }) {
-  const logs = useLogs();
+  const { capabilities, loading: capabilitiesLoading } = useControllerCapabilities();
+  const logsCapability = capabilities.features.logs;
+  const openapiCapability = capabilities.features.openapi;
+  const logs = useLogs(logsCapability);
   const realtime = useRealtimeStatusStore();
   const [tab, setTab] = useState<Tab>("logs");
+  const tabs: { id: Tab; label: string }[] = [
+    ...(logsCapability === "supported" ? [{ id: "logs" as const, label: "Server Logs" }] : []),
+    ...(openapiCapability === "supported" ? [{ id: "docs" as const, label: "API Docs" }] : []),
+  ];
+  const activeTab = tabs.some((item) => item.id === tab) ? tab : (tabs[0]?.id ?? null);
   const backendUrl = useMemo(
     () => (getStoredBackendUrl() || "http://127.0.0.1:8080").replace(/\/+$/, ""),
     [],
@@ -32,8 +41,8 @@ export function ServerContent({ embedded = false }: { embedded?: boolean }) {
         backendUrl={backendUrl}
         connected={realtime.connected}
         running={Boolean(realtime.status?.running)}
-        loadingContent={logs.loadingContent}
-        selectedSession={logs.selectedSession}
+        loadingContent={activeTab === "logs" && logs.loadingContent}
+        selectedSession={activeTab === "logs" ? logs.selectedSession : null}
         onRefresh={() =>
           logs.selectedSession ? logs.loadLogContent(logs.selectedSession) : undefined
         }
@@ -42,16 +51,25 @@ export function ServerContent({ embedded = false }: { embedded?: boolean }) {
         <ServerStatusAside
           realtime={realtime}
           backendUrl={backendUrl}
-          tab={tab}
+          tab={activeTab}
           setTab={setTab}
+          tabs={tabs}
+          logsCapability={logsCapability}
+          logsLoading={logs.loading}
+          logsError={logs.sessionsError}
           sessions={logs.filteredSessions}
           selectedSession={logs.selectedSession}
           onSelectSession={logs.handleSelectSession}
         />
         <ServerViewerPanel
-          tab={tab}
+          tab={activeTab}
+          capabilitiesLoading={capabilitiesLoading}
+          logsCapability={logsCapability}
+          openapiCapability={openapiCapability}
           selectedSession={logs.selectedSession}
           loadingContent={logs.loadingContent}
+          contentError={logs.contentError}
+          streamError={logs.streamError}
           autoScroll={logs.autoScroll}
           setAutoScroll={logs.setAutoScroll}
           logRef={logs.logRef}
@@ -140,14 +158,22 @@ function ServerStatusAside({
   backendUrl,
   tab,
   setTab,
+  tabs,
+  logsCapability,
+  logsLoading,
+  logsError,
   sessions,
   selectedSession,
   onSelectSession,
 }: {
   realtime: RealtimeStatusSnapshot;
   backendUrl: string;
-  tab: Tab;
+  tab: Tab | null;
   setTab: (t: Tab) => void;
+  tabs: { id: Tab; label: string }[];
+  logsCapability: "supported" | "unsupported" | "unknown";
+  logsLoading: boolean;
+  logsError: string | null;
   sessions: ReturnType<typeof useLogs>["filteredSessions"];
   selectedSession: string | null;
   onSelectSession: (id: string) => void;
@@ -159,23 +185,21 @@ function ServerStatusAside({
       <BackendsGroup realtime={realtime} />
       <ProcessGroup realtime={realtime} />
       <ServicesGroup realtime={realtime} />
-      <div className="border-t border-(--border) px-4 py-3">
-        <Tabs
-          variant="pill"
-          items={[
-            { id: "logs", label: "Server Logs" },
-            { id: "docs", label: "API Docs" },
-          ]}
-          activeTab={tab}
-          onSelectTab={setTab}
+      {tabs.length > 0 && tab ? (
+        <div className="border-t border-(--border) px-4 py-3">
+          <Tabs variant="pill" items={tabs} activeTab={tab} onSelectTab={setTab} />
+        </div>
+      ) : null}
+      {logsCapability === "supported" ? (
+        <SessionList
+          sessions={sessions}
+          selectedSession={selectedSession}
+          loading={logsLoading}
+          error={logsError}
+          onSelect={onSelectSession}
+          onActivate={() => setTab("logs")}
         />
-      </div>
-      <SessionList
-        sessions={sessions}
-        selectedSession={selectedSession}
-        onSelect={onSelectSession}
-        onActivate={() => setTab("logs")}
-      />
+      ) : null}
     </aside>
   );
 }
@@ -298,16 +322,27 @@ function BackendRow({ name, info }: { name: string; info: BackendInfo }) {
 function SessionList({
   sessions,
   selectedSession,
+  loading,
+  error,
   onSelect,
   onActivate,
 }: {
   sessions: ReturnType<typeof useLogs>["filteredSessions"];
   selectedSession: string | null;
+  loading: boolean;
+  error: string | null;
   onSelect: (id: string) => void;
   onActivate: () => void;
 }) {
   return (
     <div className="max-h-[34vh] overflow-y-auto px-2 pb-3">
+      {loading ? (
+        <LogListMessage>Checking log sources…</LogListMessage>
+      ) : error ? (
+        <LogListMessage tone="danger">Logs could not be loaded: {error}</LogListMessage>
+      ) : sessions.length === 0 ? (
+        <LogListMessage>No log sources reported.</LogListMessage>
+      ) : null}
       {sessions.map((session) => (
         <button
           key={session.id}
@@ -330,10 +365,33 @@ function SessionList({
   );
 }
 
+function LogListMessage({
+  children,
+  tone = "default",
+}: {
+  children: ReactNode;
+  tone?: "default" | "danger";
+}) {
+  return (
+    <div
+      className={`px-2 py-2 text-[length:var(--fs-sm)] ${
+        tone === "danger" ? "text-(--color-destructive)" : "text-(--color-foreground-subtlest)"
+      }`}
+    >
+      {children}
+    </div>
+  );
+}
+
 function ServerViewerPanel(props: {
-  tab: Tab;
+  tab: Tab | null;
+  capabilitiesLoading: boolean;
+  logsCapability: "supported" | "unsupported" | "unknown";
+  openapiCapability: "supported" | "unsupported" | "unknown";
   selectedSession: string | null;
   loadingContent: boolean;
+  contentError: string | null;
+  streamError: string | null;
   autoScroll: boolean;
   setAutoScroll: (v: boolean) => void;
   logRef: React.RefObject<HTMLDivElement | null>;
@@ -341,12 +399,25 @@ function ServerViewerPanel(props: {
   renderLogs: () => ReactNode;
 }) {
   if (props.tab === "logs") return <LogsPanel {...props} />;
-  return <DocsPanel />;
+  if (props.tab === "docs") return <DocsPanel />;
+  const checking =
+    props.capabilitiesLoading ||
+    props.logsCapability === "unknown" ||
+    props.openapiCapability === "unknown";
+  return (
+    <UnavailablePanel>
+      {checking
+        ? "Checking which diagnostics this controller exposes…"
+        : "This controller does not expose server logs or an API reference."}
+    </UnavailablePanel>
+  );
 }
 
 function LogsPanel({
   selectedSession,
   loadingContent,
+  contentError,
+  streamError,
   autoScroll,
   setAutoScroll,
   logRef,
@@ -355,6 +426,8 @@ function LogsPanel({
 }: {
   selectedSession: string | null;
   loadingContent: boolean;
+  contentError: string | null;
+  streamError: string | null;
   autoScroll: boolean;
   setAutoScroll: (v: boolean) => void;
   logRef: React.RefObject<HTMLDivElement | null>;
@@ -381,7 +454,10 @@ function LogsPanel({
           className="min-h-0 flex-1 overflow-auto p-3 font-mono text-[length:var(--fs-sm)] leading-5 text-(--fg)"
         >
           <LogContent
+            selectedSession={selectedSession}
             loadingContent={loadingContent}
+            contentError={contentError}
+            streamError={streamError}
             hasLogContent={hasLogContent}
             renderLogs={renderLogs}
           />
@@ -392,17 +468,51 @@ function LogsPanel({
 }
 
 function LogContent({
+  selectedSession,
   loadingContent,
+  contentError,
+  streamError,
   hasLogContent,
   renderLogs,
 }: {
+  selectedSession: string | null;
   loadingContent: boolean;
+  contentError: string | null;
+  streamError: string | null;
   hasLogContent: boolean;
   renderLogs: () => ReactNode;
 }) {
   if (loadingContent) return <div className="text-(--color-foreground-subtle)">Loading logs…</div>;
-  if (hasLogContent) return <>{renderLogs()}</>;
-  return <div className="text-(--color-foreground-subtle)">No log content selected.</div>;
+  if (contentError) {
+    return (
+      <div className="text-(--color-destructive)">Logs could not be loaded: {contentError}</div>
+    );
+  }
+  if (!selectedSession) {
+    return <div className="text-(--color-foreground-subtle)">Select a log source.</div>;
+  }
+  return (
+    <>
+      {streamError ? (
+        <div className="mb-2 text-(--color-destructive)">
+          Live updates are unavailable: {streamError}
+        </div>
+      ) : null}
+      {hasLogContent ? (
+        renderLogs()
+      ) : (
+        <div className="text-(--color-foreground-subtle)">This source has no log lines.</div>
+      )}
+    </>
+  );
+}
+
+function UnavailablePanel({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex min-h-0 items-center justify-center p-8 text-center text-[length:var(--fs-sm)] text-(--color-foreground-subtle)">
+      {children}
+    </div>
+  );
 }
 
 function DocsPanel() {

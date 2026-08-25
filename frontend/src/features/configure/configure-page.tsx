@@ -13,6 +13,7 @@ import {
   type LucideIcon,
 } from "@/ui/icon-registry";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
+import { useControllerCapabilities } from "@/hooks/controller-capabilities-store";
 import { SettingsLayout, type SettingsSectionDef } from "@/features/settings/settings-ui";
 import { RecipesContent } from "@/features/recipes/recipes-content/recipes-content";
 import { IntegrationsContent } from "@/features/integrations/integrations-page";
@@ -49,6 +50,16 @@ const CONFIGURE_SECTIONS: SettingsSectionDef<ConfigureSectionId>[] = [
     icon: sectionIcon(Server),
   },
 ];
+
+const visibleConfigureSections = (
+  rigsSupported: boolean,
+): SettingsSectionDef<ConfigureSectionId>[] =>
+  rigsSupported ? CONFIGURE_SECTIONS : CONFIGURE_SECTIONS.filter((entry) => entry.id !== "rig");
+
+const serverCapabilitiesDetail = (logsSupported: boolean, openapiSupported: boolean): string =>
+  ["Health", logsSupported ? "logs" : null, openapiSupported ? "API docs" : null]
+    .filter(Boolean)
+    .join(" · ");
 
 function OverviewRow({
   icon,
@@ -97,10 +108,16 @@ function OverviewRow({
 }
 
 export default function ConfigurePage() {
-  const state = useConfigure();
+  const { capabilities, loading: capabilitiesLoading } = useControllerCapabilities();
+  const rigsSupported = capabilities.features.rigs === "supported";
+  const logsSupported = capabilities.features.logs === "supported";
+  const openapiSupported = capabilities.features.openapi === "supported";
+  const state = useConfigure(capabilities.features.rigs);
   const searchParams = useSearchParams();
   const requestedSection = configureSectionFromHash(searchParams.get("section") ?? "");
   const [section, setSection] = useState<ConfigureSectionId>(requestedSection);
+  const activeSection = section === "rig" && !rigsSupported ? "overview" : section;
+  const sections = visibleConfigureSections(rigsSupported);
 
   useMountSubscription(() => {
     const syncSection = () => {
@@ -132,23 +149,24 @@ export default function ConfigurePage() {
       ),
     0,
   );
-  const machineSection = section === "overview" || section === "rig";
+  const machineSection = rigsSupported && (activeSection === "overview" || activeSection === "rig");
+  const serverDetail = serverCapabilitiesDetail(logsSupported, openapiSupported);
 
   return (
     <SettingsLayout
-      sections={CONFIGURE_SECTIONS}
-      activeSection={section}
+      sections={sections}
+      activeSection={activeSection}
       title="Configure"
       eyebrow="Workspace"
       width="wide"
-      loading={state.refreshing || state.loading}
+      loading={capabilitiesLoading || state.refreshing || state.loading}
       showRefresh={machineSection}
       onReload={state.reload}
       onSelectSection={selectSection}
     >
       {machineSection && state.error ? <ErrorBox>{state.error}</ErrorBox> : null}
 
-      {section === "overview" ? (
+      {activeSection === "overview" ? (
         <div className="space-y-7">
           <section>
             <h2 className="text-[length:var(--fs-xl)] font-medium text-(--ui-fg)">Configuration</h2>
@@ -156,14 +174,16 @@ export default function ConfigurePage() {
               Everything Local Studio needs to run models, in one place.
             </p>
             <div className="mt-4 divide-y divide-(--ui-separator) overflow-hidden rounded-xl border border-(--ui-border) bg-(--ui-surface)">
-              <OverviewRow
-                icon={<Monitor className="h-5 w-5" />}
-                title="Machines"
-                description="Computers that provide CPU, memory, and GPUs for inference."
-                detail={`${machines.length} machine${machines.length === 1 ? "" : "s"}${gpuMemory ? ` · ${gpuMemory} GB GPU` : ""}`}
-                ready={machines.length > 0}
-                onOpen={() => selectSection("rig")}
-              />
+              {rigsSupported ? (
+                <OverviewRow
+                  icon={<Monitor className="h-5 w-5" />}
+                  title="Machines"
+                  description="Computers that provide CPU, memory, and GPUs for inference."
+                  detail={`${machines.length} machine${machines.length === 1 ? "" : "s"}${gpuMemory ? ` · ${gpuMemory} GB GPU` : ""}`}
+                  ready={machines.length > 0}
+                  onOpen={() => selectSection("rig")}
+                />
+              ) : null}
               <OverviewRow
                 icon={<Boxes className="h-5 w-5" />}
                 title="Models"
@@ -181,8 +201,8 @@ export default function ConfigurePage() {
               <OverviewRow
                 icon={<Server className="h-5 w-5" />}
                 title="Server"
-                description="Inspect the controller, inference runtime, logs, and API reference."
-                detail="Health · logs · API docs"
+                description="Inspect the controller and the diagnostics it exposes."
+                detail={serverDetail}
                 onOpen={() => selectSection("server")}
               />
             </div>
@@ -201,11 +221,11 @@ export default function ConfigurePage() {
         </div>
       ) : null}
 
-      {section === "rig" ? <RigsSection state={state} /> : null}
+      {activeSection === "rig" ? <RigsSection state={state} /> : null}
 
-      {section === "models" ? <RecipesContent embedded /> : null}
-      {section === "integrations" ? <IntegrationsContent /> : null}
-      {section === "server" ? <ServerContent embedded /> : null}
+      {activeSection === "models" ? <RecipesContent embedded /> : null}
+      {activeSection === "integrations" ? <IntegrationsContent /> : null}
+      {activeSection === "server" ? <ServerContent embedded /> : null}
     </SettingsLayout>
   );
 }
