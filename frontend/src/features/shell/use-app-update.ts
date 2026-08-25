@@ -36,19 +36,11 @@ export function isNewerVersion(candidate: string, current: string): boolean {
   return false;
 }
 
-export function isAppUpdateAvailable(
+function isAppUpdateAvailable(
   latestVersion: string | null,
   currentVersion: string | null,
 ): boolean {
   return Boolean(latestVersion && currentVersion && isNewerVersion(latestVersion, currentVersion));
-}
-
-export function isReleaseUpdateAvailable(
-  latestVersion: string | null,
-  currentVersion: string | null,
-  releaseChannel: "dev" | "stable" | null,
-): boolean {
-  return releaseChannel === "stable" && isAppUpdateAvailable(latestVersion, currentVersion);
 }
 
 const bridge = () => window.localStudioDesktop ?? {};
@@ -88,7 +80,8 @@ export function useAppUpdate(): AppUpdate {
   const [releaseChannel, setReleaseChannel] = useState<"dev" | "stable" | null>(null);
   const [distribution, setDistribution] = useState<"owner-fork" | null>(null);
   const [updatePolicy, setUpdatePolicy] = useState<"manual-merge" | "owner-feed" | null>(null);
-  const [latestVersion, setLatestVersion] = useState<string | null>(null);
+  const [upstreamReferenceVersion, setUpstreamReferenceVersion] = useState<string | null>(null);
+  const [ownerFeedVersion, setOwnerFeedVersion] = useState<string | null>(null);
   const [phase, setPhase] = useState<AppUpdatePhase>("idle");
   const [status, setStatus] = useState<AppUpdateStatus>("idle");
   const [progress, setProgress] = useState<number | null>(null);
@@ -104,7 +97,7 @@ export function useAppUpdate(): AppUpdate {
         setStatus(nextStatus);
         setPhase(next);
         setProgress(nextStatus === "downloading" ? snapshotProgress(snapshot) : null);
-        if (snapshot.version) setLatestVersion(snapshot.version);
+        if (snapshot.version) setOwnerFeedVersion(snapshot.version);
         if (next === "working") {
           if (pollTimer.current) clearTimeout(pollTimer.current);
           pollTimer.current = setTimeout(syncDesktopPhase, 2_000);
@@ -123,7 +116,7 @@ export function useAppUpdate(): AppUpdate {
     void fetch("/api/app-update", { cache: "no-store" })
       .then((response) => response.json() as Promise<{ latest?: string }>)
       .then((body) => {
-        if (!cancelled) setLatestVersion(body.latest ?? null);
+        if (!cancelled) setUpstreamReferenceVersion(body.latest ?? null);
       })
       .catch(() => undefined);
     void bridge()
@@ -144,9 +137,13 @@ export function useAppUpdate(): AppUpdate {
     };
   }, [syncDesktopPhase]);
 
+  const latestVersion = updatePolicy === "owner-feed" ? ownerFeedVersion : upstreamReferenceVersion;
+  const ownerFeedHasNewerVersion = isAppUpdateAvailable(ownerFeedVersion, currentVersion);
   const updateAvailable =
     updatePolicy === "owner-feed" &&
-    isReleaseUpdateAvailable(latestVersion, currentVersion, releaseChannel);
+    releaseChannel === "stable" &&
+    ownerFeedHasNewerVersion &&
+    (status === "available" || status === "downloading" || status === "downloaded");
 
   const startUpdate = useCallback(() => {
     const desktop = bridge();

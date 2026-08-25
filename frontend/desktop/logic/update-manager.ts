@@ -21,7 +21,7 @@ function setUpdateError(error: unknown): void {
   log.error(`Auto update error: ${message}`);
 }
 
-function resolveFeedUrl(): string | null {
+export function resolveFeedUrl(): string | null {
   const raw = process.env.LOCAL_STUDIO_UPDATE_URL?.trim();
   if (!raw) return null;
   // Refuse cleartext update feeds — auto-update over http is trivially
@@ -38,6 +38,10 @@ function resolveFeedUrl(): string | null {
     return null;
   }
   return raw.replace(/\/+$/, "");
+}
+
+export function resolveUpdatePolicy(): "manual-merge" | "owner-feed" {
+  return resolveFeedUrl() ? "owner-feed" : "manual-merge";
 }
 
 function ensureFeedConfigured(): { ok: true; url: string } | { ok: false } {
@@ -135,6 +139,15 @@ export async function startUpdate(): Promise<DesktopUpdateSnapshot> {
     installDownloadedUpdate();
     return latestUpdateState;
   }
+  if (action === "download") {
+    try {
+      setUpdateState({ status: "downloading", version: latestUpdateState.version });
+      await autoUpdater.downloadUpdate();
+    } catch (error) {
+      setUpdateError(error);
+    }
+    return latestUpdateState;
+  }
   if (action === "wait") return latestUpdateState;
 
   const snapshot = await checkForUpdates(true);
@@ -173,15 +186,6 @@ export function initializeAutoUpdates(): void {
   if (!feed.ok) return;
   log.info(`[update] Feed: ${feed.url}`);
 
-  // OWNER FORK BUILD - this app is built from matheusbgodoi/local-studio and
-  // carries changes that do not exist upstream (the RTX3090 controller identity,
-  // Status/Usage telemetry, personal MCP wiring). An upstream release artefact
-  // would replace all of it with stock, silently, on the next quit.
-  //
-  // So: keep CHECKING and keep telling the user a newer upstream version exists -
-  // that information is useful - but never download or install it behind their
-  // back. Upgrading is a deliberate merge into the fork, documented in
-  // docs/upstream-updates.md, followed by a local rebuild.
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.autoRunAppAfterInstall = false;
@@ -194,6 +198,10 @@ export function initializeAutoUpdates(): void {
   autoUpdater.on("update-available", (info) => {
     setUpdateState({ status: "available", version: info.version });
     log.info(`Update available: ${info.version}`);
+    if (installIntent.shouldDownload()) {
+      setUpdateState({ status: "downloading", version: info.version });
+      void autoUpdater.downloadUpdate().catch(setUpdateError);
+    }
   });
 
   autoUpdater.on("update-not-available", (info) => {
