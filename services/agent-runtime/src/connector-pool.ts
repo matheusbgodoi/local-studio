@@ -46,6 +46,28 @@ export function allowedConnectorTools(
   return tools.filter((tool) => allow.has(tool.name));
 }
 
+function requiresReadOnlyContract(connector: ConnectorConfig): boolean {
+  return (
+    connector.origin?.kind === "plugin" || connector.origin?.binding === "google-workspace"
+  );
+}
+
+export function connectorToolContractError(
+  connector: ConnectorConfig,
+  tools: McpToolInfo[],
+): string | null {
+  if (!requiresReadOnlyContract(connector)) return null;
+  if (!connector.allowTools?.length) return "Observe connector has no approved read-only tools";
+  const declared = new Map(tools.map((tool) => [tool.name, tool]));
+  for (const name of connector.allowTools) {
+    const tool = declared.get(name);
+    if (!tool || tool.annotations?.readOnlyHint !== true) {
+      return `Tool "${name}" no longer satisfies the read-only contract`;
+    }
+  }
+  return null;
+}
+
 function assertToolAllowed(connector: ConnectorConfig, tool: string): void {
   if (!connector.allowTools || connector.allowTools.includes(tool)) return;
   throw new ConnectorToolDeniedError(
@@ -85,7 +107,10 @@ export async function listConnectorTools(connectorId: string): Promise<McpToolIn
   const connector = await enabledConnector(connectorId);
   try {
     const connection = await getPooledConnection(connectorId);
-    return allowedConnectorTools(connector, await connection.listTools());
+    const tools = await connection.listTools();
+    const contractError = connectorToolContractError(connector, tools);
+    if (contractError) throw new ConnectorToolDeniedError(contractError);
+    return allowedConnectorTools(connector, tools);
   } catch (error) {
     closePooledConnection(connectorId);
     throw error;
@@ -100,7 +125,16 @@ export async function callConnectorTool(
   const connector = await enabledConnector(connectorId);
   assertToolAllowed(connector, tool);
   try {
-    return await (await getPooledConnection(connectorId)).callTool(tool, args);
+    const connection = await getPooledConnection(connectorId);
+    const tools = await connection.listTools();
+    const contractError = connectorToolContractError(connector, tools);
+    if (contractError) throw new ConnectorToolDeniedError(contractError);
+    if (!tools.some((candidate) => candidate.name === tool)) {
+      throw new ConnectorToolDeniedError(
+        `Tool "${tool}" is not currently declared by connector "${connector.id}"`,
+      );
+    }
+    return await connection.callTool(tool, args);
   } catch (error) {
     closePooledConnection(connectorId);
     throw error;
