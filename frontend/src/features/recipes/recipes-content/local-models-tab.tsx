@@ -92,7 +92,9 @@ export function LocalModelsTab() {
     useLocalModels();
   const served = servedSummary(loading, stale, error, cards.length);
   const link = connection(statusKnown, connected);
-  const residentDisplayName = cards.find((card) => card.resident)?.displayName ?? residentAlias;
+  const residentDisplayName =
+    cards.find((card) => card.resident)?.displayName ??
+    (residentAlias ? "Model identity unavailable" : null);
 
   return (
     <div className="space-y-6">

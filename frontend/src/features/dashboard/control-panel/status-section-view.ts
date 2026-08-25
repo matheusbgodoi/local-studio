@@ -119,16 +119,11 @@ export function resolveStatusSectionView({
 
 function resolveModelName(
   currentProcess: ProcessInfo | null,
-  currentRecipe: RecipeWithStatus | null,
+  _currentRecipe: RecipeWithStatus | null,
   modelDisplayName?: string | null,
 ): string {
-  return (
-    modelDisplayName ||
-    currentRecipe?.name ||
-    currentProcess?.served_model_name ||
-    currentProcess?.model_path?.split("/").pop() ||
-    "No model loaded"
-  );
+  if (modelDisplayName) return modelDisplayName;
+  return currentProcess ? "Model identity unavailable" : "No model loaded";
 }
 
 function resolveModelSampleKey(
