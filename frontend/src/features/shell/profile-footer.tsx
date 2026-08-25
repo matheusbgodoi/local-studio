@@ -1,38 +1,59 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { useRef, useState } from "react";
-import type { RemoteAccessInfo } from "../../../desktop/interfaces";
+import type { RemoteAccessInfo, RemoteAccessPairingCodeResult } from "../../../desktop/interfaces";
 import { Check, Copy, Settings, Smartphone } from "@/ui/icon-registry";
 import { ProfileAvatar, useLocalProfile } from "@/features/shell/local-profile";
-import { useMountSubscription } from "@/hooks/use-mount-subscription";
 import { writeClipboardText } from "@/lib/clipboard";
-import { POPOVER_PANEL_CLASS } from "@/ui/popover";
+import { Button, UiModal, UiModalHeader } from "@/ui";
 
 function RemoteAccessButton() {
+  const desktop = typeof window === "undefined" ? undefined : window.localStudioDesktop;
   const [open, setOpen] = useState(false);
   const [info, setInfo] = useState<RemoteAccessInfo | null>(null);
+  const [pairing, setPairing] = useState<RemoteAccessPairingCodeResult | null>(null);
   const [copied, setCopied] = useState<"url" | "token" | null>(null);
-  const ref = useRef<HTMLDivElement | null>(null);
-
-  useMountSubscription(() => {
-    if (!open) return;
-    const close = (event: MouseEvent) => {
-      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, [open]);
+  const pairingGeneration = useRef(0);
 
   const toggle = (): void => {
     const next = !open;
     setOpen(next);
     setCopied(null);
     if (next) {
-      void window.localStudioDesktop
-        ?.getRemoteAccessInfo?.()
-        .then(setInfo, () => setInfo({ enabled: false, url: null, tokenAvailable: false }));
+      const generation = ++pairingGeneration.current;
+      setInfo(null);
+      setPairing(null);
+      void desktop?.getRemoteAccessInfo?.().then(
+        (result) => {
+          if (pairingGeneration.current === generation) setInfo(result);
+        },
+        () => {
+          if (pairingGeneration.current === generation) {
+            setInfo({ enabled: false, url: null, tokenAvailable: false });
+          }
+        },
+      );
+      void desktop?.getRemoteAccessPairingCode?.().then(
+        (result) => {
+          if (pairingGeneration.current === generation) setPairing(result);
+        },
+        () => {
+          if (pairingGeneration.current === generation) {
+            setPairing({ ok: false, reason: "generation_failed" });
+          }
+        },
+      );
     }
+  };
+
+  const close = (): void => {
+    pairingGeneration.current += 1;
+    setOpen(false);
+    setInfo(null);
+    setPairing(null);
+    setCopied(null);
   };
 
   const markCopied = (value: "url" | "token"): void => {
@@ -49,7 +70,7 @@ function RemoteAccessButton() {
   };
 
   const copyToken = (): void => {
-    void window.localStudioDesktop?.copyRemoteAccessToken?.().then(
+    void desktop?.copyRemoteAccessToken?.().then(
       (result) => {
         if (result.ok) markCopied("token");
       },
@@ -58,7 +79,7 @@ function RemoteAccessButton() {
   };
 
   return (
-    <div ref={ref} className="relative">
+    <div>
       <button
         type="button"
         onClick={toggle}
@@ -69,18 +90,48 @@ function RemoteAccessButton() {
       >
         <Smartphone className="h-3.5 w-3.5" strokeWidth={1.75} />
       </button>
-      {open ? (
-        <div className={`absolute bottom-9 right-0 z-[1000] w-72 p-3 ${POPOVER_PANEL_CLASS}`}>
-          <div className="text-[length:var(--fs-sm)] font-medium text-(--fg)">Mobile access</div>
-          {!window.localStudioDesktop ? (
-            <p className="mt-1.5 text-[length:var(--fs-xs)] text-(--dim)">
+      <UiModal isOpen={open} onClose={close} maxWidth="max-w-md">
+        <UiModalHeader
+          title="Connect your phone"
+          icon={<Smartphone className="h-4 w-4" strokeWidth={1.75} />}
+          onClose={close}
+        />
+        <div className="p-5">
+          {!desktop ? (
+            <p className="text-[length:var(--fs-sm)] text-(--dim)">
               Pairing details are available in the Mac app.
             </p>
           ) : info?.enabled && info.url ? (
-            <div className="mt-2 space-y-2.5">
+            <div className="space-y-5">
+              <div className="text-center">
+                <p className="text-[length:var(--fs-sm)] text-(--dim)">
+                  Scan with your iPhone camera. Local Studio opens, pairs this device, and removes
+                  the one-time code from the address bar.
+                </p>
+                <div className="mx-auto mt-4 flex h-60 w-60 items-center justify-center overflow-hidden rounded-2xl border border-black/10 bg-white p-3 shadow-sm">
+                  {pairing?.ok ? (
+                    <Image
+                      src={pairing.dataUrl}
+                      alt="QR code to pair this phone with Local Studio"
+                      width={216}
+                      height={216}
+                      unoptimized
+                      className="h-full w-full"
+                    />
+                  ) : pairing ? (
+                    <span className="max-w-44 text-[length:var(--fs-xs)] text-neutral-600">
+                      The pairing code could not be created. Copy the access token instead.
+                    </span>
+                  ) : (
+                    <span className="text-[length:var(--fs-xs)] text-neutral-500">
+                      Preparing secure pairing…
+                    </span>
+                  )}
+                </div>
+              </div>
               <div>
                 <div className="text-[length:var(--fs-xs)] text-(--dim)">Tailnet URL</div>
-                <div className="mt-1 flex items-center gap-1.5">
+                <div className="mt-1 flex items-center gap-2 rounded-xl border border-(--border) bg-(--ui-fg)/[0.025] px-3 py-2">
                   <span className="min-w-0 flex-1 break-all font-mono text-[length:var(--fs-xs)] text-(--fg)">
                     {info.url}
                   </span>
@@ -100,7 +151,7 @@ function RemoteAccessButton() {
               </div>
               <div>
                 <div className="text-[length:var(--fs-xs)] text-(--dim)">Access token</div>
-                <div className="mt-1 flex items-center gap-1.5">
+                <div className="mt-1 flex items-center gap-2 rounded-xl border border-(--border) bg-(--ui-fg)/[0.025] px-3 py-2">
                   <span className="min-w-0 flex-1 font-mono text-[length:var(--fs-sm)] tracking-widest text-(--fg)">
                     ************
                   </span>
@@ -118,17 +169,29 @@ function RemoteAccessButton() {
                   </button>
                 </div>
               </div>
+              <p className="text-[length:var(--fs-xs)] leading-relaxed text-(--dim)">
+                Tailnet only. This code expires in two minutes and can be redeemed once.
+              </p>
             </div>
           ) : info ? (
-            <p className="mt-1.5 text-[length:var(--fs-xs)] text-(--dim)">
-              Remote access is off. Run <span className="font-mono">npm run remote-access</span> on
-              this Mac to enable it.
-            </p>
+            <div className="space-y-4">
+              <p className="text-[length:var(--fs-sm)] text-(--dim)">
+                Remote access is off. Run <span className="font-mono">npm run remote-access</span>{" "}
+                on this Mac to enable it.
+              </p>
+              <div className="flex justify-end">
+                <Button variant="secondary" onClick={close}>
+                  Close
+                </Button>
+              </div>
+            </div>
           ) : (
-            <p className="mt-1.5 text-[length:var(--fs-xs)] text-(--dim)">Loading…</p>
+            <div className="flex min-h-72 items-center justify-center text-[length:var(--fs-sm)] text-(--dim)">
+              Preparing secure pairing…
+            </div>
           )}
         </div>
-      ) : null}
+      </UiModal>
     </div>
   );
 }

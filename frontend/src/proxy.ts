@@ -13,6 +13,7 @@ import {
   evaluateRequestBoundary,
   splitAllowedValues,
 } from "@/lib/security/request-boundary";
+import { redeemPairingTicket } from "@/lib/auth/pairing-ticket";
 
 const TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 const PROCESS_CSRF_TOKEN = crypto.randomUUID();
@@ -73,6 +74,33 @@ function pairingPage(): NextResponse {
   });
 }
 
+function effectiveRequestProtocol(request: NextRequest): string {
+  return (
+    request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase() ||
+    request.nextUrl.protocol.replace(/:$/, "")
+  );
+}
+
+function pairedRedirect(
+  request: NextRequest,
+  queryKey: "token" | "pair",
+  token: string,
+): NextResponse {
+  const clean = request.nextUrl.clone();
+  clean.searchParams.delete(queryKey);
+  const response = NextResponse.redirect(clean);
+  response.cookies.set(STUDIO_TOKEN_COOKIE, token, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: effectiveRequestProtocol(request) === "https",
+    path: "/",
+    maxAge: TOKEN_MAX_AGE_SECONDS,
+  });
+  response.headers.set("Cache-Control", "no-store");
+  response.headers.set("Referrer-Policy", "no-referrer");
+  return response;
+}
+
 function enforceAccess(request: NextRequest): NextResponse | null {
   const posture = resolveAccessPosture();
   if (posture.kind === "allow") return null;
@@ -82,17 +110,12 @@ function enforceAccess(request: NextRequest): NextResponse | null {
 
   const queryToken = url.searchParams.get("token");
   if (queryToken && timingSafeStringEqual(queryToken.trim(), posture.token)) {
-    const clean = url.clone();
-    clean.searchParams.delete("token");
-    const redirect = NextResponse.redirect(clean);
-    redirect.cookies.set(STUDIO_TOKEN_COOKIE, posture.token, {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: url.protocol === "https:",
-      path: "/",
-      maxAge: TOKEN_MAX_AGE_SECONDS,
-    });
-    return redirect;
+    return pairedRedirect(request, "token", posture.token);
+  }
+
+  const pairingTicket = url.searchParams.get("pair");
+  if (pairingTicket && redeemPairingTicket(pairingTicket, posture.token)) {
+    return pairedRedirect(request, "pair", posture.token);
   }
 
   const presented = presentedToken(
@@ -153,7 +176,7 @@ function clientIpOf(request: NextRequest): string {
 /** Credentials routinely arrive as query parameters; they must never be logged. */
 function redactedQuery(request: NextRequest): string {
   const sanitizedUrl = request.nextUrl.clone();
-  for (const sensitiveKey of ["api_key", "key", "token", "access_token"]) {
+  for (const sensitiveKey of ["api_key", "key", "token", "pair", "access_token"]) {
     if (sanitizedUrl.searchParams.has(sensitiveKey)) {
       sanitizedUrl.searchParams.set(sensitiveKey, "[redacted]");
     }
@@ -197,13 +220,10 @@ function applySecurityHeaders(request: NextRequest, response: NextResponse): voi
   // `secure` must follow the scheme the browser actually sees (cloudflared
   // forwards https as x-forwarded-proto) — a Secure cookie over plain-http
   // Tailscale access is silently dropped and every mutation then fails CSRF.
-  const effectiveProto =
-    request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase() ||
-    request.nextUrl.protocol.replace(/:$/, "");
   response.cookies.set(CSRF_COOKIE, PROCESS_CSRF_TOKEN, {
     httpOnly: false,
     sameSite: "strict",
-    secure: effectiveProto === "https",
+    secure: effectiveRequestProtocol(request) === "https",
     path: "/",
   });
 }

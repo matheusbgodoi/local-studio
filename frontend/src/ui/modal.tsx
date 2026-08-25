@@ -81,7 +81,7 @@ function UiModal({ isOpen, onClose, children, className, maxWidth = "max-w-lg" }
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6">
+    <div className="fixed inset-0 z-[1100] flex items-center justify-center px-4 py-6">
       <button
         type="button"
         tabIndex={-1}

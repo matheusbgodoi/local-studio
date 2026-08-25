@@ -14,6 +14,7 @@ const bridge: DesktopBridge = {
   generateSessionTitle: (excerpt, locale) =>
     ipcRenderer.invoke("desktop:generate-session-title", excerpt, locale),
   getRemoteAccessInfo: () => ipcRenderer.invoke("desktop:get-remote-access-info"),
+  getRemoteAccessPairingCode: () => ipcRenderer.invoke("desktop:get-remote-access-pairing-code"),
   copyRemoteAccessToken: () => ipcRenderer.invoke("desktop:copy-remote-access-token"),
   getPathForFile: (file) => webUtils.getPathForFile(file),
   probeDictation: (locale: string) => ipcRenderer.invoke("desktop:dictation-probe", locale),

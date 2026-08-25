@@ -31,6 +31,9 @@ interface Window {
       locale: string,
     ): Promise<import("../desktop/interfaces").SessionTitleResult>;
     getRemoteAccessInfo?(): Promise<import("../desktop/interfaces").RemoteAccessInfo>;
+    getRemoteAccessPairingCode?(): Promise<
+      import("../desktop/interfaces").RemoteAccessPairingCodeResult
+    >;
     copyRemoteAccessToken?(): Promise<{ ok: boolean }>;
     dictationShortcut?: import("../desktop/interfaces").DictationShortcutBridge;
   };

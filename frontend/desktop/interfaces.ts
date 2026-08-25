@@ -120,6 +120,10 @@ export interface RemoteAccessInfo {
   tokenAvailable: boolean;
 }
 
+export type RemoteAccessPairingCodeResult =
+  | { ok: true; dataUrl: string }
+  | { ok: false; reason: string };
+
 /** On-device dictation. The audio never enters the renderer and never leaves the machine —
  *  the helper opens the microphone itself and only ever sends back text. */
 export type DictationProbeResult = {
@@ -165,6 +169,7 @@ export interface DesktopBridge {
   saveTextFile(request: SaveTextFileRequest): Promise<SaveTextFileResult>;
   generateSessionTitle(excerpt: string, locale: string): Promise<SessionTitleResult>;
   getRemoteAccessInfo(): Promise<RemoteAccessInfo>;
+  getRemoteAccessPairingCode(): Promise<RemoteAccessPairingCodeResult>;
   copyRemoteAccessToken(): Promise<{ ok: boolean }>;
   getPathForFile(file: File): string;
   listProjects(): Promise<ProjectEntry[]>;

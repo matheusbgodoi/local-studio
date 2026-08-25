@@ -13,6 +13,7 @@ import {
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import QRCode from "qrcode";
 import type { DesktopAppState } from "./types";
 import { DESKTOP_CONFIG } from "./configs";
 import { writeJsonAtomic } from "./helpers/fs-json";
@@ -22,6 +23,7 @@ import { createMainWindow } from "./logic/window-manager";
 import { probeDictation, startDictation, stopDictation } from "./logic/dictation";
 import { generateSessionTitle } from "./logic/session-title";
 import { readFrontendToken, readRemoteHost } from "./logic/frontend-token";
+import { createRemoteAccessPairingTicket } from "./logic/remote-access-pairing";
 import { registerNavigationPolicy } from "./logic/security";
 import { startFrontendServer, stopFrontendServer, type ServerHandle } from "./logic/app-server";
 import {
@@ -547,6 +549,26 @@ function registerIpcHandlers(): void {
       url: host ? `https://${host}/agent` : null,
       tokenAvailable,
     };
+  });
+
+  ipcMain.handle("desktop:get-remote-access-pairing-code", async () => {
+    const userData = app.getPath("userData");
+    const host = readRemoteHost(userData);
+    const token = readFrontendToken(userData);
+    if (!host || !token) return { ok: false, reason: "remote_access_off" };
+    const pairingUrl = new URL(`https://${host}/agent`);
+    pairingUrl.searchParams.set("pair", createRemoteAccessPairingTicket(token));
+    try {
+      const dataUrl = await QRCode.toDataURL(pairingUrl.toString(), {
+        errorCorrectionLevel: "M",
+        margin: 3,
+        width: 512,
+        color: { dark: "#111111ff", light: "#ffffffff" },
+      });
+      return { ok: true, dataUrl };
+    } catch {
+      return { ok: false, reason: "generation_failed" };
+    }
   });
 
   ipcMain.handle("desktop:copy-remote-access-token", () => {
