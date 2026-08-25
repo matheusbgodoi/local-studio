@@ -4,7 +4,12 @@ import { useRef, useState } from "react";
 import { Rocket } from "@/ui/icon-registry";
 import { Spinner } from "@/ui";
 import { SettingsButton, SettingsGroup } from "./settings-ui";
-import type { SavedController } from "@/lib/api/controllers";
+
+export type DeployedController = {
+  url: string;
+  name?: string;
+  apiKey?: string;
+};
 
 interface ControllerDeployBridge {
   start(options: {
@@ -22,15 +27,10 @@ const getDeployBridge = (): ControllerDeployBridge | null => {
   );
 };
 
-/**
- * Desktop-only: install a controller onto an ssh-reachable machine and hand
- * the resulting url + api key back to the controllers list. Renders nothing
- * in the browser build.
- */
 export function DeployControllerPanel({
   onDeployed,
 }: {
-  onDeployed: (controller: SavedController) => void;
+  onDeployed: (controller: DeployedController) => void;
 }) {
   const bridge = getDeployBridge();
   const [host, setHost] = useState("");

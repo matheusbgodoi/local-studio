@@ -29,7 +29,6 @@ interface SettingsViewProps {
   error: string | null;
   apiSettings: ApiConnectionSettings;
   apiSettingsLoading: boolean;
-  saving: boolean;
   testing: boolean;
   connectionStatus: ConnectionStatus;
   statusMessage: string;
@@ -38,7 +37,6 @@ interface SettingsViewProps {
   onReload: () => void;
   onApiSettingsChange: (nextSettings: ApiConnectionSettings) => void;
   onTestConnection: () => void;
-  onSaveSettings: () => void;
   onSystemSectionActive: () => void;
 }
 const sectionIcon = (Icon: LucideIcon) => <Icon className="h-3.5 w-3.5" />;
@@ -71,7 +69,6 @@ export function SettingsView({
   error,
   apiSettings,
   apiSettingsLoading,
-  saving,
   testing,
   connectionStatus,
   statusMessage,
@@ -80,7 +77,6 @@ export function SettingsView({
   onReload,
   onApiSettingsChange,
   onTestConnection,
-  onSaveSettings,
   onSystemSectionActive,
 }: SettingsViewProps) {
   const [activeSection, setActiveSection] = useState<SettingsSectionId>("connection");
@@ -136,12 +132,10 @@ export function SettingsView({
           apiSettingsLoading={apiSettingsLoading}
           apiSettings={apiSettings}
           testing={testing}
-          saving={saving}
           connectionStatus={connectionStatus}
           statusMessage={statusMessage}
           onApiSettingsChange={onApiSettingsChange}
           onTestConnection={onTestConnection}
-          onSave={onSaveSettings}
         />
       ) : null}
       {visibleSection === "profile" ? <ProfileSettings /> : null}

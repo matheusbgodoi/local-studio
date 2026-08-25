@@ -47,7 +47,6 @@ export default function SettingsPage() {
       error={configs.error}
       apiSettings={configs.apiSettings}
       apiSettingsLoading={configs.apiSettingsLoading}
-      saving={configs.saving}
       testing={configs.testing}
       connectionStatus={configs.connectionStatus}
       statusMessage={configs.statusMessage}
@@ -56,7 +55,6 @@ export default function SettingsPage() {
       onReload={configs.loadConfig}
       onApiSettingsChange={configs.setApiSettings}
       onTestConnection={configs.testConnection}
-      onSaveSettings={configs.saveApiSettings}
       onSystemSectionActive={configs.ensureConfigLoaded}
     />
   );
