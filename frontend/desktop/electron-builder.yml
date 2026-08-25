@@ -40,6 +40,7 @@ extraResources:
     filter:
       - LocalStudioDictation
       - LocalStudioTitle
+      - LocalStudioDictationHotkey
   - from: desktop/resources/app-update.yml
     to: app-update.yml
   - from: ../services/agent-runtime/dist/standalone.mjs

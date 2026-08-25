@@ -4,6 +4,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DICTATION_OUT="${DICTATION_OUT:-$HERE/LocalStudioDictation}"
 TITLE_OUT="${TITLE_OUT:-$HERE/LocalStudioTitle}"
+HOTKEY_OUT="${HOTKEY_OUT:-$HERE/LocalStudioDictationHotkey}"
 TARGET_ARCH="${HELPER_ARCH:-${DICTATION_ARCH:-$(uname -m)}}"
 DEPLOYMENT="${HELPER_MACOS_MIN:-${DICTATION_MACOS_MIN:-26.0}}"
 CHECK=0
@@ -37,6 +38,7 @@ probe() {
 
 build "$DICTATION_OUT" LocalStudioDictation.swift
 build "$TITLE_OUT" LocalStudioTitle.swift
+build "$HOTKEY_OUT" LocalStudioDictationHotkey.swift
 
 if [ "$CHECK" = "1" ]; then
   echo "==> probing dictation (no microphone is opened by --probe)"

@@ -17,6 +17,10 @@ export const DESKTOP_CONFIG = {
     threadWindow: { width: 720, height: 760 },
     topInsetPx: 96,
   },
+  dictationShortcut: {
+    hotkey: "CommandOrControl+Shift+Space",
+    mode: "toggle" as const,
+  },
 };
 
 export function resolveStandaloneBaseDir(): string {
