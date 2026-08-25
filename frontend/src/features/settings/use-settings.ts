@@ -4,18 +4,13 @@ import { useCallback, useRef, useState } from "react";
 import api from "@/lib/api/client";
 import { createApiClient } from "@/lib/api/create-api-client";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
+import { getStoredBackendUrl, resolveSettingsDefaultBackendUrl } from "@/lib/api/connection";
 import {
-  clearApiKey,
-  clearStoredBackendUrl,
-  getApiKey,
-  getStoredBackendUrl,
-  resolveSettingsDefaultBackendUrl,
-  setApiKey,
-  setStoredBackendUrl,
-} from "@/lib/api/connection";
-import { normalizeControllerUrl } from "@/lib/api/controllers";
+  migrateLegacyControllerCredentials,
+  normalizeControllerUrl,
+  saveSavedControllers,
+} from "@/lib/api/controllers";
 import { readPageCache, writePageCache } from "@/lib/page-data-cache";
-import { scheduleDurableUiPreferencesSave } from "@/lib/desktop-ui-preferences";
 import type { CompatibilityReport, ConfigData } from "@/lib/types";
 import type { ApiConnectionSettings, ConnectionStatus } from "./types";
 
@@ -30,16 +25,16 @@ const DEFAULT_API_SETTINGS: ApiConnectionSettings = {
   backendUrl: DEFAULT_BACKEND_URL,
   apiKey: "",
   hasApiKey: false,
+  controllers: [],
 };
 
 const mergeApiSettings = (server?: Partial<ApiConnectionSettings>): ApiConnectionSettings => {
   const localBackendUrl = getStoredBackendUrl();
-  const localApiKey = getApiKey();
-
   return {
     backendUrl: localBackendUrl || server?.backendUrl || DEFAULT_API_SETTINGS.backendUrl,
-    apiKey: localApiKey || server?.apiKey || "",
-    hasApiKey: Boolean(localApiKey) || Boolean(server?.hasApiKey),
+    apiKey: "",
+    hasApiKey: Boolean(server?.hasApiKey),
+    controllers: server?.controllers ?? [],
   };
 };
 
@@ -63,7 +58,6 @@ export function useSettings() {
 
   const [apiSettings, setApiSettings] = useState<ApiConnectionSettings>(DEFAULT_API_SETTINGS);
   const [apiSettingsLoading, setApiSettingsLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("unknown");
   const [statusMessage, setStatusMessage] = useState<string>("");
@@ -71,9 +65,11 @@ export function useSettings() {
   const loadApiSettings = useCallback(async () => {
     try {
       setApiSettingsLoading(true);
+      const migrationComplete = await migrateLegacyControllerCredentials();
       const res = await fetch("/api/settings");
       if (res.ok) {
         const settings = (await res.json()) as Partial<ApiConnectionSettings>;
+        if (migrationComplete && settings.controllers) saveSavedControllers(settings.controllers);
         setApiSettings(mergeApiSettings(settings));
         return;
       }
@@ -84,22 +80,6 @@ export function useSettings() {
     }
     setApiSettings(mergeApiSettings(undefined));
   }, []);
-
-  const persistLocalApiSettings = useCallback(() => {
-    const backendUrl = normalizeControllerUrl(apiSettings.backendUrl ?? "");
-    if (backendUrl) {
-      setStoredBackendUrl(backendUrl);
-    } else {
-      clearStoredBackendUrl();
-    }
-    const apiKey = apiSettings.apiKey?.trim() || "";
-    if (apiKey && !apiKey.includes("••••")) {
-      setApiKey(apiKey);
-    } else if (!apiKey) {
-      clearApiKey();
-    }
-    scheduleDurableUiPreferencesSave();
-  }, [apiSettings]);
 
   const testConnection = useCallback(async () => {
     try {
@@ -114,12 +94,11 @@ export function useSettings() {
         return;
       }
 
-      const apiKey = apiSettings.apiKey?.includes("••••") ? "" : apiSettings.apiKey;
       const probe = createApiClient({
         baseUrl: "/api/proxy",
         useProxy: true,
         backendUrlOverride: baseUrl,
-        apiKeyOverride: apiKey,
+        ...(apiSettings.apiKey ? { apiKeyOverride: apiSettings.apiKey } : {}),
       });
       await probe.getStatus(CONNECTION_TEST_REQUEST);
       setConnectionStatus("connected");
@@ -180,51 +159,6 @@ export function useSettings() {
     }
   }, [checkBackendHealth]);
 
-  const saveApiSettings = useCallback(async () => {
-    const backendUrl = normalizeControllerUrl(apiSettings.backendUrl ?? "");
-    persistLocalApiSettings();
-
-    let savedRemotely = false;
-    try {
-      setSaving(true);
-      setStatusMessage("");
-      const res = await fetch("/api/settings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          backendUrl,
-          apiKey: apiSettings.apiKey,
-        }),
-      });
-      if (res.ok) {
-        const updated = (await res.json()) as Partial<ApiConnectionSettings>;
-        setApiSettings(mergeApiSettings(updated));
-        savedRemotely = true;
-      } else {
-        const err = await res.json().catch(() => ({}));
-        setStatusMessage(err.error || "Saved locally");
-      }
-    } catch {
-      setStatusMessage("Saved locally");
-    } finally {
-      setSaving(false);
-    }
-
-    if (savedRemotely) {
-      setStatusMessage("Settings saved");
-    }
-
-    // Always attempt to refresh config when a backend URL is present.
-    if (backendUrl) {
-      loadConfig();
-    }
-
-    // Avoid showing a hard error when only the server-side save failed.
-    if (!savedRemotely) {
-      setConnectionStatus("unknown");
-    }
-  }, [apiSettings, loadConfig, persistLocalApiSettings]);
-
   // Lazy trigger: called when the System section becomes active. Fires the
   // config/compat fetch exactly once (subsequent visits reuse the cached data);
   // explicit refresh via `loadConfig` still forces a reload.
@@ -248,14 +182,12 @@ export function useSettings() {
     error,
     apiSettings,
     apiSettingsLoading,
-    saving,
     testing,
     connectionStatus,
     statusMessage,
     setApiSettings,
     loadConfig,
     ensureConfigLoaded,
-    saveApiSettings,
     testConnection,
     hasConfigData: Boolean(data),
     isInitialLoading: loading && !data,
