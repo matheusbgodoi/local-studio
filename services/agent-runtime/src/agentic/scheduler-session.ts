@@ -26,6 +26,7 @@ export type AgenticInferenceSession = {
   turnId(): number;
   readContext(): Promise<AgenticContextReading>;
   prompt(text: string): Promise<void>;
+  abort?(): Promise<void>;
   compact(instructions: string): Promise<void>;
   lastAssistantText(): string;
   lastTurnUsage(): AgenticTurnUsage;

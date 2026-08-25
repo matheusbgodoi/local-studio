@@ -30,7 +30,7 @@ import { createGoalPromptExtension } from "./goal-prompt";
 import { createAgenticControlExtension } from "./agentic/control-tools";
 import { networkService } from "./network";
 import { applyAgentShell } from "./network/agent-shell";
-import { sharedInferenceGate } from "./agentic/inference-gate";
+import { installInferenceBoundary, withInferenceContext } from "./agentic/inference-boundary";
 import { findRuntimeSessionForLookup, piStatusFromEvents } from "./pi-runtime-state";
 import { configuredPiSessionDir, findSessionFile } from "./sessions-store";
 import { getGlobalSingleton } from "./instances";
@@ -308,6 +308,7 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
   private eventSeq = 0;
   private eventLog: LoggedPiEvent[] = [];
   private activePromptCount = 0;
+  private readonly promptAbortControllers = new Set<AbortController>();
   private lastError: string | null = null;
   private currentFingerprint = "";
   private currentPiSessionId: string | null = null;
@@ -467,6 +468,7 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
           try: () => getProviderHub(),
           catch: (error) => error,
         });
+        installInferenceBoundary(sharedModelRuntime);
 
         const sessionOptions = buildAgentSessionOptionsSync({ options });
         applyRuntimeEnvInjections(sessionOptions.envInjections);
@@ -709,21 +711,19 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     this.on("loggedEvent", listener);
     this.activePromptCount += 1;
     this.lastError = null;
-    //
-    // Every turn in this process funnels through here — chat, subagents,
-    // automations, the goal driver, the phone bridge and a Run's own steps — so
-    // this is the one place that can make "one card decodes one thing at a
-    // time" true rather than true of some callers. The count is incremented
-    // first, so a turn waiting for the card still reports as running.
-    //
-    const priority = options.source === "rpc" ? "background" : "interactive";
+    const priority = options.inferencePriority ?? "interactive";
+    const controller = new AbortController();
+    this.promptAbortControllers.add(controller);
     return Effect.tryPromise({
-      try: () => sharedInferenceGate().run(priority, () => this.promptSession(message, options)),
+      try: () =>
+        withInferenceContext(priority, controller.signal, () =>
+          this.promptSession(message, options),
+        ),
       catch: (error) => error,
     }).pipe(
       Effect.catch((error) =>
         options.restartOnContinuationError !== false && shouldRestartAfterPromptError(error)
-          ? this.restartPromptEffect(message, options)
+          ? this.restartPromptEffect(message, options, priority, controller.signal)
           : Effect.fail(error),
       ),
       Effect.catch((error) =>
@@ -734,6 +734,7 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
       Effect.ensuring(
         Effect.sync(() => {
           this.activePromptCount = Math.max(0, this.activePromptCount - 1);
+          this.promptAbortControllers.delete(controller);
           this.off("loggedEvent", listener);
         }),
       ),
@@ -753,6 +754,8 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
   private restartPromptEffect(
     message: string,
     options: PiPromptOptions,
+    priority: "interactive" | "background",
+    signal: AbortSignal,
   ): Effect.Effect<void, unknown> {
     return this.ensureStartedEffect(
       this.currentModelId,
@@ -762,7 +765,8 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     ).pipe(
       Effect.andThen(
         Effect.tryPromise({
-          try: () => this.promptSession(message, options),
+          try: () =>
+            withInferenceContext(priority, signal, () => this.promptSession(message, options)),
           catch: (error) => error,
         }),
       ),
@@ -834,9 +838,8 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
       return Effect.fail(new Error("Cannot compact while the agent is running."));
     }
     return Effect.tryPromise({
-      // Summarisation is a decode too, and it is never the owner waiting.
       try: () =>
-        sharedInferenceGate().run("background", () =>
+        withInferenceContext("background", undefined, () =>
           Promise.resolve(this.requireSession().compact(customInstructions)),
         ),
       catch: (error) => error,
@@ -852,6 +855,7 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     return Effect.runPromise(
       Effect.tryPromise({
         try: async () => {
+          for (const controller of this.promptAbortControllers) controller.abort();
           const session = this.runtime?.session;
           if (!session) return { steering: [], followUp: [] };
           const cleared = session.clearQueue();
@@ -865,6 +869,25 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
         catch: () => undefined,
       }).pipe(Effect.catch(() => Effect.succeed({ steering: [], followUp: [] }))),
     );
+  }
+
+  abortStrict(): Promise<void> {
+    for (const controller of this.promptAbortControllers) controller.abort();
+    const session = this.runtime?.session;
+    if (!session) return Promise.resolve();
+    try {
+      session.clearQueue();
+    } catch {
+      // Queue restoration belongs to interactive Stop; durable cancel only needs idle confirmation.
+    }
+    return (async () => {
+      try {
+        await session.abort();
+      } catch {
+        // waitForIdle is the authoritative postcondition even if abort reports an error.
+      }
+      await session.waitForIdle();
+    })();
   }
 
   respondExtensionUi(

@@ -46,7 +46,9 @@ export async function runAutomationNow(id: string): Promise<Automation | null> {
   try {
     const { session } = piRuntimeManager.getSessionForLookup(runtimeSessionId, null);
     await session.ensureStarted(automation.modelId, automation.cwd || undefined, null, {});
-    await session.prompt(runPrompt(automation), () => {});
+    await session.prompt(runPrompt(automation), () => {}, {
+      inferencePriority: "background",
+    });
     const status = session.status;
     const piSessionId = status.piSessionId;
     const result = piSessionId

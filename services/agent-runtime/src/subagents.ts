@@ -136,7 +136,9 @@ export async function runSubagent(input: {
   try {
     const { session } = piRuntimeManager.getSessionForLookup(runtimeSessionId, null);
     await session.ensureStarted(modelId, cwd || undefined, null, {});
-    await session.prompt(taskPrompt(run.name, input.task), () => {});
+    await session.prompt(taskPrompt(run.name, input.task), () => {}, {
+      inferencePriority: "background",
+    });
     const status = session.status;
     run.piSessionId = status.piSessionId;
     if (status.piSessionId) {

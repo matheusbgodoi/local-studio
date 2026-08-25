@@ -23,6 +23,7 @@ export type PiPromptOptions = {
   images?: AgentImageInput[];
   expandPromptTemplates?: boolean;
   source?: "interactive" | "rpc" | "extension";
+  inferencePriority?: "interactive" | "background";
   preflightResult?: (success: boolean) => void;
   restartOnContinuationError?: boolean;
 };
@@ -98,6 +99,8 @@ export interface PiAgentSession {
   /** Resolves with the messages that were still queued, so the caller can
    *  restore them rather than losing them to the stop. */
   abort(): Promise<{ steering: string[]; followUp: string[] }>;
+  /** Abort for durable runtime cancellation. Rejects unless the session is confirmed idle. */
+  abortStrict(): Promise<void>;
   compact(customInstructions?: string): Promise<unknown>;
   /** Activate/deactivate personal MCP connectors for this session only. Never
    *  restarts the runtime and never writes connectors.json. */

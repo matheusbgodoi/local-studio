@@ -16,16 +16,17 @@ import { getGlobalSingleton } from "../instances";
 
 export type GatePriority = "interactive" | "background";
 
-type Waiter = { start: () => void };
+type QueuedWaiter = { start: () => void };
 
 export type InferenceGate = {
-  run: <T>(priority: GatePriority, task: () => Promise<T>) => Promise<T>;
+  acquire: (priority: GatePriority, signal?: AbortSignal) => Promise<() => void>;
+  run: <T>(priority: GatePriority, task: () => Promise<T>, signal?: AbortSignal) => Promise<T>;
   depth: () => { interactive: number; background: number; busy: boolean };
 };
 
 export function createPriorityInferenceGate(): InferenceGate {
-  const interactive: Waiter[] = [];
-  const background: Waiter[] = [];
+  const interactive: QueuedWaiter[] = [];
+  const background: QueuedWaiter[] = [];
   let busy = false;
 
   const pump = (): void => {
@@ -42,28 +43,45 @@ export function createPriorityInferenceGate(): InferenceGate {
   };
 
   return {
-    run<T>(priority: GatePriority, task: () => Promise<T>): Promise<T> {
-      return new Promise<T>((resolve, reject) => {
-        let started = false;
-        const begin = () => {
-          if (started) return;
-          started = true;
-          void (async () => {
-            try {
-              resolve(await task());
-            } catch (error) {
-              reject(error);
-            } finally {
-              release();
-            }
-          })();
+    acquire(priority: GatePriority, signal?: AbortSignal): Promise<() => void> {
+      return new Promise<() => void>((resolve, reject) => {
+        let settled = false;
+        const queue = priority === "interactive" ? interactive : background;
+        const cleanup = () => signal?.removeEventListener("abort", onAbort);
+        const onAbort = () => {
+          if (settled) return;
+          settled = true;
+          const index = queue.indexOf(waiter);
+          if (index >= 0) queue.splice(index, 1);
+          cleanup();
+          reject(signal?.reason ?? new Error("Inference request cancelled"));
         };
-
-        const waiter: Waiter = { start: begin };
-        if (priority === "interactive") interactive.push(waiter);
-        else background.push(waiter);
-        pump();
+        const waiter: QueuedWaiter = {
+          start: () => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            let released = false;
+            resolve(() => {
+              if (released) return;
+              released = true;
+              release();
+            });
+          },
+        };
+        queue.push(waiter);
+        signal?.addEventListener("abort", onAbort, { once: true });
+        if (signal?.aborted) onAbort();
+        else pump();
       });
+    },
+    async run<T>(priority: GatePriority, task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+      const releaseLease = await this.acquire(priority, signal);
+      try {
+        return await task();
+      } finally {
+        releaseLease();
+      }
     },
     depth: () => ({ interactive: interactive.length, background: background.length, busy }),
   };
