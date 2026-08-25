@@ -9,6 +9,7 @@ export function AppVersionSection() {
   const update = useAppUpdate();
   const devChannel = update.releaseChannel === "dev";
   const manualMerge = update.updatePolicy === "manual-merge";
+  const canRetry = update.updatePolicy === "owner-feed" && update.status === "error";
   const progress = update.progress === null ? null : Math.round(update.progress);
   const onLatest = update.currentVersion && update.latestVersion && !update.updateAvailable;
   const description = devChannel
@@ -39,7 +40,7 @@ export function AppVersionSection() {
           </SettingsValue>
         }
         actions={
-          update.updateAvailable ? (
+          update.updateAvailable || canRetry ? (
             <SettingsButton onClick={update.startUpdate} tone="primary">
               {update.status === "checking" ? (
                 <Spinner size="xs" />
@@ -48,15 +49,17 @@ export function AppVersionSection() {
               ) : (
                 <Download className="h-3 w-3" />
               )}
-              {update.status === "checking"
-                ? "Checking…"
-                : update.status === "downloading"
-                  ? progress === null
-                    ? "Downloading…"
-                    : `Downloading ${progress}%`
-                  : update.phase === "ready"
-                    ? "Restart to update"
-                    : "Update"}
+              {canRetry
+                ? "Retry check"
+                : update.status === "checking"
+                  ? "Checking…"
+                  : update.status === "downloading"
+                    ? progress === null
+                      ? "Downloading…"
+                      : `Downloading ${progress}%`
+                    : update.phase === "ready"
+                      ? "Restart to update"
+                      : "Update"}
             </SettingsButton>
           ) : undefined
         }

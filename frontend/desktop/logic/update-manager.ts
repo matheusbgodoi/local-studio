@@ -220,12 +220,9 @@ export function initializeAutoUpdates(): void {
   });
 
   autoUpdater.on("update-downloaded", (info) => {
+    installIntent.clear();
     setUpdateState({ status: "downloaded", version: info.version });
     log.info(`Update downloaded: ${info.version}`);
-    if (installIntent.downloadCompleted()) {
-      log.info(`Restarting to install update: ${info.version}`);
-      installDownloadedUpdate();
-    }
   });
 
   autoUpdater.on("error", (error) => {

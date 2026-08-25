@@ -22,12 +22,6 @@ export class UpdateInstallIntent {
     return this.requested;
   }
 
-  downloadCompleted(): boolean {
-    if (!this.requested) return false;
-    this.requested = false;
-    return true;
-  }
-
   clear(): void {
     this.requested = false;
   }
