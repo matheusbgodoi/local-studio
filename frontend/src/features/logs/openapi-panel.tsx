@@ -160,6 +160,11 @@ export function OpenApiPanel() {
             ))}
           </div>
         ) : null}
+        {!loading && !error && spec && operations.length === 0 ? (
+          <div className="mt-5 rounded-lg border border-(--color-card-border) bg-(--color-card) px-4 py-8 text-center text-[length:var(--fs-sm)] text-(--color-foreground-subtle)">
+            This controller publishes an OpenAPI document with no operations.
+          </div>
+        ) : null}
       </div>
     </div>
   );
