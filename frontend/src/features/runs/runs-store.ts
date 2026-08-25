@@ -125,7 +125,7 @@ function publishSnapshot(entry: RunSnapshotEntry, next: Partial<RunSnapshotState
 }
 
 const conversationKey = (sessionId: string | null, piSessionId: string | null): string | null =>
-  piSessionId ? `pi:${piSessionId}` : sessionId ? `session:${sessionId}` : null;
+  sessionId || piSessionId ? `session:${sessionId ?? ""}\u0000pi:${piSessionId ?? ""}` : null;
 
 function conversationEntry(
   key: string,
@@ -137,7 +137,7 @@ function conversationEntry(
   const next: ConversationRunEntry = {
     sessionId,
     piSessionId,
-    state: pendingConversationRunState,
+    state: { run: null, loading: true, error: null },
     listeners: new Set(),
     subscribers: 0,
     request: null,

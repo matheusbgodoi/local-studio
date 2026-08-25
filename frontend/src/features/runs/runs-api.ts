@@ -52,15 +52,21 @@ export function loadCurrentRun(
   sessionId: string | null,
   piSessionId: string | null,
 ): Effect.Effect<AgenticRun | null, Error> {
+  const canonicalSessionId = sessionId?.split("#")[0] || null;
   const params = new URLSearchParams();
-  if (sessionId) params.set("sessionId", sessionId);
+  if (canonicalSessionId) params.set("sessionId", canonicalSessionId);
   if (piSessionId) params.set("piSessionId", piSessionId);
   return Effect.map(
     requestJson(
       `/api/agent/runs/current?${params.toString()}`,
       Schema.decodeUnknownSync(AgenticCurrentRunResponseSchema),
     ),
-    ({ run }) => run,
+    ({ run }) => {
+      if (!run) return null;
+      if (canonicalSessionId && run.sessionId !== canonicalSessionId) return null;
+      if (piSessionId && run.piSessionId && run.piSessionId !== piSessionId) return null;
+      return run;
+    },
   );
 }
 

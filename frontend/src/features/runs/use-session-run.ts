@@ -11,9 +11,9 @@ import {
 } from "./runs-store";
 
 //
-// The Run this conversation is driving, if any. Subscribing is what starts the
-// store polling, so a chat that never becomes a Run costs one list request and
-// then nothing.
+// The Run this conversation is driving, if any. Subscribing polls the canonical
+// conversation endpoint slowly until a Run appears, then follows it at the live
+// cadence.
 //
 // The association is the durable one the runtime wrote — `sessionId` /
 // `piSessionId` on the run row. Nothing here matches on titles, prompts or
@@ -22,14 +22,14 @@ import {
 //
 
 export type SessionRunState = {
-  /** The run row this conversation owns, as the list reports it. */
+  /** The run row the canonical conversation lookup reports. */
   run: AgenticRun | null;
   /**
    * Its full snapshot, keyed by Run id so another chat or the Runs page cannot
    * replace it while this conversation is open.
    */
   snapshot: AgenticRunSnapshot | null;
-  /** The first list request has not answered yet, so "no run" is not yet known. */
+  /** The first ownership request has not answered yet, so "no run" is not yet known. */
   loading: boolean;
 };
 
