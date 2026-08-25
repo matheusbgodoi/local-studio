@@ -193,7 +193,7 @@ export function SetupChecksSettings() {
     ok: controllerStatus.online,
     value: controllerStatus.online ? controllerStatus.activityLine : "offline",
     requirement: "required",
-    guidance: "Set a reachable controller URL in Settings → Connection before using Agents.",
+    guidance: "Set a reachable controller URL in Settings → General before using Agents.",
   };
   const rows = [...checks, controllerCheck];
   const blockers = rows.filter((check) => check.requirement === "required" && !check.ok);
