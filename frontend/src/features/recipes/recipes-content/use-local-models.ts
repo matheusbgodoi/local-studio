@@ -53,6 +53,10 @@ function buildPool(gpus: GPU[]): LocalVramPool | null {
 function buildCard(physical: PhysicalModel, residentAlias: string | null): LocalModelCard {
   const isResident = (profile: AgentModel) =>
     profile.active || (residentAlias !== null && profile.id === residentAlias);
+  const displayName =
+    physical.profiles
+      .map((profile) => profile.displayName?.trim())
+      .find((label): label is string => Boolean(label)) ?? "Model identity unavailable";
   // EVERY FIELD BELOW COMES FROM THE WIRE OR IS ABSENT. That is this tab's entire claim, so
   // each one asks the *declared* value: `contextWindowDeclared` rather than `contextWindow`,
   // which carries a 128,000 fallback, and `visionDeclared` rather than `vision`, which falls
@@ -61,7 +65,7 @@ function buildCard(physical: PhysicalModel, residentAlias: string | null): Local
   const declared = physical.profiles.find((profile) => profile.contextWindowDeclared !== undefined);
   return {
     id: physical.physicalModelId,
-    displayName: physical.displayName,
+    displayName,
     resident: physical.profiles.some(isResident),
     contextWindow: declared?.contextWindowDeclared ?? null,
     tools: physical.profiles.some((profile) => profile.tools === true),

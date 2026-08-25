@@ -7,7 +7,6 @@ import { ModelLogo } from "@/ui/model-logo";
 import { ModelButton } from "@/ui";
 import { POPOVER_MENU_CLASS, POPOVER_SEPARATOR_CLASS } from "@/ui/popover";
 import { ModelRow, ModelStatus, type ModelStatusTone } from "./model-page";
-import { modelIdFromPath } from "@/lib/huggingface";
 import { engineNodeStyle, formatBackendLabel } from "@/features/recipes/recipe-labels";
 import { visionModeOverrideLabel } from "@/features/recipes/recipe-vision";
 
@@ -15,6 +14,7 @@ type Props = {
   recipe: RecipeWithStatus;
   isPinned: boolean;
   isMenuOpen: boolean;
+  lifecycleSupported: boolean;
   launchDisabled: boolean;
   launchDisabledReason?: string | null;
   onTogglePin: (recipeId: string) => void;
@@ -24,6 +24,7 @@ type Props = {
   onEdit: (recipe: RecipeWithStatus) => void;
   onRequestDelete: (recipeId: string) => void;
   onAttachAgents: (recipe: RecipeWithStatus) => void;
+  modelDisplayName: string;
 };
 
 function statusTone(status: string): ModelStatusTone {
@@ -33,10 +34,41 @@ function statusTone(status: string): ModelStatusTone {
   return "default";
 }
 
+function LifecycleAction({
+  status,
+  supported,
+  disabled,
+  title,
+  onLaunch,
+  onStop,
+}: {
+  status: string;
+  supported: boolean;
+  disabled: boolean;
+  title: string;
+  onLaunch: () => void;
+  onStop: () => void;
+}) {
+  if (!supported) return null;
+  if (status === "running") {
+    return (
+      <ModelButton onClick={onStop} tone="danger" title="Stop">
+        <Square className="h-3 w-3" />
+      </ModelButton>
+    );
+  }
+  return (
+    <ModelButton onClick={onLaunch} disabled={disabled} title={title}>
+      <Play className="h-3 w-3" />
+    </ModelButton>
+  );
+}
+
 export const RecipeRow = memo(function RecipeRow({
   recipe,
   isPinned,
   isMenuOpen,
+  lifecycleSupported,
   launchDisabled,
   launchDisabledReason,
   onTogglePin,
@@ -46,6 +78,7 @@ export const RecipeRow = memo(function RecipeRow({
   onEdit,
   onRequestDelete,
   onAttachAgents,
+  modelDisplayName,
 }: Props) {
   const handleTogglePin = useCallback(() => onTogglePin(recipe.id), [onTogglePin, recipe.id]);
   const handleLaunch = useCallback(() => onLaunch(recipe.id), [onLaunch, recipe.id]);
@@ -69,15 +102,13 @@ export const RecipeRow = memo(function RecipeRow({
   const tp = recipe.tp || recipe.tensor_parallel_size || 1;
   const pp = recipe.pp || recipe.pipeline_parallel_size || 1;
   const status = recipe.status || "stopped";
-  const modelName =
-    recipe.served_model_name || recipe.model_path.split("/").pop() || recipe.model_path;
   const context = recipe.max_model_len
     ? `${recipe.max_model_len.toLocaleString()} ctx`
     : "ctx auto";
-  const description = `${modelName} · ${context}`;
+  const description = `Launch profile · ${context}`;
   const engine = formatBackendLabel(recipe.backend);
   const engineStyle = engineNodeStyle(recipe.backend);
-  const launchTitle = launchDisabledReason ?? "Launch Serve";
+  const launchTitle = launchDisabledReason ?? "Launch model";
   const parallelism = `tp/pp ${tp}/${pp}`;
   const quant = recipe.quantization?.trim();
   const runtime =
@@ -87,9 +118,16 @@ export const RecipeRow = memo(function RecipeRow({
 
   return (
     <ModelRow
-      label={recipe.name}
+      label={modelDisplayName}
       description={description}
-      leading={<ModelLogo modelId={modelIdFromPath(recipe.model_path)} size="sm" />}
+      leading={
+        <ModelLogo
+          modelId={modelDisplayName}
+          label={modelDisplayName}
+          remoteAvatar={false}
+          size="sm"
+        />
+      }
       value={
         <div className="flex items-center gap-2">
           <span
@@ -108,7 +146,7 @@ export const RecipeRow = memo(function RecipeRow({
             title={
               recipe.runtime
                 ? `Launch runtime: ${recipe.runtime.kind} · ${recipe.runtime.ref}`
-                : "Runtime will be migrated when this Serve is edited"
+                : "Runtime will be migrated when this launch profile is edited"
             }
             className="max-w-40 truncate rounded bg-(--surface-2) px-1.5 py-0.5 font-mono text-[length:var(--fs-2xs)] text-(--dim)"
           >
@@ -135,15 +173,14 @@ export const RecipeRow = memo(function RecipeRow({
       status={<ModelStatus tone={statusTone(status)}>{status}</ModelStatus>}
       actions={
         <>
-          {status === "running" ? (
-            <ModelButton onClick={onStop} tone="danger" title="Stop">
-              <Square className="h-3 w-3" />
-            </ModelButton>
-          ) : (
-            <ModelButton onClick={handleLaunch} disabled={launchDisabled} title={launchTitle}>
-              <Play className="h-3 w-3" />
-            </ModelButton>
-          )}
+          <LifecycleAction
+            status={status}
+            supported={lifecycleSupported}
+            disabled={launchDisabled}
+            title={launchTitle}
+            onLaunch={handleLaunch}
+            onStop={onStop}
+          />
           <div className="relative">
             <ModelButton onClick={() => handleToggleMenu()} title="Actions">
               <MoreVertical className="h-3 w-3" />
@@ -174,7 +211,7 @@ export const RecipeRow = memo(function RecipeRow({
                   title={`Open delete confirmation for ${recipe.name}`}
                   className="w-full rounded-lg px-2.5 py-2 text-left text-[length:var(--fs-md)] text-(--color-destructive) hover:bg-(--color-destructive)/10"
                 >
-                  Delete Serve…
+                  Delete launch profile…
                 </button>
               </div>
             ) : null}

@@ -142,7 +142,11 @@ export function displayNameForModel(
       candidate.physicalModelId === modelId ||
       candidate.profiles.some((profile) => profile.id === modelId),
   );
-  return model?.displayName ?? null;
+  return (
+    model?.profiles
+      .map((profile) => profile.displayName?.trim())
+      .find((displayName): displayName is string => Boolean(displayName)) ?? null
+  );
 }
 
 export function physicalIdForModel(
