@@ -20,6 +20,12 @@ import {
   ModelValue,
 } from "@/features/recipes/recipes-content/model-page";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
+import {
+  ConnectorKeyValueFields,
+  connectorPairsFromRecord,
+  connectorPairsRecord,
+  CustomConnectorDrawer,
+} from "./custom-connector-drawer";
 
 interface CatalogEntry {
   id: string;
@@ -107,6 +113,9 @@ function ConnectorDrawer({
   const [command, setCommand] = useState(connector.command ?? "");
   const [args, setArgs] = useState((connector.args ?? []).join("\n"));
   const [url, setUrl] = useState(connector.url ?? "");
+  const [headers, setHeaders] = useState(() => connectorPairsFromRecord(connector.headers));
+  const [environment, setEnvironment] = useState(() => connectorPairsFromRecord(connector.env));
+  const [allowTools, setAllowTools] = useState((connector.allowTools ?? []).join("\n"));
   const [enabled, setEnabled] = useState(connector.enabled);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -132,10 +141,13 @@ function ConnectorDrawer({
               .map((value) => value.trim())
               .filter(Boolean),
             url: url.trim() || undefined,
-            env: connector.env,
+            env: connector.transport === "stdio" ? connectorPairsRecord(environment) : undefined,
             cwd: connector.cwd,
-            headers: connector.headers,
-            allowTools: connector.allowTools,
+            headers: connector.transport === "http" ? connectorPairsRecord(headers) : undefined,
+            allowTools: allowTools
+              .split("\n")
+              .map((value) => value.trim())
+              .filter(Boolean),
             enabled,
           }),
         },
@@ -226,16 +238,39 @@ function ConnectorDrawer({
                   className="w-full rounded-[var(--ui-radius)] border border-(--ui-separator) bg-(--ui-surface) px-3 py-2 font-mono text-[length:var(--fs-sm)] text-(--ui-fg) focus:border-(--ui-accent)/60 focus:outline-none"
                 />
               </FormField>
+              <ConnectorKeyValueFields
+                label="Environment variables"
+                pairs={environment}
+                onChange={setEnvironment}
+              />
             </>
           ) : (
-            <FormField label="URL">
-              <Input
-                value={url}
-                onChange={(event) => setUrl(event.target.value)}
-                className="font-mono"
+            <>
+              <FormField label="URL">
+                <Input
+                  value={url}
+                  onChange={(event) => setUrl(event.target.value)}
+                  className="font-mono"
+                />
+              </FormField>
+              <ConnectorKeyValueFields
+                label="Request headers"
+                pairs={headers}
+                onChange={setHeaders}
               />
-            </FormField>
+            </>
           )}
+          <FormField
+            label="Allowed tools"
+            description="Optional allowlist, one MCP tool name per line. Empty allows every tool declared by this connector."
+          >
+            <textarea
+              value={allowTools}
+              onChange={(event) => setAllowTools(event.target.value)}
+              rows={4}
+              className="w-full rounded-[var(--ui-radius)] border border-(--ui-separator) bg-(--ui-surface) px-3 py-2 font-mono text-[length:var(--fs-sm)] text-(--ui-fg) focus:border-(--ui-accent)/60 focus:outline-none"
+            />
+          </FormField>
           <Checkbox checked={enabled} onChange={setEnabled} label="Enabled in Workbench" />
         </div>
       )}
@@ -374,6 +409,13 @@ function ConnectorRow({
     });
 
   const remove = async () => {
+    if (
+      !window.confirm(
+        `Remove “${connector.name}”? Its saved configuration and credentials will be deleted from Local Studio.`,
+      )
+    ) {
+      return;
+    }
     const { connectors } = await requestJson(
       `/api/agent/connectors?id=${encodeURIComponent(connector.id)}`,
       Schema.decodeUnknownSync(ConnectorsResponseSchema),
@@ -441,14 +483,20 @@ function ConnectorRow({
 export function ConnectorsSection() {
   const [connectors, setConnectors] = useState<readonly ConnectorView[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState("");
   const [query, setQuery] = useState("");
   const [selectedConnector, setSelectedConnector] = useState<ConnectorView | null>(null);
   const [selectedCatalog, setSelectedCatalog] = useState<CatalogEntry | null>(null);
+  const [creatingCustom, setCreatingCustom] = useState(false);
 
   const refresh = useCallback(() => {
+    setLoadError("");
     void requestJson("/api/agent/connectors", Schema.decodeUnknownSync(ConnectorsResponseSchema))
       .then(({ connectors: list }) => setConnectors(list))
-      .catch(() => setConnectors([]))
+      .catch((cause: unknown) => {
+        setConnectors([]);
+        setLoadError(cause instanceof Error ? cause.message : "Connectors could not be read");
+      })
       .finally(() => setLoaded(true));
   }, []);
 
@@ -481,11 +529,28 @@ export function ConnectorsSection() {
         title="Connectors"
         description="MCP servers, accounts, services, and machines available to Workbench."
         actions={
-          <ModelStatus tone={loaded ? "good" : "default"}>
-            {loaded ? `${visibleConnectors.length} connected` : "discovering"}
-          </ModelStatus>
+          <div className="flex items-center gap-2">
+            <ModelStatus tone={loadError ? "danger" : loaded ? "good" : "default"}>
+              {loadError
+                ? "unavailable"
+                : loaded
+                  ? `${visibleConnectors.length} configured`
+                  : "discovering"}
+            </ModelStatus>
+            <ModelButton tone="primary" onClick={() => setCreatingCustom(true)}>
+              <Plus className="h-3 w-3" /> New connector
+            </ModelButton>
+          </div>
         }
       >
+        {loadError ? (
+          <ModelRow
+            label="Connector configuration could not be read"
+            description="Existing connectors were not changed. Refresh after resolving the runtime error."
+            value={<ModelValue dim>{loadError}</ModelValue>}
+            status={<ModelStatus tone="danger">error</ModelStatus>}
+          />
+        ) : null}
         <ModelRow
           label="Search connectors"
           description="Name, company, transport, command, or endpoint."
@@ -564,6 +629,9 @@ export function ConnectorsSection() {
           onClose={() => setSelectedCatalog(null)}
           onChanged={setConnectors}
         />
+      ) : null}
+      {creatingCustom ? (
+        <CustomConnectorDrawer onClose={() => setCreatingCustom(false)} onChanged={setConnectors} />
       ) : null}
     </div>
   );

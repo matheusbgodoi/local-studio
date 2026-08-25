@@ -23,7 +23,6 @@ export {
 } from "./connector-contract";
 
 const MASK = "••••••••";
-const SECRET_KEY_PATTERN = /token|key|secret|password|auth/i;
 let connectorAccess = Promise.resolve();
 
 function withConnectorAccess<A>(operation: () => Promise<A>): Promise<A> {
@@ -88,6 +87,26 @@ const CONNECTOR_ID_PATTERN = /^[a-z0-9][a-z0-9-_]{0,63}$/;
 
 export const isValidConnectorId = (id: string): boolean => CONNECTOR_ID_PATTERN.test(id);
 
+function validateConnectorEndpoint(connector: ConnectorConfig): void {
+  if (connector.transport !== "http") return;
+  let endpoint: URL;
+  try {
+    endpoint = new URL(connector.url ?? "");
+  } catch {
+    throw new Error("A complete MCP endpoint URL is required");
+  }
+  if (endpoint.username || endpoint.password) {
+    throw new Error("Credentials must be stored as headers, not embedded in the endpoint URL");
+  }
+  const loopback =
+    endpoint.hostname === "localhost" ||
+    endpoint.hostname === "127.0.0.1" ||
+    endpoint.hostname === "[::1]";
+  if (endpoint.protocol !== "https:" && !(endpoint.protocol === "http:" && loopback)) {
+    throw new Error("Remote MCP endpoints require HTTPS; HTTP is allowed only on loopback");
+  }
+}
+
 export async function listConnectors(): Promise<ConnectorConfig[]> {
   const file = resolveConnectorsFilePath();
   if (!existsSync(file)) return [];
@@ -124,6 +143,7 @@ export function upsertConnectors(incoming: ConnectorConfig[]): Promise<Connector
     const connectors = await listConnectors();
     for (const candidate of incoming) {
       const connector = protectManagedConnector(candidate);
+      validateConnectorEndpoint(connector);
       const index = connectors.findIndex((entry) => entry.id === connector.id);
       const existing = index === -1 ? null : connectors[index];
       const merged: ConnectorConfig = {
@@ -172,12 +192,7 @@ const maskRecord = (
   record: Record<string, string> | undefined,
 ): Record<string, string> | undefined => {
   if (!record) return record;
-  return Object.fromEntries(
-    Object.entries(record).map(([key, value]) => [
-      key,
-      SECRET_KEY_PATTERN.test(key) && value ? MASK : value,
-    ]),
-  );
+  return Object.fromEntries(Object.keys(record).map((key) => [key, MASK]));
 };
 
 export function toConnectorView(connector: ConnectorConfig): ConnectorView {
@@ -186,9 +201,8 @@ export function toConnectorView(connector: ConnectorConfig): ConnectorView {
     env: maskRecord(connector.env),
     headers: maskRecord(connector.headers),
     secret_keys: [
-      ...Object.keys(connector.env ?? {}),
-      ...Object.keys(connector.headers ?? {}),
-    ].filter((key) => SECRET_KEY_PATTERN.test(key)),
+      ...new Set([...Object.keys(connector.env ?? {}), ...Object.keys(connector.headers ?? {})]),
+    ],
   };
 }
 
