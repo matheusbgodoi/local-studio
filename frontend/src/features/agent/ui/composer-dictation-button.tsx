@@ -4,17 +4,20 @@ import { Mic, Square } from "@/ui/icon-registry";
 import type { TranscriptPhase } from "./use-chat-pane-composer-actions";
 import { useComposerDictation } from "./use-composer-dictation";
 import { useOnDeviceDictation } from "./use-on-device-dictation";
+import { useGlobalDictationShortcut } from "./use-global-dictation-shortcut";
 
 export function ComposerDictationButton({
   disabled,
   inactiveClassName,
   idleClassName = "",
   onTranscript,
+  shortcutTarget,
 }: {
   disabled: boolean;
   inactiveClassName: string;
   idleClassName?: string;
   onTranscript: (text: string, phase?: TranscriptPhase) => void;
+  shortcutTarget: boolean;
 }) {
   // TWO ENGINES, AND THE LOCAL ONE WINS WHEN IT IS REALLY THERE.
   //
@@ -29,6 +32,12 @@ export function ComposerDictationButton({
   const local = useOnDeviceDictation(onTranscript);
   const upload = useComposerDictation((text: string) => onTranscript(text, "final"));
   const onDevice = local.available === true;
+  useGlobalDictationShortcut({
+    enabled: shortcutTarget && onDevice,
+    recording: local.recording,
+    start: local.start,
+    stop: local.stop,
+  });
   const dictation = onDevice
     ? {
         error: local.error,

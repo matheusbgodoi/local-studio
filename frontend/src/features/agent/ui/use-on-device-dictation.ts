@@ -76,6 +76,7 @@ export function useOnDeviceDictation(onTranscript: (text: string, phase: Transcr
   const [error, setError] = useState("");
   const unsubscribe = useRef<(() => void) | null>(null);
   const mounted = useRef(true);
+  const recordingRef = useRef(false);
 
   useMountSubscription(() => {
     mounted.current = true;
@@ -94,6 +95,7 @@ export function useOnDeviceDictation(onTranscript: (text: string, phase: Transcr
       });
     return () => {
       mounted.current = false;
+      recordingRef.current = false;
       unsubscribe.current?.();
       unsubscribe.current = null;
       // Releasing the microphone is not optional on unmount. `cancel` and not `stop`: a
@@ -110,7 +112,7 @@ export function useOnDeviceDictation(onTranscript: (text: string, phase: Transcr
 
   const start = useCallback(async () => {
     const api = bridge();
-    if (!api || recording) return;
+    if (!api || recordingRef.current) return;
     setError("");
 
     unsubscribe.current?.();
@@ -118,6 +120,7 @@ export function useOnDeviceDictation(onTranscript: (text: string, phase: Transcr
       if (!mounted.current) return;
       switch (event.type) {
         case "ready":
+          recordingRef.current = true;
           setRecording(true);
           break;
         case "partial":
@@ -131,6 +134,7 @@ export function useOnDeviceDictation(onTranscript: (text: string, phase: Transcr
           break;
         case "done":
           // Always arrives, including after a crash, so the button cannot stick on "recording".
+          recordingRef.current = false;
           setRecording(false);
           unsubscribe.current?.();
           unsubscribe.current = null;
@@ -144,16 +148,19 @@ export function useOnDeviceDictation(onTranscript: (text: string, phase: Transcr
     }));
     if (!result.started && mounted.current) {
       setError(reasonText(result.reason));
+      recordingRef.current = false;
       setRecording(false);
       unsubscribe.current?.();
       unsubscribe.current = null;
     }
-  }, [onTranscript, recording]);
+  }, [onTranscript]);
 
   return {
     available,
     recording,
     error,
+    start,
+    stop,
     toggle: recording ? stop : () => void start(),
   };
 }

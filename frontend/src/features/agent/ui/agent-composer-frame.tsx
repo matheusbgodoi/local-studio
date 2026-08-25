@@ -85,6 +85,7 @@ export type AgentComposerFrameProps = {
   readingAttachments: boolean;
   running: boolean;
   selectedSkills: ComposerSkillRef[];
+  shortcutTarget: boolean;
   status?: string;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   floating?: boolean;
@@ -141,6 +142,7 @@ export function AgentComposerFrame({
   readingAttachments,
   running,
   selectedSkills,
+  shortcutTarget,
   status,
   textareaRef,
   floating = false,
@@ -240,6 +242,7 @@ export function AgentComposerFrame({
           onTranscript={onTranscript}
           modelSelector={modelSelector}
           networkControl={networkControl}
+          shortcutTarget={shortcutTarget}
         />
       </div>
       {showStatusBar ? (

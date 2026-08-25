@@ -32,6 +32,7 @@ interface Window {
     ): Promise<import("../desktop/interfaces").SessionTitleResult>;
     getRemoteAccessInfo?(): Promise<import("../desktop/interfaces").RemoteAccessInfo>;
     copyRemoteAccessToken?(): Promise<{ ok: boolean }>;
+    dictationShortcut?: import("../desktop/interfaces").DictationShortcutBridge;
     getKittylitterPairingJson?(): Promise<import("../desktop/interfaces").KittylitterPairingResult>;
     copyKittylitterPairingJson?(pairingJson: string): Promise<{
       ok: boolean;

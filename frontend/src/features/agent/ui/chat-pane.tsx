@@ -881,6 +881,7 @@ export function ChatPane({
           readingAttachments={readingAttachments}
           running={Boolean(running)}
           selectedSkills={selectedSkills}
+          shortcutTarget={isFocused && !terminalView}
           status={activeTab?.status}
           textareaRef={textareaRef}
           goalMode={goalModeApi.goalMode}

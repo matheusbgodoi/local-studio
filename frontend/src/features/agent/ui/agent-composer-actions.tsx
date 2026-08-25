@@ -26,6 +26,7 @@ export function AgentComposerActions({
   onTranscript,
   modelSelector,
   networkControl,
+  shortcutTarget,
 }: {
   fileInputRef: RefObject<HTMLInputElement | null>;
   onAttachFiles: (files: FileList | null) => void;
@@ -40,6 +41,7 @@ export function AgentComposerActions({
   onTranscript: (text: string, phase?: TranscriptPhase) => void;
   modelSelector?: ReactNode;
   networkControl?: ReactNode;
+  shortcutTarget: boolean;
 }) {
   //
   // The relay backend is optional and usually absent, so the switch is offered
@@ -102,6 +104,7 @@ export function AgentComposerActions({
           inactiveClassName={inactiveIconClass}
           idleClassName="composer-action-optional"
           onTranscript={onTranscript}
+          shortcutTarget={shortcutTarget}
         />
         {running ? (
           <>
