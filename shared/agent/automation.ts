@@ -17,8 +17,17 @@ export const AutomationScheduleSchema = Schema.Union([
   }),
 ]);
 
+export const AutomationRunTriggerSchema = Schema.Literals(["manual", "scheduled", "recovered"]);
+
+export const AutomationActiveRunSchema = Schema.Struct({
+  startedAt: Schema.String,
+  trigger: AutomationRunTriggerSchema,
+});
+
 export const AutomationRunSchema = Schema.Struct({
   at: Schema.String,
+  startedAt: Schema.String,
+  trigger: AutomationRunTriggerSchema,
   piSessionId: Schema.NullOr(Schema.String),
   cwd: Schema.String,
   projectId: Schema.NullOr(Schema.String),
@@ -37,6 +46,7 @@ export const AutomationSchema = Schema.Struct({
   requiredConnectorIds: Schema.Array(Schema.String),
   schedule: AutomationScheduleSchema,
   status: Schema.Literals(["active", "paused"]),
+  activeRun: Schema.NullOr(AutomationActiveRunSchema),
   nextRunAt: Schema.NullOr(Schema.String),
   lastRun: Schema.NullOr(AutomationRunSchema),
   runs: Schema.Array(AutomationRunSchema),
@@ -54,5 +64,7 @@ export const AutomationResponseSchema = Schema.Struct({
 });
 
 export type AutomationSchedule = typeof AutomationScheduleSchema.Type;
+export type AutomationRunTrigger = typeof AutomationRunTriggerSchema.Type;
+export type AutomationActiveRun = typeof AutomationActiveRunSchema.Type;
 export type AutomationRun = typeof AutomationRunSchema.Type;
 export type Automation = typeof AutomationSchema.Type;

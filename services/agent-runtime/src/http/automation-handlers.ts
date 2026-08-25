@@ -99,6 +99,7 @@ export async function handleAutomationRun(id: string): Promise<Response> {
   const automation = await getAutomation(id);
   if (!automation) return jsonError(`Unknown automation '${id}'.`, 404);
   const completed = await runAutomationNow(id);
+  if (!completed) return jsonError("This automation is already running.", 409);
   return Response.json({ ok: true, started: completed !== null });
 }
 

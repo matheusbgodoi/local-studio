@@ -5,6 +5,7 @@ import {
   patchAutomation,
   recordAutomationRun,
   type Automation,
+  type AutomationRunTrigger,
 } from "./automations-store";
 import { getGlobalSingleton } from "./instances";
 import { piRuntimeManager } from "./pi-runtime";
@@ -80,14 +81,24 @@ async function preflightRequiredConnectors(automation: Automation): Promise<Requ
   return plan;
 }
 
-export async function runAutomationNow(id: string): Promise<Automation | null> {
+export async function runAutomationNow(
+  id: string,
+  trigger: AutomationRunTrigger = "manual",
+): Promise<Automation | null> {
   const scheduler = state();
-  const automation = await getAutomation(id);
-  if (!automation || scheduler.running.has(id)) return null;
+  if (scheduler.running.has(id)) return null;
   scheduler.running.add(id);
+  const automation = await getAutomation(id);
+  if (!automation || automation.activeRun) {
+    scheduler.running.delete(id);
+    return null;
+  }
+  const startedAt = new Date().toISOString();
   const runtimeSessionId = `automation:${id}:${Date.now()}`;
   let session: PiAgentSession | null = null;
   try {
+    const started = await patchAutomation(id, { activeRun: { startedAt, trigger } });
+    if (!started) return null;
     const connectorPlan = await preflightRequiredConnectors(automation);
     session = piRuntimeManager.getSessionForLookup(runtimeSessionId, null).session;
     await session.ensureStarted(automation.modelId, automation.cwd || undefined, null, {});
@@ -120,6 +131,8 @@ export async function runAutomationNow(id: string): Promise<Automation | null> {
       id,
       {
         at: new Date().toISOString(),
+        startedAt,
+        trigger,
         piSessionId,
         cwd: status.cwd,
         projectId,
@@ -134,6 +147,8 @@ export async function runAutomationNow(id: string): Promise<Automation | null> {
       id,
       {
         at: new Date().toISOString(),
+        startedAt,
+        trigger,
         piSessionId: null,
         cwd: automation.cwd,
         projectId: null,
@@ -167,9 +182,37 @@ async function tick(): Promise<void> {
       continue;
     }
     if (new Date(automation.nextRunAt) <= now) {
-      void runAutomationNow(automation.id);
+      void runAutomationNow(automation.id, "scheduled");
     }
   }
+}
+
+async function recoverInterruptedRuns(): Promise<void> {
+  const now = new Date();
+  const automations = await listAutomations();
+  for (const automation of automations) {
+    if (!automation.activeRun) continue;
+    await recordAutomationRun(
+      automation.id,
+      {
+        at: now.toISOString(),
+        startedAt: automation.activeRun.startedAt,
+        trigger: "recovered",
+        piSessionId: null,
+        cwd: automation.cwd,
+        projectId: null,
+        outcome: "error",
+        summary: "",
+        error: "The runtime stopped before this automation recorded a result.",
+      },
+      nextRunAt(automation.schedule, now).toISOString(),
+    );
+  }
+}
+
+async function startScheduler(): Promise<void> {
+  await recoverInterruptedRuns().catch(() => undefined);
+  await tick();
 }
 
 export function startAutomationScheduler(): void {
@@ -178,5 +221,5 @@ export function startAutomationScheduler(): void {
   scheduler.timer = setInterval(() => {
     void tick();
   }, TICK_MS);
-  void tick();
+  void startScheduler();
 }

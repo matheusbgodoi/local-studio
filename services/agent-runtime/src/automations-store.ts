@@ -6,13 +6,17 @@ import { createSessionScopedJsonStore } from "./session-json-store";
 import { isRecord } from "../../../shared/agent/guards";
 import type {
   Automation,
+  AutomationActiveRun,
   AutomationRun,
+  AutomationRunTrigger,
   AutomationSchedule,
 } from "../../../shared/agent/automation";
 
 export type {
   Automation,
+  AutomationActiveRun,
   AutomationRun,
+  AutomationRunTrigger,
   AutomationSchedule,
 } from "../../../shared/agent/automation";
 
@@ -58,6 +62,8 @@ function normalizeRun(value: unknown): AutomationRun | null {
   if (!isRecord(value) || typeof value.at !== "string") return null;
   return {
     at: value.at,
+    startedAt: typeof value.startedAt === "string" ? value.startedAt : value.at,
+    trigger: normalizeRunTrigger(value.trigger),
     piSessionId: typeof value.piSessionId === "string" ? value.piSessionId : null,
     cwd: typeof value.cwd === "string" ? value.cwd : "",
     projectId: typeof value.projectId === "string" ? value.projectId : null,
@@ -65,6 +71,16 @@ function normalizeRun(value: unknown): AutomationRun | null {
     summary: typeof value.summary === "string" ? value.summary.slice(0, MAX_SUMMARY_CHARS) : "",
     ...(typeof value.error === "string" ? { error: value.error } : {}),
   };
+}
+
+function normalizeRunTrigger(value: unknown): AutomationRunTrigger {
+  if (value === "manual" || value === "recovered") return value;
+  return "scheduled";
+}
+
+function normalizeActiveRun(value: unknown): AutomationActiveRun | null {
+  if (!isRecord(value) || typeof value.startedAt !== "string") return null;
+  return { startedAt: value.startedAt, trigger: normalizeRunTrigger(value.trigger) };
 }
 
 function normalizeConnectorIds(value: unknown): readonly string[] {
@@ -101,6 +117,7 @@ function normalizeAutomation(value: unknown): Automation {
     requiredConnectorIds: normalizeConnectorIds(record.requiredConnectorIds),
     schedule: normalizeSchedule(record.schedule),
     status: record.status === "paused" ? "paused" : "active",
+    activeRun: normalizeActiveRun(record.activeRun),
     nextRunAt: typeof record.nextRunAt === "string" ? record.nextRunAt : null,
     lastRun: runs[0] ?? lastRun,
     runs,
@@ -191,6 +208,7 @@ export async function createAutomation(input: {
       requiredConnectorIds: normalizeConnectorIds(input.requiredConnectorIds),
       schedule,
       status: "active",
+      activeRun: null,
       nextRunAt: nextRunAt(schedule, new Date()).toISOString(),
       lastRun: null,
       runs: [],
@@ -206,7 +224,14 @@ export async function patchAutomation(
   patch: Partial<
     Pick<
       Automation,
-      "name" | "prompt" | "modelId" | "cwd" | "requiredConnectorIds" | "status" | "unread"
+      | "name"
+      | "prompt"
+      | "modelId"
+      | "cwd"
+      | "requiredConnectorIds"
+      | "status"
+      | "unread"
+      | "activeRun"
     >
   > & {
     schedule?: unknown;
@@ -244,6 +269,7 @@ export async function recordAutomationRun(
   if (!automation) return null;
   return patchAutomation(id, {
     unread: true,
+    activeRun: null,
     lastRun: run,
     runs: prependAutomationRun(automation.runs, run),
     nextRunAt: nextRunAtValue,
