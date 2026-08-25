@@ -146,6 +146,7 @@ async function prepareHold(accelerator: string, listen: boolean): Promise<Prepar
     );
     child.on("close", () => {
       if (holdChild === child) {
+        action?.(false);
         holdChild = null;
         active = false;
         lastProbe = { ...lastProbe, readiness: "error", reason: "The hotkey listener stopped." };
@@ -184,6 +185,7 @@ function state(probe = lastProbe): DictationShortcutState {
 
 function cleanupCurrent(): void {
   if (mode === "toggle" && active) globalShortcut.unregister(hotkey);
+  if (mode === "hold" && active) action?.(false);
   holdChild?.kill();
   holdChild = null;
   active = false;
