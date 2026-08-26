@@ -108,7 +108,12 @@ export async function searchProjectSessions(
   const normalizedQuery = normalize(query);
   const results: SessionSearchResult[] = [];
   for (const candidate of await listSessionSearchCandidates(cwd)) {
-    const transcript = await transcriptIndex(candidate.filepath, candidate.mtimeMs, candidate.size);
+    let transcript: IndexedTranscript;
+    try {
+      transcript = await transcriptIndex(candidate.filepath, candidate.mtimeMs, candidate.size);
+    } catch {
+      continue;
+    }
     for (const segment of transcript.segments) {
       const matchAt = segment.normalized.indexOf(normalizedQuery);
       if (matchAt < 0) continue;

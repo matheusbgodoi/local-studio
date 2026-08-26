@@ -149,14 +149,20 @@ export async function handleSessionSearch(request: Request): Promise<Response> {
   if (query.length > 200) return jsonError("q must contain at most 200 characters");
   const requestedLimit = positiveInteger(searchParams.get("limit"));
   const limit = Math.min(requestedLimit ?? 40, 50);
-  const results = (
-    await Promise.all(
-      listProjectsFromStore().map(async (project) => {
-        const cwd = resolveAllowedWorkspace(project.path);
-        return searchProjectSessions(project, cwd, query);
-      }),
-    )
-  )
+  const projects = listProjectsFromStore();
+  const searches = await Promise.allSettled(
+    projects.map(async (project) => {
+      const cwd = resolveAllowedWorkspace(project.path);
+      return searchProjectSessions(project, cwd, query);
+    }),
+  );
+  const successful = searches.flatMap((search) =>
+    search.status === "fulfilled" ? [search.value] : [],
+  );
+  if (projects.length > 0 && successful.length === 0) {
+    return jsonError("Conversation search failed", 500);
+  }
+  const results = successful
     .flat()
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
     .slice(0, limit);
