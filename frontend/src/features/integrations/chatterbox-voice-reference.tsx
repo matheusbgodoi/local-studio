@@ -277,7 +277,7 @@ export function VoiceReferencePicker({
                   ? "Waiting for microphone"
                   : controller.recording
                     ? "Listening"
-                    : "Record in Local Studio"}
+                    : "Record in CRIAs AI"}
               </div>
               <div className="mt-1 text-[length:var(--fs-sm)] leading-relaxed text-(--ui-muted)">
                 {controller.requesting

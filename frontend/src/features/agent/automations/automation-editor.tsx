@@ -133,7 +133,7 @@ export function AutomationEditor({
             <FormField
               label="Task"
               required
-              description="Local Studio sends this instruction to the selected model on every run."
+              description="CRIAs AI sends this instruction to the selected model on every run."
             >
               <Textarea
                 value={draft.prompt}
@@ -203,7 +203,7 @@ export function AutomationEditor({
             ) : null}
             <FormField
               label="Working directory"
-              description="Optional. Leave empty to use the Local Studio default."
+              description="Optional. Leave empty to use the CRIAs AI default."
             >
               <Input
                 value={draft.cwd}
@@ -346,7 +346,7 @@ function RequiredConnections({
         </p>
       )}
       <p className="mt-3 text-[length:var(--fs-xs)] leading-5 text-(--ui-muted)">
-        A missed schedule runs once after Local Studio restarts; an interrupted run is recorded as
+        A missed schedule runs once after CRIAs AI restarts; an interrupted run is recorded as
         failed, not resumed. There is no approval queue or external action ledger yet, so only
         schedule writes that are safe to repeat.
       </p>
@@ -374,7 +374,7 @@ function EditorHeader({
   onToggleStatus: () => void;
 }) {
   const statusText = creating
-    ? "Set up the work once, then let Local Studio run it."
+    ? "Set up the work once, then let CRIAs AI run it."
     : running
       ? `Running since ${relativeTime(automation?.activeRun?.startedAt ?? null)}`
       : automation?.status === "paused"

@@ -182,7 +182,7 @@ function ConfigurePageForController({ controllerKey }: { controllerKey: string }
           <section>
             <h2 className="text-[length:var(--fs-xl)] font-medium text-(--ui-fg)">Configuration</h2>
             <p className="mt-1 text-[length:var(--fs-sm)] text-(--ui-muted)">
-              Everything Local Studio needs to run models, in one place.
+              Everything CRIAs AI needs to run models, in one place.
             </p>
             <div className="mt-4 divide-y divide-(--ui-separator) overflow-hidden rounded-xl border border-(--ui-border) bg-(--ui-surface)">
               {rigsSupported ? (

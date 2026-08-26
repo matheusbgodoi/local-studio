@@ -449,7 +449,7 @@ export function PluginsSection() {
       ) : null}
       <ModelSection
         title="Plugins"
-        description="Capability bundles from Local Studio and Codex, with their company, tools, accounts, and skills."
+        description="Capability bundles from CRIAs AI and Codex, with their company, tools, accounts, and skills."
         actions={
           <ModelStatus tone={error ? "warning" : loaded ? "good" : "default"}>
             {loaded ? `${visiblePlugins.length} of ${plugins.length}` : "discovering"}
@@ -539,7 +539,7 @@ export function PluginsSection() {
         <div className="space-y-5 px-6 py-5">
           <Alert variant="info">
             Observe mode starts this plugin locally and exposes only tools it declares read-only.
-            Desktop actions stay blocked until Local Studio has an action-time approval prompt.
+            Desktop actions stay blocked until CRIAs AI has an action-time approval prompt.
           </Alert>
           <p className="text-sm leading-6 text-(--ui-muted)">
             The bundle remains in its installed location. Disconnecting stops exposing its tools to

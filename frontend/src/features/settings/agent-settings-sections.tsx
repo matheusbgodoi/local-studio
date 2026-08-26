@@ -226,7 +226,7 @@ export function SetupChecksSettings() {
     >
       {loadError ? (
         <div className="px-1 py-4 text-[length:var(--fs-sm)] text-(--ui-warning)">
-          Setup checks could not be loaded. Local Studio has not marked this installation ready.
+          Setup checks could not be loaded. CRIAs AI has not marked this installation ready.
         </div>
       ) : (
         <SettingsFactRows rows={setupRows} />

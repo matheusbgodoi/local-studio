@@ -162,7 +162,7 @@ export function SkillsSection() {
     <>
       <ModelSection
         title="Skills"
-        description="Reusable instruction sets discovered across Local Studio, Codex, Claude, Pi, Factory, and OpenCode."
+        description="Reusable instruction sets discovered across CRIAs AI, Codex, Claude, Pi, Factory, and OpenCode."
         actions={
           <ModelStatus tone={error ? "warning" : loaded ? "good" : "default"}>
             {loaded ? `${visibleSkills.length} of ${skills.length}` : "discovering"}
