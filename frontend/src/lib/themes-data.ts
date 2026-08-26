@@ -121,7 +121,7 @@ const CRIAS_DARK: ThemeTokens = {
   dim: "#ffffffb3",
   border: "#ffffff14",
   surface: "#212121",
-  accent: "#204ff0",
+  accent: "#288760",
   hl1: "#ffffffb3",
   hl2: "#ffffff80",
   hl3: "#8f8f8f",
@@ -208,7 +208,7 @@ export const THEMES: ThemeMeta[] = [
   createTheme(
     "crias-dark",
     "CRIAs AI",
-    "Charcoal workspace with the CRIAs AI blue accent",
+    "Charcoal workspace with the CRIAs AI Jade Horizon accent",
     "CRIAs AI",
     CRIAS_DARK,
   ),
