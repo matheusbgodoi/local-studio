@@ -52,7 +52,7 @@ export function DownloadsTab({
       {unsupported ? (
         <ModelRow
           label="This backend has no download queue"
-          description="The route the queue is read from is not implemented here, so nothing can be queued, paused, or retried from Local Studio."
+          description="The route the queue is read from is not implemented here, so nothing can be queued, paused, or retried from CRIAs AI."
           value={<ModelValue dim>{error ?? "Route not implemented."}</ModelValue>}
           status={<ModelStatus tone="warning">unavailable</ModelStatus>}
         />
