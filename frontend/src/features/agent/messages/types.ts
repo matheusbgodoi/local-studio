@@ -86,6 +86,8 @@ export type QueuedMessage = {
   // is reserved for local fallback work that Pi did not accept.
   mode: "steer" | "follow_up";
   text: string;
+  runtimeText?: string;
+  attachments?: ChatMessageAttachment[];
   sent?: boolean;
 };
 

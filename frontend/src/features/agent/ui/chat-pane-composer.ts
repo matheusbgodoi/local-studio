@@ -138,6 +138,7 @@ export function useComposerTextareaBehavior({
   mention,
   mentionRows,
   mentionIndex,
+  hasAttachments,
   running,
   textareaRef,
   lastAppliedComposerHeightRef,
@@ -155,6 +156,7 @@ export function useComposerTextareaBehavior({
   mention: ComposerMention | null;
   mentionRows: MentionRow[];
   mentionIndex: number;
+  hasAttachments: boolean;
   running: boolean;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   lastAppliedComposerHeightRef: MutableRefObject<number>;
@@ -331,7 +333,7 @@ export function useComposerTextareaBehavior({
       // stack, or Alt+Enter. Tab used to queue too; it is back to moving focus,
       // since the drawer now offers both choices as buttons.
       if (event.key === "Enter" && !event.shiftKey) {
-        if (running && !event.altKey && activeTab?.input.trim()) {
+        if (running && !event.altKey && (activeTab?.input.trim() || hasAttachments)) {
           event.preventDefault();
           void queueMessage();
           return;
@@ -353,6 +355,7 @@ export function useComposerTextareaBehavior({
       handleComposerHistoryKey,
       handleMentionKey,
       mention,
+      hasAttachments,
       queueMessage,
       running,
     ],

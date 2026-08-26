@@ -22,7 +22,6 @@ import type { UpdateTab } from "@/features/agent/ui/chat-pane-composer";
 
 type UseComposerAttachmentsOptions = {
   activeTab: SessionTab | null;
-  running: boolean;
   updateTab: UpdateTab;
   fileInputRef: RefObject<HTMLInputElement | null>;
 };
@@ -37,7 +36,6 @@ export function createAttachmentQueue() {
 
 export function useComposerAttachments({
   activeTab,
-  running,
   updateTab,
   fileInputRef,
 }: UseComposerAttachmentsOptions) {
@@ -57,13 +55,6 @@ export function useComposerAttachments({
     (files: FileList | File[] | null) => {
       const fileArray = files ? Array.from(files) : [];
       if (fileArray.length === 0 || !activeTab) return Promise.resolve();
-      if (running) {
-        updateTab(activeTab.id, (tab) => ({
-          ...tab,
-          error: "Pause or wait for the current turn before attaching files.",
-        }));
-        return Promise.resolve();
-      }
       pendingAttachmentBatchesRef.current += 1;
       setReadingAttachments(true);
       return Effect.runPromise(
@@ -104,7 +95,7 @@ export function useComposerAttachments({
           ),
       );
     },
-    [activeTab, attachmentQueue, fileInputRef, running, setAttachments, updateTab],
+    [activeTab, attachmentQueue, fileInputRef, setAttachments, updateTab],
   );
 
   const removeAttachment = useCallback((id: string) => {
@@ -122,15 +113,21 @@ export function useComposerAttachments({
     if (fileInputRef.current) fileInputRef.current.value = "";
   }, [fileInputRef]);
 
-  const handleComposerDragOver = useCallback(
-    (event: DragEvent<HTMLDivElement>) => {
-      if (!dataTransferHasFiles(event.dataTransfer)) return;
-      event.preventDefault();
-      event.dataTransfer.dropEffect = running ? "none" : "copy";
-      setComposerDragActive(true);
+  const consumeAttachments = useCallback(
+    (ids: readonly string[]) => {
+      const consumed = new Set(ids);
+      setAttachments((current) => current.filter((attachment) => !consumed.has(attachment.id)));
+      if (fileInputRef.current) fileInputRef.current.value = "";
     },
-    [running],
+    [fileInputRef, setAttachments],
   );
+
+  const handleComposerDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
+    if (!dataTransferHasFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setComposerDragActive(true);
+  }, []);
 
   const handleComposerDragLeave = useCallback((event: DragEvent<HTMLDivElement>) => {
     const nextTarget = event.relatedTarget;
@@ -156,6 +153,7 @@ export function useComposerAttachments({
     attachFiles,
     removeAttachment,
     clearAttachments,
+    consumeAttachments,
     handleComposerDragOver,
     handleComposerDragLeave,
     handleComposerDrop,

@@ -18,6 +18,7 @@ import type { Session, SessionId, UpdateSession } from "@/features/agent/runtime
 import type { BrowserBackend, ToolSelection } from "@/features/agent/tools/types";
 import type { NetworkPolicy } from "@shared/agent/network-policy";
 import type {
+  AgentImageInput,
   AgentQueueAction,
   AgentThinkingLevel,
   AgentToolAccess,
@@ -80,6 +81,8 @@ export type SessionEngine = {
 export type AgentControlRequest = {
   mode: "steer" | "follow_up";
   text: string;
+  message?: string;
+  images?: AgentImageInput[];
   runtime: string;
   sessionId: SessionId;
   piSessionId?: string | null;
@@ -114,15 +117,24 @@ export function useSessionEngine(deps: UseSessionEngineDeps): SessionEngine {
 
   const sendControl = useCallback(
     (request: AgentControlRequest): Promise<{ ok: boolean; error?: string }> => {
-      const { mode, text, runtime, sessionId, piSessionId, queueAction, queueReplacement } =
-        request;
-      if (!text.trim() || !modelId) return Promise.resolve({ ok: false });
+      const {
+        mode,
+        text,
+        message: preparedMessage,
+        images,
+        runtime,
+        sessionId,
+        piSessionId,
+        queueAction,
+        queueReplacement,
+      } = request;
+      if (!(preparedMessage ?? text).trim() || !modelId) return Promise.resolve({ ok: false });
       return Effect.runPromise(
         Effect.gen(function* () {
           const selection = selectionForRef.current(sessionId);
           const skills = selection.skills ?? EMPTY_SKILLS;
           const promptTemplates = selection.promptTemplates ?? EMPTY_PROMPT_TEMPLATES;
-          const message = selectedContextPrompt(text, skills);
+          const message = preparedMessage ?? selectedContextPrompt(text, skills);
           const contextualQueueReplacement = queueReplacement
             ? selectedContextPrompt(queueReplacement, skills)
             : undefined;
@@ -134,6 +146,7 @@ export function useSessionEngine(deps: UseSessionEngineDeps): SessionEngine {
                 thinkingLevel,
                 toolAccess,
                 message,
+                images,
                 cwd: cwd.trim() || undefined,
                 piSessionId,
                 mode,

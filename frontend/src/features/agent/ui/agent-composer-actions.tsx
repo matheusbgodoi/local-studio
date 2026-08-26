@@ -74,7 +74,7 @@ export function AgentComposerActions({
       <button
         type="button"
         onClick={() => fileInputRef.current?.click()}
-        disabled={readingAttachments || running}
+        disabled={readingAttachments}
         className="inline-flex !h-7 !min-h-7 !w-7 !min-w-7 shrink-0 items-center justify-center rounded-full text-(--hl2) hover:bg-(--hover) hover:text-(--fg) disabled:opacity-30"
         aria-label="Attach files"
         title="Attach files (or paste/drop into composer)"
@@ -116,12 +116,19 @@ export function AgentComposerActions({
                 <Spinner size="xs" />
                 {stopping ? "Stopping…" : "Starting…"}
               </span>
-            ) : inputHasText ? (
+            ) : inputHasText || attachmentsCount > 0 ? (
               <button
                 type="submit"
+                disabled={readingAttachments}
                 className="inline-flex !h-[30px] !min-h-[30px] !w-[30px] !min-w-[30px] shrink-0 items-center justify-center rounded-full bg-(--fg) text-(--bg) transition-opacity hover:opacity-85"
-                aria-label="Steer current task now"
-                title="Steer current task now (Alt+Enter) · Enter queues it instead"
+                aria-label={
+                  attachmentsCount > 0 ? "Queue attached message" : "Steer current task now"
+                }
+                title={
+                  attachmentsCount > 0
+                    ? "Queue attached message"
+                    : "Steer current task now (Alt+Enter) · Enter queues it instead"
+                }
               >
                 <ArrowUp className="h-4 w-4 stroke-[2.25]" />
               </button>

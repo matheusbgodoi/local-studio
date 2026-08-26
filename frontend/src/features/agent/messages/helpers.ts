@@ -246,9 +246,9 @@ export function reconcileQueueWithPiEvent(
 
   const next = queue.flatMap((item) => {
     if (item.mode !== "follow_up") return [];
-    const acceptedByPi = consumePending(pending, item.mode, item.text);
-    if (acceptedByPi) return [{ ...item, text: queueDisplayText(acceptedByPi), sent: true }];
-    return item.sent ? [] : [item];
+    const acceptedByPi = consumePending(pending, item.mode, item.runtimeText ?? item.text);
+    if (acceptedByPi) return [{ ...item, runtimeText: acceptedByPi, sent: true }];
+    return item.sent && !item.attachments?.length ? [] : [item];
   });
 
   for (const [key, messages] of pending) {
@@ -261,14 +261,19 @@ export function reconcileQueueWithPiEvent(
   return next;
 }
 
-export function removeDeliveredQueuedMessage(
+export function takeDeliveredQueuedMessage(
   queue: QueuedMessage[],
   deliveredText: string,
-): QueuedMessage[] {
+): { item: QueuedMessage | null; queue: QueuedMessage[] } {
   const delivered = queueDisplayText(deliveredText);
-  const index = queue.findIndex((item) => queueDisplayText(item.text) === delivered);
-  if (index === -1) return queue;
-  return [...queue.slice(0, index), ...queue.slice(index + 1)];
+  const index = queue.findIndex(
+    (item) => queueDisplayText(item.runtimeText ?? item.text) === delivered,
+  );
+  if (index === -1) return { item: null, queue };
+  return {
+    item: queue[index] ?? null,
+    queue: [...queue.slice(0, index), ...queue.slice(index + 1)],
+  };
 }
 
 function eventKey(event: Record<string, unknown>): string {

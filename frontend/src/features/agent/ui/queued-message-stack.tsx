@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import type { QueuedMessage } from "@/features/agent/messages";
-import { CornerDownRight, Trash2 } from "@/ui/icon-registry";
+import { CornerDownRight, Paperclip, Trash2 } from "@/ui/icon-registry";
 import { cx } from "@/ui/utils";
 
 type QueuedMessageStackProps = {
@@ -54,6 +54,7 @@ export function QueuedMessageStack({
           editingText={editingText}
           onEditingTextChange={setEditingText}
           onStartEditing={() => {
+            if (item.attachments?.length) return;
             setEditingId(item.id);
             setEditingText(item.text);
           }}
@@ -119,14 +120,24 @@ function QueuedMessageRow({
           aria-label="Edit queued message"
         />
       ) : (
-        <button
-          type="button"
-          onClick={onStartEditing}
-          className="min-w-0 flex-1 truncate text-left text-(--fg)/72 hover:text-(--fg)"
-          title="Click to edit"
-        >
-          {item.text}
-        </button>
+        <>
+          <button
+            type="button"
+            onClick={onStartEditing}
+            className="min-w-0 flex-1 truncate text-left text-(--fg)/72 hover:text-(--fg)"
+            title={
+              item.attachments?.length ? "Attachments are preserved as queued" : "Click to edit"
+            }
+          >
+            {item.text}
+          </button>
+          {item.attachments?.length ? (
+            <span className="inline-flex shrink-0 items-center gap-1 text-(--fg)/45">
+              <Paperclip className="h-3 w-3" aria-hidden />
+              {item.attachments.length}
+            </span>
+          ) : null}
+        </>
       )}
       {running && !steering ? (
         <button

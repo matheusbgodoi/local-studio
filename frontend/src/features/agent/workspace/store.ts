@@ -240,7 +240,16 @@ export function sessionMetaForPersistence(
     tokenStats: tab.tokenStats,
     usedSkills: tab.usedSkills,
     lastEventSeq: tab.lastEventSeq,
-    queue: tab.queue,
+    queue: tab.queue?.map((item) =>
+      item.attachments?.length
+        ? {
+            id: item.id,
+            mode: item.mode,
+            text: item.text,
+            sent: item.sent,
+          }
+        : item,
+    ),
   };
   if (selection) {
     return { ...base, ...persistedTabFieldsFromSelection(selection) };
