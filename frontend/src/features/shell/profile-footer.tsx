@@ -16,6 +16,7 @@ function RemoteAccessButton() {
   const [pairing, setPairing] = useState<RemoteAccessPairingCodeResult | null>(null);
   const [copied, setCopied] = useState<"url" | "token" | null>(null);
   const pairingGeneration = useRef(0);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   const toggle = (): void => {
     const next = !open;
@@ -81,6 +82,7 @@ function RemoteAccessButton() {
   return (
     <div>
       <button
+        ref={triggerRef}
         type="button"
         onClick={toggle}
         className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--sidebar-row-radius)] text-(--fg)/60 transition-colors hover:bg-(--hover) hover:text-(--fg)"
@@ -90,7 +92,7 @@ function RemoteAccessButton() {
       >
         <Smartphone className="h-3.5 w-3.5" strokeWidth={1.75} />
       </button>
-      <UiModal isOpen={open} onClose={close} maxWidth="max-w-md">
+      <UiModal isOpen={open} onClose={close} maxWidth="max-w-md" returnFocusRef={triggerRef}>
         <UiModalHeader
           title="Connect your phone"
           icon={<Smartphone className="h-4 w-4" strokeWidth={1.75} />}
