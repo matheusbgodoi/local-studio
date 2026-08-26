@@ -1,5 +1,5 @@
 appId: org.local.studio.desktop
-productName: Local Studio
+productName: CRIAs AI
 asar: true
 
 afterPack: ./desktop/project.mjs

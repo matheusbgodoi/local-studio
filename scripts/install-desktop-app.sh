@@ -37,11 +37,11 @@ if [[ "$ROLLBACK_ROOT" != /* || "$ROLLBACK_ROOT" == "/" || "$ROLLBACK_ROOT" == "
 fi
 
 if [[ "$channel" == "dev" ]]; then
-  APP_NAME="Local Studio Dev"
+  APP_NAME="CRIAs AI Dev"
   APP_ID="org.local.studio.desktop.dev"
   BUILT="${LOCAL_STUDIO_BUILT_APP:-$REPO_ROOT/frontend/dist-desktop-dev/mac-arm64/$APP_NAME.app}"
 else
-  APP_NAME="Local Studio"
+  APP_NAME="CRIAs AI"
   APP_ID="org.local.studio.desktop"
   BUILT="${LOCAL_STUDIO_BUILT_APP:-}"
 fi
@@ -53,16 +53,16 @@ REPLACED="$INSTALL_ROOT/.local-studio-replaced-$APP_ID-$$"
 
 rollback_for_id() {
   case "$1" in
-    org.local.studio.desktop) printf '%s/Local Studio.zip\n' "$ROLLBACK_ROOT" ;;
-    org.local.studio.desktop.dev) printf '%s/Local Studio Dev.zip\n' "$ROLLBACK_ROOT" ;;
+    org.local.studio.desktop) printf '%s/CRIAs AI.zip\n' "$ROLLBACK_ROOT" ;;
+    org.local.studio.desktop.dev) printf '%s/CRIAs AI Dev.zip\n' "$ROLLBACK_ROOT" ;;
     *) return 1 ;;
   esac
 }
 
 canonical_for_id() {
   case "$1" in
-    org.local.studio.desktop) printf '%s/Local Studio.app\n' "$INSTALL_ROOT" ;;
-    org.local.studio.desktop.dev) printf '%s/Local Studio Dev.app\n' "$INSTALL_ROOT" ;;
+    org.local.studio.desktop) printf '%s/CRIAs AI.app\n' "$INSTALL_ROOT" ;;
+    org.local.studio.desktop.dev) printf '%s/CRIAs AI Dev.app\n' "$INSTALL_ROOT" ;;
     *) return 1 ;;
   esac
 }
@@ -94,12 +94,12 @@ archive_is_valid() {
   local archive="$1"
   [[ -f "$archive" ]] || return 1
   unzip -tqq "$archive" || return 1
-  unzip -Z1 "$archive" | awk '$0 == "Contents/Info.plist" || ($0 ~ /^Local Studio( Dev)?\.app/ && $0 ~ /\/Contents\/Info\.plist$/) { found = 1 } END { exit found ? 0 : 1 }'
+  unzip -Z1 "$archive" | awk '$0 == "Contents/Info.plist" || ($0 ~ /^(Local Studio|CRIAs AI)( Dev)?\.app/ && $0 ~ /\/Contents\/Info\.plist$/) { found = 1 } END { exit found ? 0 : 1 }'
 }
 
 legacy_bundles() {
   [[ -d "$INSTALL_ROOT" ]] || return 0
-  find "$INSTALL_ROOT" -mindepth 1 -maxdepth 1 -type d -iname '*Local Studio*' -print0
+  find "$INSTALL_ROOT" -mindepth 1 -maxdepth 1 -type d \( -iname '*Local Studio*' -o -iname '*CRIAs AI*' \) -print0
 }
 
 unregister_bundle_tree() {
@@ -117,8 +117,8 @@ prune_stale_launch_services() {
   [[ -x "$LSREGISTER" ]] || return 0
   while IFS= read -r registered; do
     case "$registered" in
-      "$INSTALL_ROOT/Local Studio.app"|"$INSTALL_ROOT/Local Studio.app/"*|"$INSTALL_ROOT/Local Studio Dev.app"|"$INSTALL_ROOT/Local Studio Dev.app/"*) continue ;;
-      "$INSTALL_ROOT/Local Studio"*) ;;
+      "$INSTALL_ROOT/CRIAs AI.app"|"$INSTALL_ROOT/CRIAs AI.app/"*|"$INSTALL_ROOT/CRIAs AI Dev.app"|"$INSTALL_ROOT/CRIAs AI Dev.app/"*) continue ;;
+      "$INSTALL_ROOT/Local Studio"*|"$INSTALL_ROOT/CRIAs AI"*) ;;
       *) continue ;;
     esac
     [[ ! -e "$registered" ]] || continue
@@ -205,7 +205,7 @@ error: no built bundle, and this installer will NOT fetch the upstream release f
        Build the owner fork first:
            npm --prefix frontend run desktop:dist
        then install the exact bundle it produced:
-           LOCAL_STUDIO_BUILT_APP="$PWD/frontend/dist-desktop/mac-arm64/Local Studio.app" \
+           LOCAL_STUDIO_BUILT_APP="$PWD/frontend/dist-desktop/mac-arm64/CRIAs AI.app" \
              scripts/install-desktop-app.sh
 
        If you genuinely want upstream, say so: --from-upstream-release
@@ -224,7 +224,7 @@ if [[ "$channel" == "stable" && -z "$BUILT" ]]; then
   xcrun stapler validate "$release_dmg"
   spctl --assess --type open --context context:primary-signature "$release_dmg"
   hdiutil attach -readonly -nobrowse -mountpoint "$RELEASE_MOUNT" "$release_dmg" >/dev/null
-  BUILT="$RELEASE_MOUNT/$APP_NAME.app"
+  BUILT="$RELEASE_MOUNT/Local Studio.app"
 fi
 
 if [[ ! -d "$BUILT" ]]; then

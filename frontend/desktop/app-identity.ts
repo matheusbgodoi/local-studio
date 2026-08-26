@@ -4,7 +4,8 @@ import { readFileSync } from "node:fs";
 import { migrateLegacyUserData } from "./logic/user-data-migration";
 import { mirrorStableUserData } from "./logic/dev-channel-mirror";
 
-const CANONICAL_APP_NAME = "Local Studio";
+const CANONICAL_APP_NAME = "CRIAs AI";
+const STABLE_USER_DATA_NAME = "Local Studio";
 const LEGACY_BRANDED_APP_NAME = ["v", "LLM Studio"].join("");
 const LEGACY_USER_DATA_NAMES = [LEGACY_BRANDED_APP_NAME, "frontend"];
 const devAppName = process.env.LOCAL_STUDIO_DESKTOP_APP_NAME?.trim();
@@ -44,7 +45,7 @@ if (nonStablePackagedChannel) {
 
 const channelAppName = isDevChannel ? DEV_APP_NAME : undefined;
 
-/** True when this build is packaged from the dev channel (Local Studio Dev). */
+/** True when this build is packaged from the CRIAs AI dev channel. */
 export const isDevChannelBuild = isDevChannel;
 const appName =
   devAppName || channelAppName || (app.isPackaged ? CANONICAL_APP_NAME : app.getName());
@@ -57,7 +58,7 @@ const appDataDir = app.getPath("appData");
 const userDataDir = devUserDataDir
   ? path.resolve(devUserDataDir)
   : app.isPackaged
-    ? path.join(appDataDir, appName)
+    ? path.join(appDataDir, isDevChannel ? "Local Studio Dev" : STABLE_USER_DATA_NAME)
     : app.getPath("userData");
 
 app.setPath("userData", userDataDir);
@@ -66,7 +67,7 @@ app.setPath("userData", userDataDir);
 // launch, so the dev build shows your real projects and sessions while writing
 // only to its own directory.
 if (isDevChannel && !devUserDataDir) {
-  const stableDir = path.join(appDataDir, CANONICAL_APP_NAME);
+  const stableDir = path.join(appDataDir, STABLE_USER_DATA_NAME);
   try {
     const result = mirrorStableUserData({ stableDir, devDir: userDataDir });
     console.info(
