@@ -21,6 +21,7 @@ import { EnginesSection } from "./engines-section";
 import { ServicesSettings, SystemDetails, SystemOverview } from "./system-settings-section";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 import { ProfileSettings } from "./profile-settings";
+import type { CapabilityState } from "@local-studio/contracts/capabilities";
 interface SettingsViewProps {
   data: ConfigData | null;
   compatibilityReport: CompatibilityReport | null;
@@ -37,7 +38,9 @@ interface SettingsViewProps {
   onApiSettingsChange: (nextSettings: ApiConnectionSettings) => void;
   onTestConnection: () => void;
   onSystemSectionActive: () => void;
-  runtimeManagementCapability: "supported" | "unsupported" | "unknown";
+  runtimeManagementCapability: CapabilityState;
+  configCapability: CapabilityState;
+  compatibilityCapability: CapabilityState;
 }
 const sectionIcon = (Icon: LucideIcon) => <Icon className="h-3.5 w-3.5" />;
 const SECTIONS: SettingsSectionDef[] = [
@@ -79,6 +82,8 @@ export function SettingsView({
   onTestConnection,
   onSystemSectionActive,
   runtimeManagementCapability,
+  configCapability,
+  compatibilityCapability,
 }: SettingsViewProps) {
   const [activeSection, setActiveSection] = useState<SettingsSectionId>("connection");
   const visibleSection = SECTIONS.some((section) => section.id === activeSection)
@@ -139,13 +144,27 @@ export function SettingsView({
             compatibilityReport={compatibilityReport}
             loading={loading}
             error={error}
+            configCapability={configCapability}
+            compatibilityCapability={compatibilityCapability}
           />
           <EnginesSection
             runtime={data?.runtime ?? null}
             capability={runtimeManagementCapability}
           />
-          <ServicesSettings data={data} apiSettings={apiSettings} loading={loading} error={error} />
-          <SystemDetails data={data} compatibilityReport={compatibilityReport} />
+          {configCapability === "supported" ? (
+            <ServicesSettings
+              data={data}
+              apiSettings={apiSettings}
+              loading={loading}
+              error={error}
+            />
+          ) : null}
+          <SystemDetails
+            data={data}
+            compatibilityReport={compatibilityReport}
+            configCapability={configCapability}
+            compatibilityCapability={compatibilityCapability}
+          />
         </div>
       ) : null}
       {visibleSection === "appearance" ? <AppearanceSettings /> : null}

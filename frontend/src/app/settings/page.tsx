@@ -9,6 +9,7 @@ import { useSetup } from "@/features/setup/use-setup";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 import { legacyIntegrationHref } from "@/features/integrations/integration-navigation";
 import { useControllerCapabilities } from "@/hooks/controller-capabilities-store";
+import type { CapabilityState } from "@local-studio/contracts/capabilities";
 
 const hasSettingsHash = () => {
   if (typeof window === "undefined") return true;
@@ -35,9 +36,9 @@ function SettingsPageForController({
   runtimeManagementCapability,
 }: {
   controllerKey: string;
-  configCapability: "supported" | "unsupported" | "unknown";
-  compatibilityCapability: "supported" | "unsupported" | "unknown";
-  runtimeManagementCapability: "supported" | "unsupported" | "unknown";
+  configCapability: CapabilityState;
+  compatibilityCapability: CapabilityState;
+  runtimeManagementCapability: CapabilityState;
 }) {
   const router = useRouter();
   const configs = useSettings(controllerKey, configCapability, compatibilityCapability);
@@ -81,6 +82,8 @@ function SettingsPageForController({
       onTestConnection={configs.testConnection}
       onSystemSectionActive={configs.ensureConfigLoaded}
       runtimeManagementCapability={runtimeManagementCapability}
+      configCapability={configCapability}
+      compatibilityCapability={compatibilityCapability}
     />
   );
 }

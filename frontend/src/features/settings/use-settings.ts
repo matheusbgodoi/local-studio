@@ -13,6 +13,7 @@ import {
 import { readPageCache, scopedPageCacheKey, writePageCache } from "@/lib/page-data-cache";
 import type { CompatibilityReport, ConfigData } from "@/lib/types";
 import type { ApiConnectionSettings, ConnectionStatus } from "./types";
+import type { CapabilityState } from "@local-studio/contracts/capabilities";
 
 const FAST_STATUS_REQUEST = { timeout: 5_000, retries: 0 } as const;
 const CONNECTION_TEST_REQUEST = { timeout: 10_000, retries: 0 } as const;
@@ -45,8 +46,8 @@ function rejectionMessage(result: PromiseSettledResult<unknown>, fallback: strin
 
 export function useSettings(
   controllerKey: string,
-  configCapability: "supported" | "unsupported" | "unknown",
-  compatibilityCapability: "supported" | "unsupported" | "unknown",
+  configCapability: CapabilityState,
+  compatibilityCapability: CapabilityState,
 ) {
   const configCacheKey = scopedPageCacheKey(controllerKey, "settings:config");
   const compatibilityCacheKey = scopedPageCacheKey(controllerKey, "settings:compat");
