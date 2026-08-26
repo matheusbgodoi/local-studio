@@ -137,3 +137,15 @@ These stores are deliberately separate:
 
 This separation makes every durable fact inspectable and prevents a document or
 conversation from silently becoming a permanent personal profile.
+
+## Production validation
+
+The owner build was validated end to end on 2026-08-26. A new conversation in the
+installed CRIAs AI 2.1.0 selected only `personal-knowledge-mcp` in Automatic mode.
+The RTX 3090 `qwen-daily` model called `knowledge_status` and
+`knowledge_search` without tool errors, received 1,577 documents and 24,607
+embedded chunks, and cited the vault-relative CRIAs AI memory-architecture note.
+
+The companion MCP also passed 14 self-tests and a direct real-vault smoke. These
+checks prove the installed path from conversation routing through MCP retrieval to
+model synthesis; they do not replace a future versioned retrieval-quality dataset.
