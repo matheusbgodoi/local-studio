@@ -345,7 +345,8 @@ export function useChatPaneSendFlow({
 
   const sendTextMessage = useCallback(
     (rawText: string) => {
-      if (!activeTab || !modelId) return Promise.resolve();
+      if (!activeTab) return Promise.reject(new Error("Open a conversation to use this action"));
+      if (!modelId) return Promise.reject(new Error("Select a model to use this action"));
       const text = rawText.trim();
       if (!text) return Promise.resolve();
       const runtime = activeTab.id;

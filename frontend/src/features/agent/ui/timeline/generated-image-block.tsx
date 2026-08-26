@@ -11,6 +11,7 @@ export type GeneratedImageDecision = "approve" | "reject" | "regenerate";
 export type GeneratedImageDecisionHandler = (
   decision: GeneratedImageDecision,
   block: ToolBlock,
+  selection: { imageIndex: number; imageCount: number },
   note?: string,
 ) => void | Promise<void>;
 
@@ -89,11 +90,14 @@ export function GeneratedImageBlock({
   block: ToolBlock;
   onDecision?: GeneratedImageDecisionHandler;
 }) {
-  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [regenerating, setRegenerating] = useState(false);
   const [note, setNote] = useState("");
   const [pending, setPending] = useState<GeneratedImageDecision | null>(null);
   const [copied, setCopied] = useState(false);
+  const [decisionStatus, setDecisionStatus] = useState<string | null>(null);
+  const [decisionError, setDecisionError] = useState<string | null>(null);
   const dimensions = useMemo(() => blockDimensions(block), [block]);
   const aspectRatio = `${dimensions.width} / ${dimensions.height}`;
   const images = block.resultImages ?? [];
@@ -101,12 +105,27 @@ export function GeneratedImageBlock({
   const decide = async (decision: GeneratedImageDecision, decisionNote?: string) => {
     if (!onDecision || pending) return;
     setPending(decision);
+    setDecisionError(null);
     try {
-      await onDecision(decision, block, decisionNote);
+      await onDecision(
+        decision,
+        block,
+        { imageIndex: activeIndex, imageCount: images.length },
+        decisionNote,
+      );
+      setDecisionStatus(
+        decision === "approve"
+          ? "Approval queued"
+          : decision === "reject"
+            ? "Rejection queued"
+            : "Regeneration queued",
+      );
       if (decision === "regenerate") {
         setRegenerating(false);
         setNote("");
       }
+    } catch (error) {
+      setDecisionError(error instanceof Error ? error.message : "The image action failed");
     } finally {
       setPending(null);
     }
@@ -141,9 +160,14 @@ export function GeneratedImageBlock({
             <button
               key={`${block.id}-${index}`}
               type="button"
-              className="generated-image-preview"
+              className={`generated-image-preview ${
+                images.length > 1 && activeIndex === index ? "ring-2 ring-(--accent)" : ""
+              }`}
               style={{ aspectRatio }}
-              onClick={() => setSelectedIndex(index)}
+              onClick={() => {
+                setActiveIndex(index);
+                setLightboxIndex(index);
+              }}
               aria-label={`Open generated image ${index + 1}`}
             >
               <Image
@@ -196,7 +220,7 @@ export function GeneratedImageBlock({
           variant="icon"
           aria-label="Copy image"
           onClick={() =>
-            void copyImage(imageUrl(images[0]!)).then(() => {
+            void copyImage(imageUrl(images[activeIndex]!)).then(() => {
               setCopied(true);
               window.setTimeout(() => setCopied(false), 1_500);
             })
@@ -208,11 +232,29 @@ export function GeneratedImageBlock({
           size="sm"
           variant="icon"
           aria-label="Download image"
-          onClick={() => downloadImage(imageUrl(images[0]!), images[0]!.mimeType)}
+          onClick={() =>
+            downloadImage(imageUrl(images[activeIndex]!), images[activeIndex]!.mimeType)
+          }
         >
           <Download className="h-3.5 w-3.5" />
         </Button>
       </div>
+
+      {images.length > 1 ? (
+        <p className="mt-1.5 text-[length:var(--fs-sm)] text-(--dim)">
+          Image {activeIndex + 1} of {images.length} selected
+        </p>
+      ) : null}
+      {decisionStatus ? (
+        <p className="mt-1.5 text-[length:var(--fs-sm)] text-(--accent)" role="status">
+          {decisionStatus}
+        </p>
+      ) : null}
+      {decisionError ? (
+        <p className="mt-1.5 text-[length:var(--fs-sm)] text-(--danger)" role="alert">
+          {decisionError}
+        </p>
+      ) : null}
 
       {regenerating ? (
         <form
@@ -236,22 +278,22 @@ export function GeneratedImageBlock({
       ) : null}
 
       <UiModal
-        isOpen={selectedIndex !== null}
-        onClose={() => setSelectedIndex(null)}
+        isOpen={lightboxIndex !== null}
+        onClose={() => setLightboxIndex(null)}
         maxWidth="max-w-6xl"
         className="generated-image-lightbox overflow-hidden"
       >
         <UiModalHeader
           title="Generated image"
-          onClose={() => setSelectedIndex(null)}
+          onClose={() => setLightboxIndex(null)}
           actions={
-            selectedIndex !== null ? (
+            lightboxIndex !== null ? (
               <Button
                 size="sm"
                 variant="ghost"
                 icon={<Download className="h-3.5 w-3.5" />}
                 onClick={() => {
-                  const image = images[selectedIndex];
+                  const image = images[lightboxIndex];
                   if (image) downloadImage(imageUrl(image), image.mimeType);
                 }}
               >
@@ -260,11 +302,11 @@ export function GeneratedImageBlock({
             ) : null
           }
         />
-        {selectedIndex !== null && images[selectedIndex] ? (
+        {lightboxIndex !== null && images[lightboxIndex] ? (
           <div className="flex max-h-[calc(100dvh-8rem)] items-center justify-center overflow-auto bg-black/35 p-3">
             <Image
               unoptimized
-              src={imageUrl(images[selectedIndex]!)}
+              src={imageUrl(images[lightboxIndex]!)}
               alt="Generated result enlarged"
               width={dimensions.width}
               height={dimensions.height}

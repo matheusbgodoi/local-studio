@@ -199,23 +199,27 @@ function chatPaneClassName(composerOnly: boolean): string {
   );
 }
 
-function generatedImageDecisionPrompt(
-  decision: GeneratedImageDecision,
-  toolCallId: string,
-  resultText: string | undefined,
-  note: string | undefined,
-): string {
+function generatedImageDecisionPrompt(input: {
+  decision: GeneratedImageDecision;
+  toolCallId: string;
+  imageIndex: number;
+  imageCount: number;
+  resultText?: string;
+  note?: string;
+}): string {
+  const { decision, toolCallId, imageIndex, imageCount, resultText, note } = input;
   const artifact = resultText?.trim() ? `\nTool result: ${resultText.trim()}` : "";
+  const selection = `image ${imageIndex + 1} of ${imageCount}`;
   if (decision === "approve") {
-    return `Approve the generated image from tool call ${toolCallId}.${artifact}\nUse that exact artifact. Apply the configured approval step: upscale and save or finalize it. Do not regenerate it.`;
+    return `Approve ${selection} from tool call ${toolCallId}.${artifact}\nUse that exact selected artifact. Apply the configured approval step: upscale and save or finalize it. Do not regenerate it.`;
   }
   if (decision === "reject") {
-    return `Reject the generated image from tool call ${toolCallId}.${artifact}\nDo not upscale, publish, or finalize it. Confirm that it was rejected.`;
+    return `Reject ${selection} from tool call ${toolCallId}.${artifact}\nDo not upscale, publish, or finalize it. Confirm that it was rejected.`;
   }
   const change = note?.trim()
     ? `Apply this requested change: ${note.trim()}`
     : "Use a new random seed and otherwise preserve the request.";
-  return `Regenerate the image from tool call ${toolCallId}.${artifact}\n${change}\nShow the new result for approval.`;
+  return `Regenerate ${selection} from tool call ${toolCallId}.${artifact}\n${change}\nShow the new result for approval.`;
 }
 
 function ChatTranscript({
@@ -744,10 +748,17 @@ export function ChatPane({
     updateTab,
   });
   const handleGeneratedImageDecision = useCallback<GeneratedImageDecisionHandler>(
-    (decision, block, note) => {
+    (decision, block, selection, note) => {
       setStickToBottom(true);
       return sendTextMessage(
-        generatedImageDecisionPrompt(decision, block.id, block.resultText, note),
+        generatedImageDecisionPrompt({
+          decision,
+          toolCallId: block.id,
+          imageIndex: selection.imageIndex,
+          imageCount: selection.imageCount,
+          resultText: block.resultText,
+          note,
+        }),
       );
     },
     [sendTextMessage],
