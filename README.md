@@ -115,10 +115,22 @@ Details: [`docs/durable-agentic-runtime.md`](docs/durable-agentic-runtime.md).
 ### Lazy tools
 
 Skills load on demand and MCP connectors are armed per chat session rather than
-per installation, so a fresh session carries neither in its tool schemas.
+per installation. A fresh session carries no personal connector unless a policy
+selects it; the new Knowledge setting can select only the private Obsidian
+connector automatically, while `/mcp` remains the explicit per-chat override.
 
 Details: [`docs/status-and-usage.md`](docs/status-and-usage.md) and
 [`docs/web-search.md`](docs/web-search.md).
+
+### Explicit memory and private Knowledge
+
+Settings → Memory separates two complementary layers. Personal memory stores only
+short preferences or everyday details the owner confirms, with item-level editing,
+pausing and deletion. Obsidian Knowledge is document retrieval through a local MCP;
+it searches sources only when the answer depends on the vault. Neither layer trains
+or changes the model weights.
+
+Details: [`docs/personal-memory-and-knowledge.md`](docs/personal-memory-and-knowledge.md).
 
 ### VPN Protected, in place of the Browser toggle
 
@@ -447,6 +459,9 @@ Three things behave differently from upstream and are documented separately:
 - **[`docs/durable-agentic-runtime.md`](docs/durable-agentic-runtime.md)** — the
   durable Run/Task/Agent runtime: schema, scheduler, context budget, compaction,
   recovery, idempotency, and why a bigger model needs no code change.
+- **[`docs/personal-memory-and-knowledge.md`](docs/personal-memory-and-knowledge.md)** —
+  explicit confirmed memory, automatic Obsidian retrieval, privacy boundaries,
+  storage, modes and deletion semantics.
 
 The rig this fork is built to drive, and the project it belongs to, is
 [`matheusbgodoi/local-ai-3090-stack`](https://github.com/matheusbgodoi/local-ai-3090-stack).
