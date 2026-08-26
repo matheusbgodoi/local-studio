@@ -12,7 +12,7 @@ import {
 } from "@/lib/themes";
 
 const STORE_KEY = "local-studio-state";
-const DEFAULT_THEME_ID: ThemeId = "zai-dark";
+const DEFAULT_THEME_ID: ThemeId = "crias-dark";
 
 function lightnessFromColor(value: string): number | null {
   const hsl = value.match(/hsla?\([^,]+,\s*[^,]+,\s*([\d.]+)%/i);
@@ -116,6 +116,7 @@ export function resolveThemeCssTokens(
     "ui-border": ui.border,
     "ui-separator": ui.separator,
     "ui-accent": tokens.accent,
+    link: tokens.accent,
   };
 }
 
@@ -216,6 +217,7 @@ export function getThemeBootstrapScript(): string {
   const bootstrapData = {
     storeKey: STORE_KEY,
     defaultThemeId: DEFAULT_THEME_ID,
+    legacyDefaultThemeId: "zai-dark",
     defaultFontFamilyId: DEFAULT_FONT_FAMILY_ID,
     defaultFontSizeId: DEFAULT_FONT_SIZE_ID,
     themeTokensById: THEME_TOKENS_BY_ID,
@@ -237,7 +239,8 @@ export function getThemeBootstrapScript(): string {
           state = {};
         }
 
-        var themeId = typeof state.themeId === "string" ? state.themeId : data.defaultThemeId;
+        var storedThemeId = typeof state.themeId === "string" ? state.themeId : data.defaultThemeId;
+        var themeId = storedThemeId === data.legacyDefaultThemeId ? data.defaultThemeId : storedThemeId;
         var themeTokens = data.themeTokensById[themeId] || data.themeTokensById[data.defaultThemeId];
         var resolvedThemeId = data.themeTokensById[themeId] ? themeId : data.defaultThemeId;
 

@@ -88,7 +88,7 @@ export interface ThemeSlice {
 }
 
 const createThemeSlice: StateCreator<ThemeSlice, [], [], ThemeSlice> = (set) => ({
-  themeId: "zai-dark",
+  themeId: "crias-dark",
   fontFamilyId: DEFAULT_FONT_FAMILY_ID,
   fontSizeId: DEFAULT_FONT_SIZE_ID,
   setThemeId: (themeId: ThemeId) => {
@@ -153,6 +153,7 @@ export const useAppStore = create<AppStore>()(
   devtools(
     persist(createAppStoreImpl, {
       name: "local-studio-state",
+      version: 1,
       storage,
       skipHydration: true,
       partialize: (state) => ({
@@ -165,6 +166,11 @@ export const useAppStore = create<AppStore>()(
         fileViewerFontSize: state.fileViewerFontSize,
         lastOpenFileByProject: state.lastOpenFileByProject,
       }),
+      migrate: (persisted, version) => {
+        if (version !== 0 || !persisted || typeof persisted !== "object") return persisted;
+        const state = persisted as Record<string, unknown>;
+        return state.themeId === "zai-dark" ? { ...state, themeId: "crias-dark" } : state;
+      },
       merge: (persisted, current) => {
         const persistedRecord = (persisted ?? {}) as Record<string, unknown>;
         const persistedStore = (persisted ?? {}) as Partial<AppStore>;

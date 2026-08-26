@@ -18,7 +18,7 @@ import { SettingsButton, SettingsGroup, SettingsRow } from "./settings-ui";
 
 const CUSTOM_THEME_TOKEN_KEY = "local-studio.customThemeTokens";
 const LIGHT_THEME_ID = "zai-light";
-const DARK_THEME_ID = "zai-dark";
+const DARK_THEME_ID = "crias-dark";
 
 type ThemeMode = "light" | "dark" | "system";
 
@@ -113,7 +113,7 @@ export function AppearanceSettings() {
 
   const [query, setQuery] = useState("");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
-    () => new Set(["Reference", "Studio"]),
+    () => new Set(["CRIAs AI", "Reference"]),
   );
 
   const sizeMap: Record<string, number> = { sm: 14, md: 16, lg: 17, xl: 18, "2xl": 20 };
@@ -432,7 +432,7 @@ export function AppearanceSettings() {
         />
         <SettingsRow
           label="UI font size"
-          description="Base size for the Local Studio UI"
+          description="Base size for the CRIAs AI UI"
           control={
             <div className="flex w-full items-center gap-3">
               <Slider

@@ -1,13 +1,13 @@
 {
   "id": "/",
-  "name": "Local Studio",
-  "short_name": "Local Studio",
-  "description": "Model management for vLLM and SGLang inference servers",
-  "start_url": "/",
+  "name": "CRIAs AI",
+  "short_name": "CRIAs AI",
+  "description": "Private AI workspace for local models and durable agents",
+  "start_url": "/agent",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#1a1917",
-  "theme_color": "#1a1917",
+  "background_color": "#181818",
+  "theme_color": "#181818",
   "orientation": "portrait-primary",
   "icons": [
     {

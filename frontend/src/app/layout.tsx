@@ -11,12 +11,12 @@ export const viewport: Viewport = {
   maximumScale: 1,
   userScalable: false,
   viewportFit: "cover",
-  themeColor: "#0a0a0a",
+  themeColor: "#181818",
 };
 
 export const metadata: Metadata = {
-  title: "Local Studio",
-  description: "Model management for vLLM and SGLang",
+  title: "CRIAs AI",
+  description: "Private AI workspace for local models and durable agents",
   // The manifest link is written by hand in <head> below: it needs
   // crossorigin="use-credentials" (Next's `manifest` field can't set it), or an
   // access-gated deployment serves the login page instead of the manifest and
@@ -24,11 +24,10 @@ export const metadata: Metadata = {
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "Local Studio",
+    title: "CRIAs AI",
   },
   icons: {
     icon: [
-      { url: "/mocks/logo-1.svg", type: "image/svg+xml" },
       { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
       { url: "/icons/icon-512.png", sizes: "512x512", type: "image/png" },
     ],
@@ -81,11 +80,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" data-theme="zai-dark" suppressHydrationWarning>
+    <html lang="en" data-theme="crias-dark" suppressHydrationWarning>
       <head>
         <link rel="manifest" href="/manifest.json" crossOrigin="use-credentials" />
         <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
-        <link rel="icon" href="/mocks/logo-1.svg" type="image/svg+xml" />
+        <link rel="icon" href="/icons/icon-192.png" type="image/png" />
         <meta name="mobile-web-app-capable" content="yes" />
       </head>
       <body>

@@ -1,4 +1,5 @@
 export type ThemeId =
+  | "crias-dark"
   | "zai-light"
   | "zai-dark"
   | "chatgpt-dark"
@@ -114,6 +115,19 @@ const ZAI_DARK: ThemeTokens = {
   err: "#ff6764",
 };
 
+const CRIAS_DARK: ThemeTokens = {
+  bg: "#181818",
+  fg: "#ffffff",
+  dim: "#ffffffb3",
+  border: "#ffffff14",
+  surface: "#212121",
+  accent: "#204ff0",
+  hl1: "#ffffffb3",
+  hl2: "#ffffff80",
+  hl3: "#8f8f8f",
+  err: "#ff6764",
+};
+
 const CHATGPT_DARK: ThemeTokens = {
   bg: "#191919",
   fg: "#d9d9d8",
@@ -191,6 +205,13 @@ const lightTheme = (bg: string, fg: string, surface: string, accent: string): Th
 });
 
 export const THEMES: ThemeMeta[] = [
+  createTheme(
+    "crias-dark",
+    "CRIAs AI",
+    "Charcoal workspace with the CRIAs AI blue accent",
+    "CRIAs AI",
+    CRIAS_DARK,
+  ),
   createTheme(
     "zai-dark",
     "Studio Dark",
