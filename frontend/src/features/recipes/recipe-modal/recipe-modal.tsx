@@ -38,7 +38,7 @@ export function RecipeModal({
   return (
     <Drawer width={880}>
       <DrawerHeader
-        title={recipe.id ? recipe.name || "Edit Serve" : "New Serve"}
+        title={recipe.id ? recipe.name || "Edit launch profile" : "New launch profile"}
         badge={
           <span
             className={`inline-flex h-5 shrink-0 items-center rounded-md px-1.5 text-[length:var(--fs-2xs)] font-medium ${engineStyle.bg} ${engineStyle.fg}`}

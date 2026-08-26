@@ -7,6 +7,7 @@ export type AutomationDraft = {
   prompt: string;
   modelId: string;
   cwd: string;
+  requiredConnectorIds: string[];
   schedule: AutomationSchedule;
 };
 
@@ -15,6 +16,7 @@ export const NEW_AUTOMATION_DRAFT: AutomationDraft = {
   prompt: "",
   modelId: "",
   cwd: "",
+  requiredConnectorIds: [],
   schedule: { kind: "daily", time: "08:00" },
 };
 
@@ -26,6 +28,7 @@ export function draftFromAutomation(automation: Automation): AutomationDraft {
     prompt: automation.prompt,
     modelId: automation.modelId,
     cwd: automation.cwd,
+    requiredConnectorIds: [...automation.requiredConnectorIds],
     schedule: automation.schedule,
   };
 }

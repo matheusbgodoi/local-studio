@@ -1,6 +1,7 @@
 import {
   asRecord,
   compactionTextFromEvent,
+  extractToolImages,
   extractToolText,
   newId,
 } from "@/features/agent/messages/helpers";
@@ -379,6 +380,7 @@ function applyToolExecutionToBlocks(
   const id = String(event.toolCallId || "");
   if (!id) return null;
   const resultText = extractToolText(event.partialResult || event.result);
+  const resultImages = extractToolImages(event.partialResult || event.result);
   const status =
     event.type === "tool_execution_end"
       ? ((event.isError ? "error" : "done") as ToolBlock["status"])
@@ -390,9 +392,16 @@ function applyToolExecutionToBlocks(
       ...existing,
       status: status ?? existing.status,
       resultText: resultText || existing.resultText,
+      resultImages: resultImages.length > 0 ? resultImages : existing.resultImages,
       text: existing.argsText || existing.text || resultText,
     }),
-    () => toolBlock(id, "tool", { status: status ?? "running", resultText, text: resultText }),
+    () =>
+      toolBlock(id, "tool", {
+        status: status ?? "running",
+        resultText,
+        resultImages,
+        text: resultText,
+      }),
   );
 }
 

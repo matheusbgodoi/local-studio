@@ -41,7 +41,7 @@ export const loadSqlDatabase = (): new (filepath: string) => SqlDatabase => {
 };
 
 export const AGENTIC_STORE_FILENAME = "agentic-runtime.sqlite";
-export const AGENTIC_STORE_VERSION = 3;
+export const AGENTIC_STORE_VERSION = 8;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS agentic_metadata (
@@ -55,12 +55,14 @@ CREATE TABLE IF NOT EXISTS agentic_runs (
   status TEXT NOT NULL CHECK (status IN ('CREATED','PLANNING','RUNNING','PAUSED','WAITING_USER','COMPLETING','COMPLETED','FAILED','CANCELLED')),
   model_id TEXT NOT NULL,
   physical_model_id TEXT NOT NULL,
+  model_display_name TEXT,
   behavior_profile TEXT,
   network_policy TEXT NOT NULL DEFAULT 'direct' CHECK (network_policy IN ('direct','vpn_protected')),
   context_window INTEGER NOT NULL,
   usable_limit INTEGER NOT NULL,
   session_id TEXT NOT NULL,
   pi_session_id TEXT,
+  current_for_conversation INTEGER NOT NULL DEFAULT 0 CHECK (current_for_conversation IN (0,1)),
   cwd TEXT NOT NULL,
   plan_revision INTEGER NOT NULL DEFAULT 0,
   active_task_id TEXT,
@@ -72,6 +74,7 @@ CREATE TABLE IF NOT EXISTS agentic_runs (
   result_summary TEXT,
   failure_reason TEXT,
   recovery_state TEXT,
+  archived_at_ms INTEGER,
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL
 ) STRICT;
@@ -116,6 +119,7 @@ CREATE TABLE IF NOT EXISTS agentic_agents (
   status TEXT NOT NULL CHECK (status IN ('IDLE','WORKING','COMPACTING','WAITING','INTERRUPTED','FINISHED')),
   model_id TEXT NOT NULL,
   physical_model_id TEXT NOT NULL,
+  model_display_name TEXT,
   behavior_profile TEXT,
   current_task_id TEXT,
   session_id TEXT NOT NULL,
@@ -264,7 +268,7 @@ export function openAgenticDatabase(dataDir: string): { database: SqlDatabase; f
   // existing store keeps the old shape and the first INSERT fails on a column
   // that is not there.
   //
-  addMissingColumns(database);
+  const addedColumns = addMissingColumns(database);
   database
     .prepare("INSERT OR IGNORE INTO agentic_metadata(key, value) VALUES ('version', ?)")
     .run(String(AGENTIC_STORE_VERSION));
@@ -278,6 +282,15 @@ export function openAgenticDatabase(dataDir: string): { database: SqlDatabase; f
       `Agentic runtime store was written by a newer build (version ${String(stored?.value)})`,
     );
   }
+  if (
+    storedVersion < AGENTIC_STORE_VERSION ||
+    addedColumns.has("agentic_runs.current_for_conversation")
+  ) {
+    migrateCurrentConversation(database);
+  } else {
+    installCurrentConversationIndexes(database);
+  }
+  if (storedVersion < 8) repairTerminalAgentStates(database);
   if (storedVersion < AGENTIC_STORE_VERSION) {
     database
       .prepare("UPDATE agentic_metadata SET value = ? WHERE key = 'version'")
@@ -294,6 +307,97 @@ export function openAgenticDatabase(dataDir: string): { database: SqlDatabase; f
   return { database, filepath: target };
 }
 
+function repairTerminalAgentStates(database: SqlDatabase): void {
+  database.exec(`
+    UPDATE agentic_agents
+    SET status = CASE
+          WHEN run_id IN (SELECT id FROM agentic_runs WHERE status = 'COMPLETED') THEN 'FINISHED'
+          ELSE 'INTERRUPTED'
+        END,
+        current_task_id = NULL
+    WHERE status IN ('IDLE','WORKING','COMPACTING','WAITING')
+      AND run_id IN (
+        SELECT id FROM agentic_runs WHERE status IN ('COMPLETED','FAILED','CANCELLED')
+      );
+  `);
+}
+
+function installCurrentConversationIndexes(database: SqlDatabase): void {
+  database.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS agentic_runs_current_pi
+      ON agentic_runs(pi_session_id)
+      WHERE current_for_conversation = 1 AND pi_session_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS agentic_runs_current_session
+      ON agentic_runs(session_id)
+      WHERE current_for_conversation = 1;
+  `);
+}
+
+function migrateCurrentConversation(database: SqlDatabase): void {
+  withTransaction(database, () => {
+    database.exec(`
+      DROP INDEX IF EXISTS agentic_runs_current_pi;
+      DROP INDEX IF EXISTS agentic_runs_current_session;
+    `);
+    const rows = database
+      .prepare(
+        `
+        SELECT id, session_id, pi_session_id, current_for_conversation
+        FROM agentic_runs
+        WHERE archived_at_ms IS NULL
+      `,
+      )
+      .all() as Array<{
+      id: string;
+      session_id: string;
+      pi_session_id: string | null;
+      current_for_conversation: number;
+    }>;
+    const parent = new Map(rows.map((row) => [row.id, row.id]));
+    const find = (id: string): string => {
+      const next = parent.get(id) ?? id;
+      if (next === id) return id;
+      const root = find(next);
+      parent.set(id, root);
+      return root;
+    };
+    const unite = (left: string, right: string): void => {
+      const leftRoot = find(left);
+      const rightRoot = find(right);
+      if (leftRoot !== rightRoot) parent.set(rightRoot, leftRoot);
+    };
+    const bySession = new Map<string, string>();
+    const byPi = new Map<string, string>();
+    for (const row of rows) {
+      const sessionPeer = bySession.get(row.session_id);
+      if (sessionPeer) unite(row.id, sessionPeer);
+      else bySession.set(row.session_id, row.id);
+      if (!row.pi_session_id) continue;
+      const piPeer = byPi.get(row.pi_session_id);
+      if (piPeer) unite(row.id, piPeer);
+      else byPi.set(row.pi_session_id, row.id);
+    }
+    const groups = new Map<string, typeof rows>();
+    for (const row of rows) {
+      const root = find(row.id);
+      groups.set(root, [...(groups.get(root) ?? []), row]);
+    }
+    database.exec(
+      "UPDATE agentic_runs SET current_for_conversation = 0 WHERE archived_at_ms IS NOT NULL",
+    );
+    const setCurrent = database.prepare(
+      "UPDATE agentic_runs SET current_for_conversation = ? WHERE id = ?",
+    );
+    for (const group of groups.values()) {
+      const current = group.filter((row) => row.current_for_conversation === 1);
+      if (current.length === 1) continue;
+      for (const row of current) setCurrent.run(0, row.id);
+      if (current.length === 0 && group.length === 1) setCurrent.run(1, group[0]!.id);
+    }
+    installCurrentConversationIndexes(database);
+  });
+}
+
 //
 // Additive only, and idempotent: a column already present is left alone, and
 // nothing here drops, renames or rewrites anything. A NOT NULL column needs a
@@ -301,7 +405,8 @@ export function openAgenticDatabase(dataDir: string): { database: SqlDatabase; f
 // because a Run that was created before this existed was not protected, and
 // backfilling it as protected would claim a guarantee nothing ever provided.
 //
-function addMissingColumns(database: SqlDatabase): void {
+function addMissingColumns(database: SqlDatabase): Set<string> {
+  const added = new Set<string>();
   const additions: ReadonlyArray<{ table: string; column: string; definition: string }> = [
     {
       table: "agentic_runs",
@@ -309,6 +414,18 @@ function addMissingColumns(database: SqlDatabase): void {
       definition:
         "TEXT NOT NULL DEFAULT 'direct' CHECK (network_policy IN ('direct','vpn_protected'))",
     },
+    {
+      table: "agentic_runs",
+      column: "archived_at_ms",
+      definition: "INTEGER",
+    },
+    {
+      table: "agentic_runs",
+      column: "current_for_conversation",
+      definition: "INTEGER NOT NULL DEFAULT 0 CHECK (current_for_conversation IN (0,1))",
+    },
+    { table: "agentic_runs", column: "model_display_name", definition: "TEXT" },
+    { table: "agentic_agents", column: "model_display_name", definition: "TEXT" },
   ];
   for (const addition of additions) {
     const columns = database.prepare(`PRAGMA table_info(${addition.table})`).all() as Array<{
@@ -319,7 +436,9 @@ function addMissingColumns(database: SqlDatabase): void {
     database.exec(
       `ALTER TABLE ${addition.table} ADD COLUMN ${addition.column} ${addition.definition}`,
     );
+    added.add(`${addition.table}.${addition.column}`);
   }
+  return added;
 }
 
 export function withTransaction<T>(database: SqlDatabase, task: () => T): T {

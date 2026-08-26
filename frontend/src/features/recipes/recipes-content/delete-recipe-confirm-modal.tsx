@@ -11,7 +11,7 @@ type Props = {
 export function DeleteRecipeConfirmModal({ recipeName, onCancel, onConfirm }: Props) {
   return (
     <UiModal isOpen onClose={onCancel} maxWidth="max-w-md">
-      <UiModalHeader title="Delete Serve" onClose={onCancel} />
+      <UiModalHeader title="Delete launch profile" onClose={onCancel} />
       <div className="p-6">
         <p className="mb-6 text-sm text-(--ui-muted)">
           Delete &quot;{recipeName}&quot;? Model weights stay on disk.

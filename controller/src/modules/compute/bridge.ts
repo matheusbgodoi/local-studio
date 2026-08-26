@@ -260,6 +260,7 @@ export const createComputeBridge = (deps: ComputeBridgeDependencies): ComputeBri
         model_path: recipe?.model_path ?? null,
         port: record.port,
         served_model_name: recipe?.served_model_name ?? null,
+        started_at: record.startedAt,
       } satisfies ProcessInfo;
     });
 

@@ -3,15 +3,21 @@ import { toGB, toGBFromMB } from "@/lib/formatters";
 
 export type MetricSampleInput = {
   key: string;
-  generation: number;
-  generationPeak: number;
-  prefill: number;
-  prefillPeak: number;
-  ttft: number;
-  ttftPeak: number;
-  requests: number;
-  requestPeak: number;
+  generation: number | null;
+  generationPeak: number | null;
+  prefill: number | null;
+  prefillPeak: number | null;
+  ttft: number | null;
+  ttftPeak: number | null;
+  requests: number | null;
+  requestPeak: number | null;
+  queued: number | null;
+  gpuUtilization: number | null;
+  vramPercent: number | null;
+  powerWatts: number | null;
+  temperatureC: number | null;
   active: boolean;
+  performanceObservedAt: number;
 };
 
 export type MetricColumnView = {
@@ -61,6 +67,8 @@ const PEAK_DISPLAY: Record<PeakKind, { digits: number; suffix: string; label: st
 type StatusSectionViewInput = {
   currentProcess: ProcessInfo | null;
   currentRecipe: RecipeWithStatus | null;
+  modelDisplayName?: string | null;
+  physicalModelId?: string | null;
   gpus: GPU[];
   inferencePort?: number;
   metrics: Metrics | null;
@@ -70,6 +78,8 @@ type StatusSectionViewInput = {
 export function resolveStatusSectionView({
   currentProcess,
   currentRecipe,
+  modelDisplayName,
+  physicalModelId,
   gpus,
   inferencePort,
   metrics,
@@ -77,39 +87,103 @@ export function resolveStatusSectionView({
 }: StatusSectionViewInput) {
   const isRunning = Boolean(currentProcess);
   const perf = resolvePerformanceMetrics(metrics, gpus);
+  const performanceObservedAt = firstMeasured(metrics?.performance_observed_at_ms) ?? 0;
+  const performanceIdentityMatches = matchesPerformanceEpoch(
+    metrics,
+    physicalModelId,
+    currentProcess?.started_at,
+    performanceObservedAt,
+  );
+  const performanceSample = resolvePerformanceSample(metrics, perf, performanceIdentityMatches);
   return {
     backend: currentProcess?.backend,
     compactMetrics: compactMetricViews(perf),
     displayPlatformKind: platformKind ?? null,
     displayPort: inferencePort || currentProcess?.port || undefined,
     isRunning,
-    metricColumns: metricColumnViews(metrics, perf),
-    modelName: resolveModelName(currentProcess, currentRecipe),
+    metricColumns: metricColumnViews(
+      metrics,
+      perf,
+      performanceIdentityMatches ? performanceObservedAt : 0,
+    ),
+    modelName: resolveModelName(currentProcess, currentRecipe, modelDisplayName),
     sampleInput: {
-      key: resolveModelSampleKey(currentProcess, currentRecipe),
-      generation: perf.genTps ?? 0,
-      generationPeak: peakFor(metrics, "generation") ?? perf.genTps ?? 0,
-      prefill: perf.prefillTps ?? 0,
-      prefillPeak: peakFor(metrics, "prefill") ?? perf.prefillTps ?? 0,
-      ttft: perf.ttftMs ?? 0,
-      ttftPeak: peakFor(metrics, "ttft") ?? perf.ttftMs ?? 0,
+      key: resolveProcessSampleKey(currentProcess, currentRecipe, physicalModelId),
+      ...performanceSample,
       requests: perf.sessions,
-      requestPeak: perf.peakReq || perf.sessions,
+      requestPeak: perf.peakReq ?? perf.sessions,
+      queued: perf.queued,
+      gpuUtilization: perf.gpuUtilization,
+      vramPercent:
+        perf.totalMemUsed !== null && perf.vramCapacity
+          ? (perf.totalMemUsed / perf.vramCapacity) * 100
+          : null,
+      powerWatts: perf.totalPower,
+      temperatureC: perf.temperatureC,
       active: isRunning,
+      performanceObservedAt: performanceIdentityMatches ? performanceObservedAt : 0,
     },
   };
 }
 
-function resolveModelName(
+function matchesPerformanceEpoch(
+  metrics: Metrics | null,
+  physicalModelId: string | null | undefined,
+  processStartedAt: string | null | undefined,
+  observedAt: number,
+) {
+  if (observedAt <= 0) return true;
+  if (!metrics?.performance_model_id || !physicalModelId || !processStartedAt) return false;
+  const startedAt = Date.parse(processStartedAt);
+  return (
+    Number.isFinite(startedAt) &&
+    metrics.performance_model_id === physicalModelId &&
+    observedAt >= startedAt
+  );
+}
+
+function resolvePerformanceSample(
+  metrics: Metrics | null,
+  perf: ReturnType<typeof resolvePerformanceMetrics>,
+  identityMatches: boolean,
+) {
+  if (!identityMatches) {
+    return {
+      generation: null,
+      generationPeak: null,
+      prefill: null,
+      prefillPeak: null,
+      ttft: null,
+      ttftPeak: null,
+    };
+  }
+  return {
+    generation: perf.genTps,
+    generationPeak: peakFor(metrics, "generation") ?? perf.genTps,
+    prefill: perf.prefillTps,
+    prefillPeak: peakFor(metrics, "prefill") ?? perf.prefillTps,
+    ttft: perf.observedTtftMs,
+    ttftPeak: peakFor(metrics, "ttft") ?? perf.ttftMs,
+  };
+}
+
+function resolveProcessSampleKey(
   currentProcess: ProcessInfo | null,
   currentRecipe: RecipeWithStatus | null,
+  physicalModelId?: string | null,
 ): string {
-  return (
-    currentRecipe?.name ||
-    currentProcess?.served_model_name ||
-    currentProcess?.model_path?.split("/").pop() ||
-    "No model loaded"
-  );
+  const modelKey = physicalModelId ?? resolveModelSampleKey(currentProcess, currentRecipe);
+  if (!currentProcess) return `${modelKey}::idle`;
+  return `${modelKey}::${currentProcess.pid}|${currentProcess.backend}|${currentProcess.port}|${currentProcess.started_at ?? "unknown-start"}`;
+}
+
+function resolveModelName(
+  currentProcess: ProcessInfo | null,
+  _currentRecipe: RecipeWithStatus | null,
+  modelDisplayName?: string | null,
+): string {
+  if (modelDisplayName) return modelDisplayName;
+  return currentProcess ? "Model identity unavailable" : "No model loaded";
 }
 
 function resolveModelSampleKey(
@@ -124,61 +198,99 @@ function resolveModelSampleKey(
 function resolvePerformanceMetrics(metrics: Metrics | null, gpus: GPU[]) {
   const gpuTotals = resolveGpuTotals(gpus);
   return {
-    genTps: firstPositive(metrics?.generation_throughput, metrics?.session_avg_generation),
-    prefillTps: firstPositive(metrics?.prompt_throughput, metrics?.session_avg_prefill),
-    ttftMs: firstPositive(metrics?.avg_ttft_ms),
-    sessions: metrics?.running_requests ?? 0,
-    peakReq: metrics?.session_peak_running_requests ?? 0,
-    totalMemUsed: firstPositive(gpuTotals.memUsed, metrics?.vram_used_gb),
-    vramCapacity: firstPositive(gpuTotals.memCapacity, metrics?.vram_capacity_gb),
-    totalPower: firstPositive(gpuTotals.power, metrics?.current_power_watts),
-    powerLimit: firstPositive(gpuTotals.powerLimit, metrics?.power_limit_watts),
+    genTps: firstMeasured(metrics?.generation_throughput, metrics?.session_avg_generation),
+    prefillTps: firstMeasured(metrics?.prompt_throughput, metrics?.session_avg_prefill),
+    ttftMs: firstMeasured(metrics?.observed_ttft_ms),
+    observedTtftMs: firstMeasured(metrics?.observed_ttft_ms),
+    sessions: firstMeasured(metrics?.running_requests),
+    peakReq: firstMeasured(metrics?.session_peak_running_requests),
+    queued: firstMeasured(metrics?.pending_requests),
+    gpuUtilization: gpuTotals.utilization,
+    temperatureC: gpuTotals.temperature,
+    totalMemUsed: firstMeasured(gpuTotals.memUsed, metrics?.vram_used_gb),
+    vramCapacity: firstMeasured(gpuTotals.memCapacity, metrics?.vram_capacity_gb),
+    totalPower: firstMeasured(gpuTotals.power, metrics?.current_power_watts),
+    powerLimit: firstMeasured(gpuTotals.powerLimit, metrics?.power_limit_watts),
   };
 }
 
 function resolveGpuTotals(gpus: GPU[]) {
-  return gpus.reduce(
-    (totals, gpu) => ({
-      memCapacity: totals.memCapacity + gpuMemoryTotal(gpu),
-      memUsed: totals.memUsed + gpuMemoryUsed(gpu),
-      power: totals.power + (gpu.power_draw || 0),
-      powerLimit: totals.powerLimit + (gpu.power_limit || 0),
-    }),
-    { memCapacity: 0, memUsed: 0, power: 0, powerLimit: 0 },
+  const memory = gpus.filter((gpu) => gpu.memory_usage_available !== false);
+  const power = gpus.filter(
+    (gpu) => gpu.power_available !== false && typeof gpu.power_draw === "number",
   );
+  const utilization = gpus.filter((gpu) => gpu.utilization_available !== false);
+  const temperature = gpus.filter((gpu) => gpu.temperature_available !== false);
+  return {
+    memCapacity: memory.length ? memory.reduce((sum, gpu) => sum + gpuMemoryTotal(gpu), 0) : null,
+    memUsed: memory.length ? memory.reduce((sum, gpu) => sum + gpuMemoryUsed(gpu), 0) : null,
+    power: power.length ? power.reduce((sum, gpu) => sum + (gpu.power_draw ?? 0), 0) : null,
+    powerLimit: power.length ? power.reduce((sum, gpu) => sum + (gpu.power_limit ?? 0), 0) : null,
+    utilization: utilization.length
+      ? utilization.reduce((sum, gpu) => sum + gpu.utilization_pct, 0) / utilization.length
+      : null,
+    temperature: temperature.length ? Math.max(...temperature.map((gpu) => gpu.temp_c)) : null,
+  };
 }
 
 function metricColumnViews(
   metrics: Metrics | null,
   perf: ReturnType<typeof resolvePerformanceMetrics>,
+  performanceObservedAt: number,
 ): MetricColumnView[] {
+  const age = completedRequestAge(performanceObservedAt);
+  const detail = (kind: PeakKind) => {
+    const peak = peakDetailFor(metrics, kind);
+    return {
+      detail: age,
+      detailTitle: [age, peak.detailTitle].filter(Boolean).join(" | ") || undefined,
+    };
+  };
   return [
     {
       label: "Decode",
-      value: metricValue(perf.genTps, 1),
+      value: metricValue(performanceObservedAt > 0 ? perf.genTps : null, 1),
       unit: "tok/s",
-      ...peakDetailFor(metrics, "generation"),
+      ...detail("generation"),
     },
     {
       label: "TTFT",
-      value: metricValue(perf.ttftMs, 0),
+      value: metricValue(performanceObservedAt > 0 ? perf.ttftMs : null, 0),
       unit: "ms",
-      ...peakDetailFor(metrics, "ttft"),
+      ...detail("ttft"),
     },
     {
       label: "Prefill",
-      value: metricValue(perf.prefillTps, 1),
+      value: metricValue(performanceObservedAt > 0 ? perf.prefillTps : null, 1),
       unit: "t/s",
-      ...peakDetailFor(metrics, "prefill"),
+      ...detail("prefill"),
     },
   ];
+}
+
+function completedRequestAge(observedAt: number): string | undefined {
+  if (observedAt <= 0) return undefined;
+  const seconds = Math.max(0, Math.floor((Date.now() - observedAt) / 1000));
+  if (seconds < 5) return "last completed just now";
+  if (seconds < 60) return `last completed ${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `last completed ${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `last completed ${hours}h ago`;
+  return `last completed ${Math.floor(hours / 24)}d ago`;
 }
 
 function compactMetricViews(
   perf: ReturnType<typeof resolvePerformanceMetrics>,
 ): CompactMetricView[] {
   return [
-    { label: "Requests", value: `${perf.sessions}/${perf.peakReq || perf.sessions}` },
+    {
+      label: "Requests",
+      value:
+        perf.sessions === null
+          ? null
+          : `${perf.sessions}/${perf.peakReq === null ? perf.sessions : perf.peakReq}`,
+    },
     { label: "VRAM", value: ratioMetric(perf.totalMemUsed, perf.vramCapacity, "G", 1) },
     { label: "Power", value: ratioMetric(perf.totalPower, perf.powerLimit, "W") },
   ];
@@ -214,9 +326,9 @@ function peakDetailFor(metrics: Metrics | null, kind: PeakKind) {
 }
 
 function metricValue(value: number | null, digits: number): string | null {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? value.toFixed(digits)
-    : (0).toFixed(digits);
+    : null;
 }
 
 function ratioMetric(
@@ -225,7 +337,7 @@ function ratioMetric(
   unit: string,
   valueDigits = 0,
 ): string | null {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
   if (typeof total !== "number" || !Number.isFinite(total) || total <= 0) return null;
   return `${value.toFixed(valueDigits)}/${total.toFixed(0)}${unit}`;
 }
@@ -277,6 +389,13 @@ function gpuMemoryTotal(gpu: GPU): number {
 function firstPositive(...values: Array<number | null | undefined>): number | null {
   for (const v of values) {
     if (typeof v === "number" && Number.isFinite(v) && v > 0) return v;
+  }
+  return null;
+}
+
+function firstMeasured(...values: Array<number | null | undefined>): number | null {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
   }
   return null;
 }

@@ -120,8 +120,8 @@ export function DesktopSidebar({
               <button
                 onClick={onOpenSearch}
                 className="ml-auto flex h-7 w-7 items-center justify-center rounded-md text-(--hl2) transition-colors hover:bg-(--hover) hover:text-(--fg)"
-                title="Search sessions (⌘K)"
-                aria-label="Search sessions"
+                title="Search (⌘K)"
+                aria-label="Search"
               >
                 <SearchIcon className="h-4 w-4" strokeWidth={1.75} />
               </button>

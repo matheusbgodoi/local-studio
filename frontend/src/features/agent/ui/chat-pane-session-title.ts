@@ -1,7 +1,40 @@
-import { useCallback, useMemo } from "react";
-import { cleanSessionTitle, type SessionTab } from "@/features/agent/messages";
-import { patchCanonicalSessionPref } from "@/features/agent/messages/prefs";
+import { useCallback, useMemo, useRef } from "react";
+import {
+  cleanSessionTitle,
+  visibleUserTextFromPi,
+  type SessionTab,
+} from "@/features/agent/messages";
+import { loadSessionPrefs, patchCanonicalSessionPref } from "@/features/agent/messages/prefs";
+import { assistantContentCopyText } from "@/features/agent/ui/timeline/activity-grouping";
 import { useProjectsNavSessionPrefs } from "@/features/agent/ui/projects-nav/use-projects-nav-effects";
+import { useMountSubscription } from "@/hooks/use-mount-subscription";
+
+function titleExcerpt(tab: SessionTab | null): string {
+  if (!tab) return "";
+  const greeting = /^(?:oi|ol[áa]|hey|hello|hi|bom dia|boa tarde|boa noite)[!,.?\s]*$/i;
+  const start = tab.messages.findIndex((message) => {
+    if (message.role !== "user") return false;
+    const text = visibleUserTextFromPi(message.text).trim();
+    return Boolean(text && !greeting.test(text));
+  });
+  if (start === -1) return "";
+
+  let hasAssistant = false;
+  const lines: string[] = [];
+  for (const message of tab.messages.slice(start)) {
+    if (message.role === "user") {
+      const text = visibleUserTextFromPi(message.text).trim();
+      if (text) lines.push(`User:\n${text}`);
+      continue;
+    }
+    if (message.role !== "assistant") continue;
+    const text = message.text.trim() || assistantContentCopyText(message.blocks ?? []).trim();
+    if (!text) continue;
+    hasAssistant = true;
+    lines.push(`Assistant:\n${text}`);
+  }
+  return hasAssistant ? lines.join("\n\n").slice(0, 5800) : "";
+}
 
 export function useChatPaneSessionTitle({
   activeTab,
@@ -38,6 +71,30 @@ export function useChatPaneSessionTitle({
     ? ""
     : sessionPrefTitle || cleanSessionTitle(activeTab?.title) || "";
   const sessionPinned = sessionPrefKeys.some((key) => Boolean(sessionPrefs[key]?.pinned));
+  const generatedFor = useRef(new Set<string>());
+  const excerpt = titleExcerpt(activeTab);
+
+  useMountSubscription(() => {
+    const bridge = window.localStudioDesktop?.generateSessionTitle;
+    const piSessionId = activeTab?.piSessionId;
+    if (!bridge || !activeTab || !piSessionId || running || !excerpt || sessionPrefTitle) return;
+    if (generatedFor.current.has(piSessionId)) return;
+    generatedFor.current.add(piSessionId);
+    const tabId = activeTab.id;
+    const keys = [...sessionPrefKeys];
+    void bridge(excerpt, navigator.language || "en-US")
+      .then((result) => {
+        if (!result.ok) return;
+        const latest = loadSessionPrefs();
+        if (keys.some((key) => cleanSessionTitle(latest[key]?.title))) return;
+        const title = cleanSessionTitle(result.title);
+        if (!title) return;
+        onRenameSession(tabId, title);
+        patchCanonicalSessionPref(piSessionId, keys, { title });
+      })
+      .catch(() => generatedFor.current.delete(piSessionId));
+  }, [activeTab?.id, activeTab?.piSessionId, excerpt, onRenameSession, running, sessionPrefTitle]);
+
   const patchActiveSessionPrefs = useCallback(
     (patch: { title?: string; pinned?: boolean }) => {
       const primary = activeTab?.piSessionId ?? localPrefKey ?? activeTab?.id;

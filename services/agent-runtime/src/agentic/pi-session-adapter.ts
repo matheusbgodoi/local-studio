@@ -9,7 +9,11 @@
 //
 
 import { lastAssistantResult } from "../session-text";
-import { emptyUsageTotals, readSessionUsageTotals, type SessionUsageTotals } from "../session-usage";
+import {
+  emptyUsageTotals,
+  readSessionUsageTotals,
+  type SessionUsageTotals,
+} from "../session-usage";
 import { findSessionFile } from "../sessions-store";
 import type { RuntimeStartOptions } from "../pi-runtime-helpers";
 import type { PiAgentSession } from "../pi-runtime-types";
@@ -18,6 +22,7 @@ import type {
   AgenticInferenceSession,
   AgenticTurnUsage,
 } from "./scheduler-session";
+import type { InferenceActivityObserver } from "./inference-activity";
 
 const FALLBACK_CONTEXT_WINDOW = 8_192;
 
@@ -28,6 +33,7 @@ export type PiAgenticSessionInput = {
   piSessionId: string | null;
   fallbackContextWindow: number;
   startOptions?: RuntimeStartOptions;
+  inferenceObserver?: InferenceActivityObserver;
 };
 
 export function createPiAgenticSession(input: PiAgenticSessionInput): AgenticInferenceSession {
@@ -84,7 +90,12 @@ export function createPiAgenticSession(input: PiAgenticSessionInput): AgenticInf
       lastUsage = {
         input: Math.max(0, totals.input - previousTotals.input),
         output: Math.max(0, totals.output - previousTotals.output),
-        cache: Math.max(0, totals.cacheRead + totals.cacheWrite - (previousTotals.cacheRead + previousTotals.cacheWrite)),
+        cache: Math.max(
+          0,
+          totals.cacheRead +
+            totals.cacheWrite -
+            (previousTotals.cacheRead + previousTotals.cacheWrite),
+        ),
       };
       previousTotals = totals;
     } catch {
@@ -109,12 +120,19 @@ export function createPiAgenticSession(input: PiAgenticSessionInput): AgenticInf
       await ensureStarted();
       await seedBaseline();
       turns += 1;
-      await session.prompt(text, () => undefined, { source: "rpc" });
+      await session.prompt(text, () => undefined, {
+        source: "rpc",
+        inferencePriority: "background",
+        inferenceObserver: input.inferenceObserver,
+      });
       await captureUsage();
+    },
+    abort: async (): Promise<void> => {
+      await session.abortStrict();
     },
     compact: async (instructions: string): Promise<void> => {
       await ensureStarted();
-      await session.compact(instructions);
+      await session.compact(instructions, input.inferenceObserver);
     },
     lastAssistantText: (): string => {
       const status = session.status;

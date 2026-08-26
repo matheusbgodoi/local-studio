@@ -4,13 +4,18 @@ import { useRef, useState } from "react";
 import { Rocket } from "@/ui/icon-registry";
 import { Spinner } from "@/ui";
 import { SettingsButton, SettingsGroup } from "./settings-ui";
-import type { SavedController } from "@/lib/api/controllers";
+
+export type DeployedController = {
+  url: string;
+  name?: string;
+  hasApiKey?: boolean;
+};
 
 interface ControllerDeployBridge {
   start(options: {
     host: string;
     port?: number;
-  }): Promise<{ ok: boolean; url?: string; apiKey?: string; error?: string }>;
+  }): Promise<{ ok: boolean; url?: string; hasApiKey?: boolean; error?: string }>;
   onLog(listener: (line: string) => void): () => void;
 }
 
@@ -22,15 +27,10 @@ const getDeployBridge = (): ControllerDeployBridge | null => {
   );
 };
 
-/**
- * Desktop-only: install a controller onto an ssh-reachable machine and hand
- * the resulting url + api key back to the controllers list. Renders nothing
- * in the browser build.
- */
 export function DeployControllerPanel({
   onDeployed,
 }: {
-  onDeployed: (controller: SavedController) => void;
+  onDeployed: (controller: DeployedController) => void;
 }) {
   const bridge = getDeployBridge();
   const [host, setHost] = useState("");
@@ -58,7 +58,7 @@ export function DeployControllerPanel({
       if (result.ok && result.url) {
         onDeployed({
           url: result.url,
-          apiKey: result.apiKey,
+          hasApiKey: result.hasApiKey,
           name: trimmed.split("@").pop() ?? trimmed,
         });
         setDone(`Controller running at ${result.url} — added to your list.`);

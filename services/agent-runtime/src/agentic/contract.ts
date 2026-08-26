@@ -24,6 +24,8 @@ export type {
   AgenticTask,
   AgenticTaskStatus,
   AgenticWorkingSet,
+  AgentInferenceActivity,
+  AgentInferencePhase,
 } from "../../../../shared/agent/agentic-run";
 
 export {

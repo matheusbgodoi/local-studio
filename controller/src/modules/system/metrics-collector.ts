@@ -13,7 +13,7 @@ import {
   bumpBestLower,
   bumpPeak,
   emptyPeaks,
-  firstMetric,
+  firstMetricOrUndefined,
   positiveOrUndefined,
   type SessionPeaks,
 } from "./metrics-peaks";
@@ -46,9 +46,14 @@ export const startMetricsCollector = (context: AppContext): Effect.Effect<never>
     const gpuList = yield* getGpuInfo();
 
     const lifetimeStore = context.stores.lifetimeMetricsStore;
-    const totalPowerWatts = gpuList.reduce((sum, gpu) => sum + gpu.power_draw, 0);
-    const energyWh = totalPowerWatts * (5 / 3600);
-    yield* lifetimeStore.incrementEffect("energy_wh", energyWh);
+    const powerReadings = gpuList.filter((gpu) => gpu.power_available !== false);
+    const memoryReadings = gpuList.filter((gpu) => gpu.memory_usage_available !== false);
+    const totalPowerWatts = powerReadings.length
+      ? powerReadings.reduce((sum, gpu) => sum + gpu.power_draw, 0)
+      : undefined;
+    if (totalPowerWatts !== undefined) {
+      yield* lifetimeStore.incrementEffect("energy_wh", totalPowerWatts * (5 / 3600));
+    }
     yield* lifetimeStore.incrementEffect(
       "uptime_seconds",
       METRICS_LIFETIME_UPTIME_INCREMENT_SECONDS,
@@ -101,9 +106,15 @@ export const startMetricsCollector = (context: AppContext): Effect.Effect<never>
       current_power_watts: totalPowerWatts,
     };
 
-    const totalVramUsedGb = gpuList.reduce((sum, gpu) => sum + gpu.memory_used_mb / 1024, 0);
-    const totalVramCapacityGb = gpuList.reduce((sum, gpu) => sum + gpu.memory_total_mb / 1024, 0);
-    const totalPowerLimitWatts = gpuList.reduce((sum, gpu) => sum + gpu.power_limit, 0);
+    const totalVramUsedGb = memoryReadings.length
+      ? memoryReadings.reduce((sum, gpu) => sum + gpu.memory_used_mb / 1024, 0)
+      : undefined;
+    const totalVramCapacityGb = memoryReadings.length
+      ? memoryReadings.reduce((sum, gpu) => sum + gpu.memory_total_mb / 1024, 0)
+      : undefined;
+    const totalPowerLimitWatts = powerReadings.length
+      ? powerReadings.reduce((sum, gpu) => sum + gpu.power_limit, 0)
+      : undefined;
 
     if (current) {
       const modelId =
@@ -116,14 +127,14 @@ export const startMetricsCollector = (context: AppContext): Effect.Effect<never>
         metricsUnavailableUntil = 0;
       }
 
-      let promptThroughput = 0;
-      let generationThroughput = 0;
-      let runningRequests = 0;
-      let pendingRequests = 0;
-      let kvCacheUsage = 0;
-      let promptTokensTotal = 0;
-      let generationTokensTotal = 0;
-      let avgTtftMs = 0;
+      let promptThroughput: number | undefined;
+      let generationThroughput: number | undefined;
+      let runningRequests: number | undefined;
+      let pendingRequests: number | undefined;
+      let kvCacheUsage: number | undefined;
+      let promptTokensTotal: number | undefined;
+      let generationTokensTotal: number | undefined;
+      let avgTtftMs: number | undefined;
 
       if (
         current.backend === "vllm" ||
@@ -145,27 +156,42 @@ export const startMetricsCollector = (context: AppContext): Effect.Effect<never>
           Object.keys(vllmMetrics).length > 0 &&
           Object.keys(lastVllmMetrics).length > 0
         ) {
-          const previousPromptTokens = firstMetric(lastVllmMetrics, names.promptTokens);
-          const currentPromptTokens = firstMetric(vllmMetrics, names.promptTokens);
-          const previousGenerationTokens = firstMetric(lastVllmMetrics, names.generationTokens);
-          const currentGenerationTokens = firstMetric(vllmMetrics, names.generationTokens);
-          if (currentPromptTokens > previousPromptTokens) {
+          const previousPromptTokens = firstMetricOrUndefined(lastVllmMetrics, names.promptTokens);
+          const currentPromptTokens = firstMetricOrUndefined(vllmMetrics, names.promptTokens);
+          const previousGenerationTokens = firstMetricOrUndefined(
+            lastVllmMetrics,
+            names.generationTokens,
+          );
+          const currentGenerationTokens = firstMetricOrUndefined(
+            vllmMetrics,
+            names.generationTokens,
+          );
+          if (
+            currentPromptTokens !== undefined &&
+            previousPromptTokens !== undefined &&
+            currentPromptTokens > previousPromptTokens
+          ) {
             promptThroughput = (currentPromptTokens - previousPromptTokens) / elapsed;
           }
-          if (currentGenerationTokens > previousGenerationTokens) {
+          if (
+            currentGenerationTokens !== undefined &&
+            previousGenerationTokens !== undefined &&
+            currentGenerationTokens > previousGenerationTokens
+          ) {
             generationThroughput = (currentGenerationTokens - previousGenerationTokens) / elapsed;
           }
         }
 
-        promptThroughput = firstMetric(vllmMetrics, names.promptThroughput) || promptThroughput;
+        promptThroughput =
+          firstMetricOrUndefined(vllmMetrics, names.promptThroughput) ?? promptThroughput;
         generationThroughput =
-          firstMetric(vllmMetrics, names.generationThroughput) || generationThroughput;
+          firstMetricOrUndefined(vllmMetrics, names.generationThroughput) ?? generationThroughput;
 
-        runningRequests = firstMetric(vllmMetrics, names.runningRequests);
-        pendingRequests = firstMetric(vllmMetrics, names.pendingRequests);
-        kvCacheUsage = firstMetric(vllmMetrics, names.kvCacheUsage);
-        promptTokensTotal = firstMetric(vllmMetrics, names.promptTokens);
-        generationTokensTotal = firstMetric(vllmMetrics, names.generationTokens);
+        runningRequests = firstMetricOrUndefined(vllmMetrics, names.runningRequests);
+        pendingRequests = firstMetricOrUndefined(vllmMetrics, names.pendingRequests);
+        kvCacheUsage = firstMetricOrUndefined(vllmMetrics, names.kvCacheUsage);
+        promptTokensTotal = firstMetricOrUndefined(vllmMetrics, names.promptTokens);
+        generationTokensTotal = firstMetricOrUndefined(vllmMetrics, names.generationTokens);
 
         const previousTtftSum = lastVllmMetrics[names.ttftSum] ?? 0;
         const previousTtftCount = lastVllmMetrics[names.ttftCount] ?? 0;
@@ -176,15 +202,24 @@ export const startMetricsCollector = (context: AppContext): Effect.Effect<never>
           avgTtftMs = ((currentTtftSum - previousTtftSum) / dTtftCount) * 1000;
         }
 
-        lastVllmMetrics = vllmMetrics;
-        lastMetricsTime = now;
+        if (Object.keys(vllmMetrics).length > 0) {
+          lastVllmMetrics = vllmMetrics;
+          lastMetricsTime = now;
+        } else {
+          lastVllmMetrics = {};
+          lastMetricsTime = 0;
+        }
 
-        if (promptThroughput > 0 || generationThroughput > 0 || avgTtftMs > 0) {
+        if (
+          (promptThroughput ?? 0) > 0 ||
+          (generationThroughput ?? 0) > 0 ||
+          (avgTtftMs ?? 0) > 0
+        ) {
           yield* context.stores.peakMetricsStore.updateIfBetterEffect(
             modelId,
-            promptThroughput > 0 ? promptThroughput : undefined,
-            generationThroughput > 0 ? generationThroughput : undefined,
-            avgTtftMs > 0 ? avgTtftMs : undefined,
+            (promptThroughput ?? 0) > 0 ? promptThroughput : undefined,
+            (generationThroughput ?? 0) > 0 ? generationThroughput : undefined,
+            (avgTtftMs ?? 0) > 0 ? avgTtftMs : undefined,
           );
         }
       } else {
@@ -192,13 +227,16 @@ export const startMetricsCollector = (context: AppContext): Effect.Effect<never>
         lastMetricsTime = 0;
       }
 
-      bumpPeak(sessionPeaks, "prompt_throughput", promptThroughput);
-      bumpPeak(sessionPeaks, "generation_throughput", generationThroughput);
-      bumpBestLower(sessionPeaks, "ttft_ms", avgTtftMs);
-      bumpPeak(sessionPeaks, "kv_cache_usage", kvCacheUsage);
-      bumpPeak(sessionPeaks, "running_requests", runningRequests);
-      bumpPeak(sessionPeaks, "power_watts", totalPowerWatts);
-      bumpPeak(sessionPeaks, "vram_used_gb", totalVramUsedGb);
+      if (promptThroughput !== undefined)
+        bumpPeak(sessionPeaks, "prompt_throughput", promptThroughput);
+      if (generationThroughput !== undefined)
+        bumpPeak(sessionPeaks, "generation_throughput", generationThroughput);
+      if (avgTtftMs !== undefined) bumpBestLower(sessionPeaks, "ttft_ms", avgTtftMs);
+      if (kvCacheUsage !== undefined) bumpPeak(sessionPeaks, "kv_cache_usage", kvCacheUsage);
+      if (runningRequests !== undefined)
+        bumpPeak(sessionPeaks, "running_requests", runningRequests);
+      if (totalPowerWatts !== undefined) bumpPeak(sessionPeaks, "power_watts", totalPowerWatts);
+      if (totalVramUsedGb !== undefined) bumpPeak(sessionPeaks, "vram_used_gb", totalVramUsedGb);
 
       if (sessionPeakId) {
         yield* context.stores.peakMetricsStore.updateSessionPeakEffect(
@@ -226,7 +264,8 @@ export const startMetricsCollector = (context: AppContext): Effect.Effect<never>
       const generationTokensDisplay =
         positiveOrUndefined(generationTokensTotal) ??
         positiveOrUndefined(usageTotals?.completion_tokens);
-      const avgTtftDisplay = avgTtftMs > 0 ? Math.round(avgTtftMs * 10) / 10 : (usageTtftAvg ?? 0);
+      const avgTtftDisplay =
+        (avgTtftMs ?? 0) > 0 ? Math.round((avgTtftMs ?? 0) * 10) / 10 : usageTtftAvg;
 
       yield* context.eventManager.publishMetrics({
         ...baseMetrics,
@@ -240,13 +279,20 @@ export const startMetricsCollector = (context: AppContext): Effect.Effect<never>
         generation_tokens_total: generationTokensDisplay,
         total_tokens: positiveOrUndefined(usageTotals?.total_tokens),
         total_requests: positiveOrUndefined(usageTotals?.total_requests),
-        prompt_throughput: Math.round(promptThroughput * 10) / 10,
-        generation_throughput: Math.round(generationThroughput * 10) / 10,
+        prompt_throughput:
+          promptThroughput === undefined ? undefined : Math.round(promptThroughput * 10) / 10,
+        generation_throughput:
+          generationThroughput === undefined
+            ? undefined
+            : Math.round(generationThroughput * 10) / 10,
         avg_ttft_ms: avgTtftDisplay,
         latency_avg: usageLatencyAvg,
-        vram_used_gb: Math.round(totalVramUsedGb * 10) / 10,
-        vram_capacity_gb: Math.round(totalVramCapacityGb * 10) / 10,
-        power_limit_watts: Math.round(totalPowerLimitWatts),
+        vram_used_gb:
+          totalVramUsedGb === undefined ? undefined : Math.round(totalVramUsedGb * 10) / 10,
+        vram_capacity_gb:
+          totalVramCapacityGb === undefined ? undefined : Math.round(totalVramCapacityGb * 10) / 10,
+        power_limit_watts:
+          totalPowerLimitWatts === undefined ? undefined : Math.round(totalPowerLimitWatts),
         session_peak_prompt_throughput: Math.round(sessionPeaks.prompt_throughput * 10) / 10,
         session_peak_generation_throughput:
           Math.round(sessionPeaks.generation_throughput * 10) / 10,
@@ -271,16 +317,19 @@ export const startMetricsCollector = (context: AppContext): Effect.Effect<never>
       sessionModelId = null;
       sessionPeakId = null;
       sessionPeaks = emptyPeaks();
-      bumpPeak(sessionPeaks, "power_watts", totalPowerWatts);
-      bumpPeak(sessionPeaks, "vram_used_gb", totalVramUsedGb);
+      if (totalPowerWatts !== undefined) bumpPeak(sessionPeaks, "power_watts", totalPowerWatts);
+      if (totalVramUsedGb !== undefined) bumpPeak(sessionPeaks, "vram_used_gb", totalVramUsedGb);
       yield* context.eventManager.publishMetrics({
         ...baseMetrics,
         model_id: null,
         model_path: null,
         served_model_name: null,
-        vram_used_gb: Math.round(totalVramUsedGb * 10) / 10,
-        vram_capacity_gb: Math.round(totalVramCapacityGb * 10) / 10,
-        power_limit_watts: Math.round(totalPowerLimitWatts),
+        vram_used_gb:
+          totalVramUsedGb === undefined ? undefined : Math.round(totalVramUsedGb * 10) / 10,
+        vram_capacity_gb:
+          totalVramCapacityGb === undefined ? undefined : Math.round(totalVramCapacityGb * 10) / 10,
+        power_limit_watts:
+          totalPowerLimitWatts === undefined ? undefined : Math.round(totalPowerLimitWatts),
         session_peak_power_watts: Math.round(sessionPeaks.power_watts),
         session_peak_vram_used_gb: Math.round(sessionPeaks.vram_used_gb * 10) / 10,
       });

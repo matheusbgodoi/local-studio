@@ -4,7 +4,7 @@ import path from "node:path";
 const DEFAULT_DEV_SERVER_URL = "http://127.0.0.1:3000";
 
 export const DESKTOP_CONFIG = {
-  appName: "Local Studio",
+  appName: "CRIAs AI",
   minimumWindow: { width: 1200, height: 760 },
   preferredWindow: { width: 1520, height: 980 },
   startupTimeoutMs: 45_000,
@@ -16,6 +16,10 @@ export const DESKTOP_CONFIG = {
     homeWindow: { width: 500, height: 164 },
     threadWindow: { width: 720, height: 760 },
     topInsetPx: 96,
+  },
+  dictationShortcut: {
+    hotkey: "CommandOrControl+Shift+Space",
+    mode: "toggle" as const,
   },
 };
 

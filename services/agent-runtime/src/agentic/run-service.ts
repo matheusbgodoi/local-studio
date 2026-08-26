@@ -13,9 +13,15 @@ import { computeContextBudget, type ContextBudgetPolicy } from "./context-budget
 import type { AgenticAgent, AgenticRun, AgenticRunSnapshot } from "./contract";
 import { validatePlan } from "./dag";
 import { reconcileAllRuns, type RunRecovery } from "./recovery";
-import { createAgenticScheduler, seedNodes, type InferenceGate, type SchedulerStep } from "./scheduler";
+import {
+  createAgenticScheduler,
+  seedNodes,
+  type InferenceGate,
+  type SchedulerStep,
+} from "./scheduler";
 import type { AgenticInferenceSession } from "./scheduler-session";
 import type { AgenticStore, TaskSeed } from "./store";
+import { settleTerminalWork } from "./terminal-settlement";
 
 export type StartRunInput = {
   goal: string;
@@ -35,6 +41,7 @@ export type AgenticRunServiceOptions = {
   capabilityFor: (run: AgenticRun) => AgenticCapability;
   budgetPolicy?: ContextBudgetPolicy;
   inferenceGate?: InferenceGate;
+  isCancelled?: (runId: string) => boolean;
 };
 
 export function createAgenticRunService(options: AgenticRunServiceOptions) {
@@ -44,6 +51,7 @@ export function createAgenticRunService(options: AgenticRunServiceOptions) {
     session: options.session,
     budgetPolicy: options.budgetPolicy,
     ...(options.inferenceGate ? { inferenceGate: options.inferenceGate } : {}),
+    ...(options.isCancelled ? { isCancelled: options.isCancelled } : {}),
   });
 
   //
@@ -61,6 +69,7 @@ export function createAgenticRunService(options: AgenticRunServiceOptions) {
       goal: input.goal,
       modelId: input.capability.modelId,
       physicalModelId: input.capability.physicalModelId,
+      modelDisplayName: input.capability.displayName,
       behaviorProfile: input.capability.behaviorProfile,
       contextWindow: input.capability.contextWindow,
       usableLimit: budget.usableLimit,
@@ -80,6 +89,7 @@ export function createAgenticRunService(options: AgenticRunServiceOptions) {
       role: input.agentRole ?? "generalist",
       modelId: input.capability.modelId,
       physicalModelId: input.capability.physicalModelId,
+      modelDisplayName: input.capability.displayName,
       behaviorProfile: input.capability.behaviorProfile,
       sessionId: input.sessionId,
       //
@@ -139,7 +149,9 @@ export function createAgenticRunService(options: AgenticRunServiceOptions) {
     return step;
   };
 
-  const startRun = async (input: StartRunInput): Promise<{ run: AgenticRun; step: SchedulerStep }> => {
+  const startRun = async (
+    input: StartRunInput,
+  ): Promise<{ run: AgenticRun; step: SchedulerStep }> => {
     const run = createRun(input);
     const blocked = egressGate(run);
     if (blocked) return { run: store.requireRun(run.id), step: blocked };
@@ -170,6 +182,7 @@ export function createAgenticRunService(options: AgenticRunServiceOptions) {
       events: store.listEvents(runId),
       checkpoints: store.listCheckpoints(runId),
       artifacts: store.listArtifacts(runId),
+      inferenceActivity: [],
     };
   };
 
@@ -203,6 +216,22 @@ export function createAgenticRunService(options: AgenticRunServiceOptions) {
       const run = store.requireRun(runId);
       return advance(runId, options.capabilityFor(run));
     },
+    cancelRun: (runId: string): AgenticRun => {
+      store.transaction(() => {
+        settleTerminalWork(store, runId, "CANCELLED", "cancelled by the owner");
+        store.updateRun(runId, { status: "CANCELLED", activeTaskId: null });
+        store.appendEvent({
+          runId,
+          type: "RUN_CANCELLED",
+          summary: "cancelled by the owner",
+        });
+      });
+      scheduler.forgetRun(runId);
+      networkService().releaseRun(runId);
+      return store.requireRun(runId);
+    },
+    forgetRun: (runId: string, taskIds?: readonly string[]): void =>
+      scheduler.forgetRun(runId, taskIds),
   };
 }
 

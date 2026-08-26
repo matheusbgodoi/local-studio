@@ -10,3 +10,15 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (denied) return denied;
   return proxyToAgentRuntime(request);
 }
+
+export async function PATCH(request: NextRequest): Promise<Response> {
+  const denied = requireApiAccess(request);
+  if (denied) return denied;
+  return proxyToAgentRuntime(request);
+}
+
+export async function DELETE(request: NextRequest): Promise<Response> {
+  const denied = requireApiAccess(request);
+  if (denied) return denied;
+  return proxyToAgentRuntime(request);
+}

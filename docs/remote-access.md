@@ -25,6 +25,12 @@ moves into an `httpOnly` cookie and the URL redirects to a clean one, so the
 secret stops travelling in the address bar. Afterwards use the plain
 `https://<machine>.<tailnet>.ts.net/agent` and Add to Home Screen from there.
 
+In the desktop sidebar, the phone button shows that clean URL and a masked
+token. The URL can be copied normally. Copying the token is handled entirely by
+Electron's main process: the renderer receives only success or failure, never
+the token value, so the secret is not placed in the DOM, component state,
+tooltips or logs.
+
 Turn it off with `npm run remote-access -- --off`, which resets the serve config
 and deletes all three files. Restart the app afterwards.
 

@@ -50,8 +50,11 @@ import {
 import { handleAgentModels } from "./model-handlers";
 import {
   handleAgenticArtifact,
+  handleAgenticCurrentRun,
   handleAgenticRunCancel,
+  handleAgenticRunArchive,
   handleAgenticRunCreate,
+  handleAgenticRunDelete,
   handleAgenticRunGet,
   handleAgenticRunResume,
   handleAgenticRunsList,
@@ -61,8 +64,10 @@ import {
   handleSessionGet,
   handleSessionPatch,
   handleSessionDelete,
+  handleSessionMove,
   handleSessionsDelete,
   handleSessionsList,
+  handleSessionSearch,
 } from "./session-handlers";
 import {
   handleNetworkPolicy,
@@ -91,9 +96,13 @@ export function createAgentRuntimeApp() {
   app.get("/api/agent/sessions", (c) => handleSessionsList(c.req.raw));
   app.delete("/api/agent/sessions", () => handleSessionsDelete());
   app.get("/api/agent/sessions/all", (c) => handleAllSessions(c.req.raw));
+  app.get("/api/agent/sessions/search", (c) => handleSessionSearch(c.req.raw));
   app.get("/api/agent/sessions/:id", (c) => handleSessionGet(c.req.raw, c.req.param("id")));
   app.patch("/api/agent/sessions/:id", (c) => handleSessionPatch(c.req.raw, c.req.param("id")));
   app.delete("/api/agent/sessions/:id", (c) => handleSessionDelete(c.req.raw, c.req.param("id")));
+  app.post("/api/agent/sessions/:id/project", (c) =>
+    handleSessionMove(c.req.raw, c.req.param("id")),
+  );
   app.get("/api/agent/automations", () => handleAutomationsList());
   app.post("/api/agent/automations", (c) => handleAutomationCreate(c.req.raw));
   app.patch("/api/agent/automations/:id", (c) =>
@@ -108,7 +117,10 @@ export function createAgentRuntimeApp() {
   app.delete("/api/agent/network/provider", (c) => handleNetworkProvider(c.req.raw));
   app.get("/api/agent/runs", () => handleAgenticRunsList());
   app.post("/api/agent/runs", (c) => handleAgenticRunCreate(c.req.raw));
+  app.get("/api/agent/runs/current", (c) => handleAgenticCurrentRun(c.req.raw));
   app.get("/api/agent/runs/:id", (c) => handleAgenticRunGet(c.req.param("id")));
+  app.patch("/api/agent/runs/:id", (c) => handleAgenticRunArchive(c.req.raw, c.req.param("id")));
+  app.delete("/api/agent/runs/:id", (c) => handleAgenticRunDelete(c.req.param("id")));
   app.post("/api/agent/runs/:id/resume", (c) => handleAgenticRunResume(c.req.param("id")));
   app.post("/api/agent/runs/:id/cancel", (c) => handleAgenticRunCancel(c.req.param("id")));
   app.get("/api/agent/artifacts/:id", (c) => handleAgenticArtifact(c.req.raw, c.req.param("id")));

@@ -11,6 +11,7 @@
 import { isBackendLoss } from "./backend-loss";
 import type { AgenticRun } from "./contract";
 import type { AgenticStore } from "./store";
+import { settleTerminalWork } from "./terminal-settlement";
 
 export type RunRecovery = {
   runId: string;
@@ -100,8 +101,11 @@ export function settleDriveFailure(
 ): { paused: boolean; reason: string } {
   const reason = error instanceof Error ? error.message : String(error);
   if (!isBackendLoss(error)) {
-    store.updateRun(runId, { status: "FAILED", failureReason: reason });
-    store.appendEvent({ runId, type: "RUN_FAILED", summary: reason });
+    store.transaction(() => {
+      settleTerminalWork(store, runId, "FAILED", reason);
+      store.updateRun(runId, { status: "FAILED", failureReason: reason });
+      store.appendEvent({ runId, type: "RUN_FAILED", summary: reason });
+    });
     return { paused: false, reason };
   }
   reconcileRun(store, store.requireRun(runId));

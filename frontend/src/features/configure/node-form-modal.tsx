@@ -177,11 +177,7 @@ export function NodeFormModal({
         </FormField>
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <FormField
-            label="Machine name"
-            required
-            description="A friendly name shown in Local Studio."
-          >
+          <FormField label="Machine name" required description="A friendly name shown in CRIAs AI.">
             <Input
               value={form.name}
               onChange={(event) => set("name", event.target.value)}
@@ -232,7 +228,7 @@ export function NodeFormModal({
                 GPU details
               </h3>
               <p className="mt-0.5 text-[length:var(--fs-xs)] text-(--ui-muted)">
-                Optional capacity information for a machine Local Studio cannot detect.
+                Optional capacity information for a machine CRIAs AI cannot detect.
               </p>
             </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">

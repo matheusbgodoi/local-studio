@@ -25,6 +25,7 @@ import {
   UNAVAILABLE,
 } from "@/features/usage/usage-formatters";
 import type { UsageEnergyRate, UsageFilters, UsageTokens } from "@/lib/types";
+import { usageModelLabel, usageModelLabels } from "@/features/usage/usage-model-identity";
 
 function PeriodCard({
   totals,
@@ -104,11 +105,13 @@ function PricedCard({
   priced,
   rate,
   preferences,
+  filters,
 }: {
   totals: EfficiencyTotals;
   priced: PricedTraffic;
   rate: UsageEnergyRate;
   preferences: EnergyPreferences;
+  filters: UsageFilters | undefined;
 }) {
   const { currency, pricePerKwh: price } = preferences;
   const { fresh, generated, unpriced } = priced;
@@ -149,7 +152,7 @@ function PricedCard({
   const scoped =
     unpriced.length === 0
       ? ""
-      : ` ${priced.unpriced.join(", ")} also ran this period and ${plural(unpriced, "is", "are")} not priced here: no bench run measured ${plural(unpriced, "it", "them")}.`;
+      : ` ${usageModelLabels(priced.unpriced, filters).join(", ")} also ran this period and ${plural(unpriced, "is", "are")} not priced here: no bench run measured ${plural(unpriced, "it", "them")}.`;
 
   return (
     <PanelCard
@@ -267,11 +270,13 @@ function BenchCardList({
   named,
   nowMs,
   preferences,
+  filters,
 }: {
   benchRates: UsageEnergyRate[];
   named: boolean;
   nowMs: number | null;
   preferences: EnergyPreferences;
+  filters: UsageFilters | undefined;
 }) {
   return (
     <>
@@ -282,7 +287,7 @@ function BenchCardList({
         return (
           <BenchRateCard
             key={entry.model}
-            title={named ? entry.model : "Bench rate"}
+            title={named ? usageModelLabel(entry.model, filters) : "Bench rate"}
             badge={days !== null && days >= 180 ? "Measured · aged" : "Measured"}
             rate={entry}
             preferences={preferences}
@@ -315,7 +320,13 @@ export function EfficiencyCards({
   preferences: EnergyPreferences;
 }) {
   const list = (
-    <BenchCardList benchRates={benchRates} named={named} nowMs={nowMs} preferences={preferences} />
+    <BenchCardList
+      benchRates={benchRates}
+      named={named}
+      nowMs={nowMs}
+      preferences={preferences}
+      filters={filters}
+    />
   );
   // Gated on the SAME family the cards will render, or a rig with gross data but no measured
   // idle floor would collapse to the bench list while holding figures it could have shown.
@@ -329,7 +340,13 @@ export function EfficiencyCards({
       {list}
       <PeriodCard totals={totals} tokens={tokens} preferences={preferences} />
       {rate === null || priced === null ? null : (
-        <PricedCard totals={totals} priced={priced} rate={rate} preferences={preferences} />
+        <PricedCard
+          totals={totals}
+          priced={priced}
+          rate={rate}
+          preferences={preferences}
+          filters={filters}
+        />
       )}
       <CacheCard
         totals={totals}

@@ -28,6 +28,7 @@ import {
   skillInvocationText,
 } from "@/features/agent/composer/skill-invocation-commands";
 import { mcpCommandProvider } from "@/features/agent/composer/mcp-commands";
+import { transcriptCommandProvider } from "@/features/agent/composer/transcript-commands";
 import { setSessionConnectors } from "@/features/agent/tools/connector-session-api";
 import {
   createComposerCommandRegistry,
@@ -121,6 +122,10 @@ import { useChatPaneComposerActions } from "@/features/agent/ui/use-chat-pane-co
 import { useComposerCommandHandlers } from "@/features/agent/ui/use-composer-command-handlers";
 import { useChatPaneSendFlow } from "@/features/agent/ui/chat-pane-send-flow";
 import { ChatPaneHandle, newId, nowLabel, SessionTab } from "@/features/agent/messages";
+import type {
+  GeneratedImageDecision,
+  GeneratedImageDecisionHandler,
+} from "@/features/agent/ui/timeline/generated-image-block";
 import { useSessionEngine } from "@/features/agent/runtime/engine";
 import type { UpdateSession } from "@/features/agent/runtime/types";
 import { useTools } from "@/features/agent/tools/context";
@@ -151,6 +156,7 @@ import {
   type TerminalOwnersSnapshot,
 } from "@/features/agent/ui/use-persistent-terminal-owners";
 import { PersistentTerminals } from "@/features/agent/ui/persistent-terminals";
+import { saveTextFile } from "@/features/agent/composer/save-text-file";
 import { cx } from "@/ui/utils";
 import { ExtensionUiDialog } from "@/features/agent/ui/extension-ui-dialog";
 import {
@@ -164,19 +170,6 @@ const Timeline = dynamic(
   () => import("@/features/agent/ui/timeline/timeline").then((mod) => mod.Timeline),
   { ssr: false, loading: () => <TimelineFallback /> },
 );
-
-function downloadTextFile(filename: string, content: string): void {
-  if (typeof document === "undefined") return;
-  const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
-}
 
 function EmptyPromptTimeline() {
   return (
@@ -206,6 +199,29 @@ function chatPaneClassName(composerOnly: boolean): string {
   );
 }
 
+function generatedImageDecisionPrompt(input: {
+  decision: GeneratedImageDecision;
+  toolCallId: string;
+  imageIndex: number;
+  imageCount: number;
+  resultText?: string;
+  note?: string;
+}): string {
+  const { decision, toolCallId, imageIndex, imageCount, resultText, note } = input;
+  const artifact = resultText?.trim() ? `\nTool result: ${resultText.trim()}` : "";
+  const selection = `image ${imageIndex + 1} of ${imageCount}`;
+  if (decision === "approve") {
+    return `Approve ${selection} from tool call ${toolCallId}.${artifact}\nUse that exact selected artifact. Apply the configured approval step: upscale and save or finalize it. Do not regenerate it.`;
+  }
+  if (decision === "reject") {
+    return `Reject ${selection} from tool call ${toolCallId}.${artifact}\nDo not upscale, publish, or finalize it. Confirm that it was rejected.`;
+  }
+  const change = note?.trim()
+    ? `Apply this requested change: ${note.trim()}`
+    : "Use a new random seed and otherwise preserve the request.";
+  return `Regenerate ${selection} from tool call ${toolCallId}.${artifact}\n${change}\nShow the new result for approval.`;
+}
+
 function ChatTranscript({
   composerOnly,
   terminalView,
@@ -215,6 +231,7 @@ function ChatTranscript({
   setStickToBottom,
   running,
   onForkSession,
+  onGeneratedImageDecision,
   loadEarlierHistory,
 }: {
   composerOnly: boolean;
@@ -225,6 +242,7 @@ function ChatTranscript({
   setStickToBottom: (value: boolean) => void;
   running: boolean;
   onForkSession?: () => void;
+  onGeneratedImageDecision?: GeneratedImageDecisionHandler;
   loadEarlierHistory: () => Promise<void>;
 }) {
   const viewKey = activeTab?.piSessionId ?? activeTab?.id ?? null;
@@ -244,6 +262,7 @@ function ChatTranscript({
           viewKey={viewKey}
           viewAlias={viewAlias}
           onForkSession={onForkSession}
+          onGeneratedImageDecision={onGeneratedImageDecision}
           hasEarlier={activeTab?.historyCursor != null}
           onLoadEarlier={loadEarlierHistory}
         />
@@ -255,7 +274,6 @@ function ChatTranscript({
 type Props = {
   paneId: string;
   modelId: string;
-  modelName: string | null;
   modelSupportsVision: boolean;
   modelThinkingLevels: readonly AgentThinkingLevel[];
   modelsLoading: boolean;
@@ -299,10 +317,18 @@ function renderComposerModelSelector(
 ): ReactNode {
   return renderer ? renderer(props) : null;
 }
+
+function terminalActionFor(
+  terminalOwner: TerminalOwner | null,
+  toggleTerminalView: () => void,
+  onOpenTerminal: (() => void) | undefined,
+): (() => void) | undefined {
+  return terminalOwner ? toggleTerminalView : onOpenTerminal;
+}
+
 export function ChatPane({
   paneId,
   modelId,
-  modelName,
   modelSupportsVision,
   modelThinkingLevels,
   modelsLoading,
@@ -383,12 +409,12 @@ export function ChatPane({
     attachFiles,
     removeAttachment,
     clearAttachments,
+    consumeAttachments,
     handleComposerDragOver,
     handleComposerDragLeave,
     handleComposerDrop,
   } = useComposerAttachments({
     activeTab,
-    running: Boolean(running),
     updateTab,
     fileInputRef,
   });
@@ -515,12 +541,16 @@ export function ChatPane({
   const exportSession = useCallback(() => {
     if (!activeTab) return;
     const markdown = sessionToMarkdown(activeTab.messages, displayedSessionTitle);
-    downloadTextFile(exportFilenameFromTitle(displayedSessionTitle), markdown);
+    void saveTextFile(
+      exportFilenameFromTitle(displayedSessionTitle),
+      markdown,
+      "text/markdown;charset=utf-8",
+    );
   }, [activeTab, displayedSessionTitle]);
   const canExport = Boolean(
     activeTab?.messages.some((message) => message.role !== "system" && message.text.trim()),
   );
-  const openTerminalAction = terminalOwner ? toggleTerminalView : onOpenTerminal;
+  const openTerminalAction = terminalActionFor(terminalOwner, toggleTerminalView, onOpenTerminal);
   const applyTemplate = useCallback(
     (row: ComposerPromptTemplateRef) =>
       activeTab ? applyContextRow(activeTab.id, "promptTemplate", row, tools) : Promise.resolve(),
@@ -614,10 +644,18 @@ export function ChatPane({
           openPlugins: () => router.push("/integrations"),
           ...(openTerminalAction ? { openTerminal: openTerminalAction } : {}),
           ...(onForkSession ? { forkSession: onForkSession } : {}),
-          ...(canExport ? { exportSession } : {}),
           goal: goalAction,
           enterGoalMode: () => setGoalModeOn(true),
         }),
+        ...(canExport && activeTab
+          ? [
+              transcriptCommandProvider({
+                messages: () => activeTab.messages,
+                title: () => displayedSessionTitle,
+                notify: noteInTranscript,
+              }),
+            ]
+          : []),
         mcpCommandProvider({
           connectors: tools.connectorCatalogue,
           active: activeConnectors,
@@ -639,13 +677,14 @@ export function ChatPane({
       ]),
     [
       activeConnectors,
+      activeTab,
       applyConnectorSelection,
       applySkill,
       applyTemplate,
       canExport,
       compactSession,
+      displayedSessionTitle,
       goalAction,
-      exportSession,
       noteInTranscript,
       onForkSession,
       openBrowserPanel,
@@ -683,29 +722,54 @@ export function ChatPane({
     updateTab,
     selectMentionRow,
   });
-  const { sendMessage, queueMessage, removeQueued, editQueued, steerQueued, abortTurn } =
-    useChatPaneSendFlow({
-      activeTab,
-      attachments,
-      clearAttachments,
-      cwd,
-      engine,
-      modelId,
-      modelSupportsVision,
-      readingAttachments,
-      resetComposerHeight,
-      running: Boolean(running),
-      setMention,
-      setStickToBottom,
-      tools,
-      updateTab,
-    });
+  const {
+    sendMessage,
+    sendTextMessage,
+    queueMessage,
+    removeQueued,
+    editQueued,
+    steerQueued,
+    abortTurn,
+  } = useChatPaneSendFlow({
+    activeTab,
+    attachments,
+    clearAttachments,
+    consumeAttachments,
+    cwd,
+    engine,
+    modelId,
+    modelSupportsVision,
+    readingAttachments,
+    resetComposerHeight,
+    running: Boolean(running),
+    setMention,
+    setStickToBottom,
+    tools,
+    updateTab,
+  });
+  const handleGeneratedImageDecision = useCallback<GeneratedImageDecisionHandler>(
+    (decision, block, selection, note) => {
+      setStickToBottom(true);
+      return sendTextMessage(
+        generatedImageDecisionPrompt({
+          decision,
+          toolCallId: block.id,
+          imageIndex: selection.imageIndex,
+          imageCount: selection.imageCount,
+          resultText: block.resultText,
+          note,
+        }),
+      );
+    },
+    [sendTextMessage],
+  );
   const { handleComposerPaste, handleComposerChange, handleComposerKeyDown } =
     useComposerTextareaBehavior({
       activeTab,
       mention,
       mentionRows,
       mentionIndex,
+      hasAttachments: attachments.length > 0,
       running: Boolean(running),
       textareaRef,
       lastAppliedComposerHeightRef,
@@ -798,6 +862,7 @@ export function ChatPane({
         setStickToBottom={setStickToBottom}
         running={Boolean(running)}
         onForkSession={onForkSession}
+        onGeneratedImageDecision={handleGeneratedImageDecision}
         loadEarlierHistory={loadEarlierHistory}
       />
       <div className={terminalView ? "hidden" : "contents"}>
@@ -879,6 +944,7 @@ export function ChatPane({
           readingAttachments={readingAttachments}
           running={Boolean(running)}
           selectedSkills={selectedSkills}
+          shortcutTarget={isFocused && !terminalView}
           status={activeTab?.status}
           textareaRef={textareaRef}
           goalMode={goalModeApi.goalMode}

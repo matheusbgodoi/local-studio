@@ -94,7 +94,7 @@ export function mergeOpencodeConfig(config: JsonRecord, model: LocalAgentModel):
   const key = providerKeyFor((candidate) => candidate in providers);
   providers[key] = {
     npm: "@ai-sdk/openai-compatible",
-    name: "Local Studio",
+    name: "CRIAs AI",
     options: { baseURL: model.baseUrl, apiKey: model.apiKey },
     models: { [model.modelId]: modelEntry },
   };

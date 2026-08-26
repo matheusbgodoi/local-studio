@@ -4,6 +4,7 @@ import {
   AtSign,
   Boxes,
   CircleDot,
+  Copy,
   Download,
   FileText,
   Gauge,
@@ -235,7 +236,10 @@ const BUILTIN_COMMAND_ICONS: Record<string, typeof Slash> = {
   plugins: Boxes,
   terminal: TerminalSquare,
   fork: GitFork,
-  export: Download,
+  copy: Copy,
+  export: FileText,
+  "export:file": Download,
+  "export:clipboard": Copy,
 };
 
 const LOADED_TAB_META: Record<"$" | "/", { Icon: typeof AtSign; classes: string }> = {

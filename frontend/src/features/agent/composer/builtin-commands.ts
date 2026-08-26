@@ -1,7 +1,7 @@
 // Built-in slash commands. External to the core processor: this module only
 // produces a ComposerCommandProvider from an injected actions surface, so the
 // registry never knows what "/compact" means — and a pane that lacks an action
-// (no terminal, nothing to export) simply doesn't list that command.
+// (no terminal, nowhere to fork to) simply doesn't list that command.
 import type { ComposerCommand, ComposerCommandProvider } from "./command-types";
 
 export type BuiltinComposerActions = {
@@ -11,7 +11,6 @@ export type BuiltinComposerActions = {
   openPlugins: () => void;
   openTerminal?: () => void;
   forkSession?: () => void;
-  exportSession?: () => void;
   /** `/goal <objective>` and `/goal pause|resume|clear`. Resolves to an error message or null. */
   goal?: (args: string) => Promise<string | null>;
   enterGoalMode?: () => void;
@@ -58,7 +57,6 @@ export function builtinCommandProvider(actions: BuiltinComposerActions): Compose
       ...command("plugins", "Plugins", "Manage plugins and connectors", actions.openPlugins),
       ...command("terminal", "Terminal", "Open the terminal", actions.openTerminal),
       ...command("fork", "Fork", "Fork this session into a new pane", actions.forkSession),
-      ...command("export", "Export", "Export this session as Markdown", actions.exportSession),
       ...(actions.goal
         ? [
             {

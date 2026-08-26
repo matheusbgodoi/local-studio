@@ -140,8 +140,16 @@ export function createConnectorToolsExtension(onReady: (pi: ExtensionAPI) => voi
 type ToolSchema = Parameters<ExtensionAPI["registerTool"]>[0]["parameters"];
 
 type ConnectorToolResult = {
-  content: Array<{ type: "text"; text: string }>;
-  details: { connectorId: string; tool: string; failed?: boolean; error?: string };
+  content: Array<
+    { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
+  >;
+  details: {
+    connectorId: string;
+    tool: string;
+    failed?: boolean;
+    error?: string;
+    generatedImages?: Array<{ filename: string; subfolder: string }>;
+  };
 };
 
 /** TypeBox's `Type.Unsafe(schema)` is `{ ...schema, "~unsafe": null }`; MCP tools
@@ -152,15 +160,103 @@ function unsafeSchema(schema: Record<string, unknown> | undefined): ToolSchema {
   return { ...base, "~unsafe": null } as unknown as ToolSchema;
 }
 
-function renderMcpResult(result: unknown): string {
-  const content = (result as { content?: Array<{ type?: string; text?: string }> } | null)?.content;
-  if (Array.isArray(content)) {
-    const text = content
-      .map((block) => (block.type === "text" && block.text ? block.text : JSON.stringify(block)))
-      .join("\n");
-    return text || "(empty result)";
+type McpResultRecord = {
+  content?: Array<{ type?: string; text?: string; data?: string; mimeType?: string }>;
+  structuredContent?: unknown;
+};
+
+type GeneratedImageRef = { filename: string; subfolder: string };
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function inlineImage(text: string): { type: "image"; data: string; mimeType: string } | null {
+  const match = /^data:(image\/[A-Za-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/.exec(text.trim());
+  if (!match?.[1] || !match[2]) return null;
+  return { type: "image", data: match[2], mimeType: match[1] };
+}
+
+function connectorContent(result: unknown): ConnectorToolResult["content"] {
+  const content = (result as McpResultRecord | null)?.content;
+  if (!Array.isArray(content)) {
+    return [{ type: "text", text: JSON.stringify(result ?? null) }];
   }
-  return JSON.stringify(result ?? null);
+  const blocks = content.flatMap((block): ConnectorToolResult["content"] => {
+    if (block.type === "image" && block.data && block.mimeType?.startsWith("image/")) {
+      return [{ type: "image", data: block.data, mimeType: block.mimeType }];
+    }
+    if (block.type !== "text" || !block.text) return [];
+    const image = inlineImage(block.text);
+    return image ? [image] : [{ type: "text", text: block.text }];
+  });
+  return blocks.length > 0 ? blocks : [{ type: "text", text: "(empty result)" }];
+}
+
+function generatedImageRefs(result: unknown): GeneratedImageRef[] {
+  const source = result as McpResultRecord | null;
+  const candidates: unknown[] = [source?.structuredContent];
+  for (const block of source?.content ?? []) {
+    if (block.type !== "text" || !block.text) continue;
+    try {
+      candidates.push(JSON.parse(block.text) as unknown);
+    } catch {
+      continue;
+    }
+  }
+  const refs: GeneratedImageRef[] = [];
+  for (const candidate of candidates) {
+    const payload = record(candidate);
+    const outputs = Array.isArray(payload?.outputs) ? payload.outputs : [];
+    for (const output of outputs) {
+      const item = record(output);
+      if (typeof item?.filename !== "string" || !item.filename.trim()) continue;
+      refs.push({
+        filename: item.filename.trim(),
+        subfolder: typeof item.subfolder === "string" ? item.subfolder : "",
+      });
+    }
+  }
+  return refs.filter(
+    (item, index) =>
+      refs.findIndex(
+        (candidate) =>
+          candidate.filename === item.filename && candidate.subfolder === item.subfolder,
+      ) === index,
+  );
+}
+
+function returnsGeneratedImages(tool: string): boolean {
+  return /(?:run_workflow(?:_stream)?|generate_image|transform_image|inpaint_image|upscale_image)$/.test(
+    tool,
+  );
+}
+
+async function generatedImageContent(
+  connectorId: string,
+  tool: string,
+  result: unknown,
+): Promise<{ images: ConnectorToolResult["content"]; refs: GeneratedImageRef[] }> {
+  if (!returnsGeneratedImages(tool)) return { images: [], refs: [] };
+  const refs = generatedImageRefs(result);
+  const images: ConnectorToolResult["content"] = [];
+  for (const output of refs.slice(0, 4)) {
+    try {
+      const fetched = await callConnectorTool(connectorId, "comfyui_get_image", {
+        filename: output.filename,
+        subfolder: output.subfolder,
+        response_format: "data_uri",
+        preview_format: "webp",
+        preview_quality: 90,
+      });
+      images.push(...connectorContent(fetched).filter((block) => block.type === "image"));
+    } catch {
+      continue;
+    }
+  }
+  return { images, refs };
 }
 
 /**
@@ -189,9 +285,14 @@ export async function registerConnectorTools(
             tool.name,
             (params ?? {}) as Record<string, unknown>,
           );
+          const generated = await generatedImageContent(connectorId, tool.name, result);
           return {
-            content: [{ type: "text", text: renderMcpResult(result) }],
-            details: { connectorId, tool: tool.name },
+            content: [...connectorContent(result), ...generated.images],
+            details: {
+              connectorId,
+              tool: tool.name,
+              ...(generated.refs.length > 0 ? { generatedImages: generated.refs } : {}),
+            },
           };
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);

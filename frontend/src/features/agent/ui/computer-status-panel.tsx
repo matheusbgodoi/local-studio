@@ -140,7 +140,7 @@ function sessionTopRows(activeModel: AgentModel | null, session: Session | null)
   const percent = session?.contextUsage?.percent;
   return [
     { label: "State", value: session?.status ?? "idle" },
-    { label: "Model", value: activeModel?.name ?? session?.modelId ?? "No model" },
+    { label: "Model", value: activeModel?.displayName ?? "Model identity unavailable" },
     {
       label: "Context",
       value: `${formatTokenCount(contextTokens)} / ${formatTokenCount(contextWindow)}${

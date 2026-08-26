@@ -18,6 +18,10 @@ import { LocalModelsTab } from "./local-models-tab";
 type Props = {
   embedded?: boolean;
   tab: RecipesContentTab;
+  lifecycleSupported: boolean;
+  modelIndexSupported: boolean;
+  downloadQueueSupported: boolean;
+  recipesSupported: boolean;
   setTab: (tab: RecipesContentTab) => void;
   loading: boolean;
   refreshing: boolean;
@@ -37,14 +41,14 @@ type Props = {
   availableModels: ModelInfo[];
   runtimeTargets: RuntimeTarget[];
   sortedRecipes: RecipeWithStatus[];
-  onRefresh: () => void;
+  onRefreshRecipes: () => void;
   onNewRecipe: () => void;
-  onCreateServeFromDownload: (download: ModelDownload) => void;
+  onCreateServeFromDownload?: (download: ModelDownload) => void;
   onSaveRecipe: () => void;
   onCloseRecipeModal: () => void;
   onCancelDelete: () => void;
   onConfirmDelete: () => void;
-  onEvictModel: () => void;
+  onEvictModel: () => Promise<void> | void;
   table: RecipesTableProps;
 };
 
@@ -52,7 +56,7 @@ const MODEL_TABS: Array<{ id: RecipesContentTab; label: string; icon: ReactNode 
   { id: "local", label: "Local", icon: <Cpu className="h-3.5 w-3.5" /> },
   { id: "picks", label: "Picks", icon: <Sparkles className="h-3.5 w-3.5" /> },
   { id: "get", label: "Get", icon: <Compass className="h-3.5 w-3.5" /> },
-  { id: "serves", label: "Serves", icon: <HardDrive className="h-3.5 w-3.5" /> },
+  { id: "serves", label: "Launch profiles", icon: <HardDrive className="h-3.5 w-3.5" /> },
   { id: "downloads", label: "Downloads", icon: <Download className="h-3.5 w-3.5" /> },
 ];
 
@@ -71,8 +75,8 @@ const TAB_HEADINGS: Record<RecipesContentTab, { title: string; description: stri
     description: "Find the right model, check hardware fit, and download its weights.",
   },
   serves: {
-    title: "Serves",
-    description: "Saved model, runtime, and configuration combinations ready to launch.",
+    title: "Launch profiles",
+    description: "Saved combinations of model weights, runtime, and launch settings.",
   },
   downloads: {
     title: "Downloads",
@@ -84,6 +88,10 @@ export function RecipesContentView(props: Props) {
   const {
     embedded = false,
     tab,
+    lifecycleSupported,
+    modelIndexSupported,
+    downloadQueueSupported,
+    recipesSupported,
     setTab,
     loading,
     refreshing,
@@ -103,7 +111,7 @@ export function RecipesContentView(props: Props) {
     availableModels,
     runtimeTargets,
     sortedRecipes,
-    onRefresh,
+    onRefreshRecipes,
     onNewRecipe,
     onCreateServeFromDownload,
     onSaveRecipe,
@@ -114,6 +122,12 @@ export function RecipesContentView(props: Props) {
     table,
   } = props;
   const heading = TAB_HEADINGS[tab];
+  const modelTabs = MODEL_TABS.filter((candidate) => {
+    if (candidate.id === "local") return true;
+    if (candidate.id === "serves") return recipesSupported;
+    if (candidate.id === "picks") return modelIndexSupported;
+    return downloadQueueSupported;
+  });
   const content = (
     <section>
       <h2 className="text-[length:var(--fs-2xl)] font-medium tracking-[-0.015em] text-(--ui-fg)">
@@ -149,30 +163,18 @@ export function RecipesContentView(props: Props) {
     </section>
   );
 
-  // THE HEADER REFRESH DOES NOT BELONG ON EVERY TAB.
-  //
-  // `onRefresh` is `loadRecipes`: it re-fetches /recipes, /models and /runtime-targets. On the
-  // Local tab none of those are on screen — that tab reads /v1/models and the realtime status
-  // store — so pressing it spun the header, re-requested routes this backend answers 404 for,
-  // and left the served-model list beneath it untouched. Making Local the default put the
-  // wrong Refresh in the page header.
-  //
-  // Local keeps the one it already has, sitting directly above the list it refreshes. The
-  // alternative — driving the tab's refresh from up here — would mean calling useLocalModels()
-  // in this component, and that fetches /v1/models on every tab instead of only the one that
-  // shows it.
-  const showHeaderRefresh = tab !== "local";
+  const showHeaderRefresh = tab === "serves" && recipesSupported;
   return (
     <>
       {embedded ? (
         <div className="space-y-6">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-(--ui-separator) pb-3">
-            <Tabs variant="pill" items={MODEL_TABS} activeTab={tab} onSelectTab={setTab} />
+            <Tabs variant="pill" items={modelTabs} activeTab={tab} onSelectTab={setTab} />
             {showHeaderRefresh ? (
               <RefreshButton
-                onRefresh={onRefresh}
+                onRefresh={onRefreshRecipes}
                 loading={refreshing || loading}
-                label="Refresh models"
+                label="Refresh launch profiles"
                 className="h-8 w-8"
               />
             ) : null}
@@ -183,17 +185,21 @@ export function RecipesContentView(props: Props) {
         <TabbedPage
           eyebrow="Model library"
           title="Models"
-          description="The models this backend serves, plus the catalog, downloads, and Serves that depend on a controller."
+          description={
+            modelIndexSupported || downloadQueueSupported || recipesSupported
+              ? "Models currently served, plus catalogs, downloads, and launch profiles."
+              : "Models currently served by this inference gateway."
+          }
           width="md"
-          tabs={MODEL_TABS}
+          tabs={modelTabs}
           activeTab={tab}
           onSelectTab={setTab}
           actions={
             showHeaderRefresh ? (
               <RefreshButton
-                onRefresh={onRefresh}
+                onRefresh={onRefreshRecipes}
                 loading={refreshing || loading}
-                label="Refresh models"
+                label="Refresh launch profiles"
                 className="h-8 w-8"
               />
             ) : null

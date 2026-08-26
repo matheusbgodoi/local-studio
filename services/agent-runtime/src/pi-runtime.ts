@@ -30,7 +30,7 @@ import { createGoalPromptExtension } from "./goal-prompt";
 import { createAgenticControlExtension } from "./agentic/control-tools";
 import { networkService } from "./network";
 import { applyAgentShell } from "./network/agent-shell";
-import { sharedInferenceGate } from "./agentic/inference-gate";
+import { installInferenceBoundary, withInferenceContext } from "./agentic/inference-boundary";
 import { findRuntimeSessionForLookup, piStatusFromEvents } from "./pi-runtime-state";
 import { configuredPiSessionDir, findSessionFile } from "./sessions-store";
 import { getGlobalSingleton } from "./instances";
@@ -308,6 +308,7 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
   private eventSeq = 0;
   private eventLog: LoggedPiEvent[] = [];
   private activePromptCount = 0;
+  private readonly promptAbortControllers = new Set<AbortController>();
   private lastError: string | null = null;
   private currentFingerprint = "";
   private currentPiSessionId: string | null = null;
@@ -373,6 +374,10 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
 
   getConnectorSelection(): string[] {
     return [...this.desiredConnectors];
+  }
+
+  getActiveToolNames(): string[] {
+    return this.runtime?.session.getActiveToolNames() ?? [];
   }
 
   private async syncConnectorTools(): Promise<ConnectorSelectionResult> {
@@ -467,6 +472,7 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
           try: () => getProviderHub(),
           catch: (error) => error,
         });
+        installInferenceBoundary(sharedModelRuntime);
 
         const sessionOptions = buildAgentSessionOptionsSync({ options });
         applyRuntimeEnvInjections(sessionOptions.envInjections);
@@ -709,21 +715,22 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     this.on("loggedEvent", listener);
     this.activePromptCount += 1;
     this.lastError = null;
-    //
-    // Every turn in this process funnels through here — chat, subagents,
-    // automations, the goal driver, the phone bridge and a Run's own steps — so
-    // this is the one place that can make "one card decodes one thing at a
-    // time" true rather than true of some callers. The count is incremented
-    // first, so a turn waiting for the card still reports as running.
-    //
-    const priority = options.source === "rpc" ? "background" : "interactive";
+    const priority = options.inferencePriority ?? "interactive";
+    const controller = new AbortController();
+    this.promptAbortControllers.add(controller);
     return Effect.tryPromise({
-      try: () => sharedInferenceGate().run(priority, () => this.promptSession(message, options)),
+      try: () =>
+        withInferenceContext(
+          priority,
+          controller.signal,
+          () => this.promptSession(message, options),
+          options.inferenceObserver,
+        ),
       catch: (error) => error,
     }).pipe(
       Effect.catch((error) =>
         options.restartOnContinuationError !== false && shouldRestartAfterPromptError(error)
-          ? this.restartPromptEffect(message, options)
+          ? this.restartPromptEffect(message, options, priority, controller.signal)
           : Effect.fail(error),
       ),
       Effect.catch((error) =>
@@ -734,6 +741,7 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
       Effect.ensuring(
         Effect.sync(() => {
           this.activePromptCount = Math.max(0, this.activePromptCount - 1);
+          this.promptAbortControllers.delete(controller);
           this.off("loggedEvent", listener);
         }),
       ),
@@ -753,6 +761,8 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
   private restartPromptEffect(
     message: string,
     options: PiPromptOptions,
+    priority: "interactive" | "background",
+    signal: AbortSignal,
   ): Effect.Effect<void, unknown> {
     return this.ensureStartedEffect(
       this.currentModelId,
@@ -762,7 +772,13 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     ).pipe(
       Effect.andThen(
         Effect.tryPromise({
-          try: () => this.promptSession(message, options),
+          try: () =>
+            withInferenceContext(
+              priority,
+              signal,
+              () => this.promptSession(message, options),
+              options.inferenceObserver,
+            ),
           catch: (error) => error,
         }),
       ),
@@ -825,19 +841,27 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     if (next && !this.currentPiSessionId) this.currentPiSessionId = next;
   }
 
-  compact(customInstructions?: string): Promise<unknown> {
-    return Effect.runPromise(this.compactEffect(customInstructions));
+  compact(
+    customInstructions?: string,
+    inferenceObserver?: import("./agentic/inference-activity").InferenceActivityObserver,
+  ): Promise<unknown> {
+    return Effect.runPromise(this.compactEffect(customInstructions, inferenceObserver));
   }
 
-  private compactEffect(customInstructions?: string): Effect.Effect<unknown, unknown> {
+  private compactEffect(
+    customInstructions?: string,
+    inferenceObserver?: import("./agentic/inference-activity").InferenceActivityObserver,
+  ): Effect.Effect<unknown, unknown> {
     if (this.activePromptCount > 0) {
       return Effect.fail(new Error("Cannot compact while the agent is running."));
     }
     return Effect.tryPromise({
-      // Summarisation is a decode too, and it is never the owner waiting.
       try: () =>
-        sharedInferenceGate().run("background", () =>
-          Promise.resolve(this.requireSession().compact(customInstructions)),
+        withInferenceContext(
+          "background",
+          undefined,
+          () => Promise.resolve(this.requireSession().compact(customInstructions)),
+          inferenceObserver,
         ),
       catch: (error) => error,
     });
@@ -852,6 +876,7 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     return Effect.runPromise(
       Effect.tryPromise({
         try: async () => {
+          for (const controller of this.promptAbortControllers) controller.abort();
           const session = this.runtime?.session;
           if (!session) return { steering: [], followUp: [] };
           const cleared = session.clearQueue();
@@ -865,6 +890,28 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
         catch: () => undefined,
       }).pipe(Effect.catch(() => Effect.succeed({ steering: [], followUp: [] }))),
     );
+  }
+
+  abortStrict(): Promise<void> {
+    for (const controller of this.promptAbortControllers) controller.abort();
+    const session = this.runtime?.session;
+    if (!session) return Promise.resolve();
+    try {
+      session.clearQueue();
+    } catch {
+      // Queue restoration belongs to interactive Stop; durable cancel only needs idle confirmation.
+    }
+    return (async () => {
+      try {
+        session.abortCompaction();
+      } catch {}
+      try {
+        await session.abort();
+      } catch {
+        // waitForIdle is the authoritative postcondition even if abort reports an error.
+      }
+      await session.waitForIdle();
+    })();
   }
 
   respondExtensionUi(
@@ -892,6 +939,11 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     // Tool registrations live in the runtime being disposed; the DESIRED set
     // survives so the next ensureStarted re-activates the same connectors.
     this.connectorApi = null;
+    for (const connectorId of this.registeredConnectorTools.keys()) {
+      if (releaseConnector(connectorId, this.connectorHolderKey)) {
+        closePooledConnection(connectorId);
+      }
+    }
     this.registeredConnectorTools.clear();
     const runtime = this.runtime;
     this.runtime = null;
@@ -1098,6 +1150,11 @@ class PiRuntimeManager {
 
   listSessions(): Array<{ sessionId: string; session: PiAgentSession }> {
     return [...this.sessions.entries()].map(([sessionId, session]) => ({ sessionId, session }));
+  }
+
+  releaseSession(sessionId: string, session: PiAgentSession): boolean {
+    if (this.sessions.get(sessionId) !== session || session.status.running) return false;
+    return this.sessions.delete(sessionId);
   }
 }
 

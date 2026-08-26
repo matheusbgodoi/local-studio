@@ -19,6 +19,7 @@ import {
   tokensPerSecond,
   UNAVAILABLE,
 } from "@/features/usage/usage-formatters";
+import { physicalTokenRows } from "@/features/usage/usage-model-identity";
 import type { UsageFilters, UsageTokens } from "@/lib/types";
 
 const contextShare = (peak: number | null, limit: number | null): string => {
@@ -41,6 +42,7 @@ export function UsageTokensTab({
   const context = tokens.context;
   const speculative = performance.speculative;
   const byContext = performance.by_context;
+  const byPhysicalModel = physicalTokenRows(tokens.by_model, filters);
 
   const cells: ActivityCell[] = tokens.daily.map((day) => ({
     date: day.date,
@@ -211,10 +213,10 @@ export function UsageTokensTab({
             "Requests",
           ]}
           emptyLabel="No requests in this period."
-          rows={tokens.by_model.map((model) => ({
-            key: model.model,
+          rows={byPhysicalModel.map((model) => ({
+            key: model.key,
             cells: [
-              model.model,
+              model.label,
               compactTokens(model.processed_tokens),
               compactTokens(model.fresh_prompt_tokens),
               compactTokens(model.generated_tokens),

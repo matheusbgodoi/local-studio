@@ -108,7 +108,7 @@ export function BenchRateCard({
   const ratio = rate.wh_per_1m_input > 0 ? rate.wh_per_1m_output / rate.wh_per_1m_input : null;
   const idleCost =
     rate.idle_watts === null || price === null ? null : (rate.idle_watts / 1000) * price;
-  const others = rate.aliases.filter((alias) => alias !== rate.model);
+  const sharedProfiles = rate.aliases.length > 1;
   const requests = rate.sample?.requests ?? null;
   const marginal = rate.scope === "marginal";
 
@@ -119,8 +119,8 @@ export function BenchRateCard({
       title={title}
       badge={badge}
       description={
-        others.length > 0
-          ? `${basis} The same weights serve ${others.join(", ")}, which differ in adapter scale — that changes what a forward pass produces, not what it costs, so they share this rate.`
+        sharedProfiles
+          ? `${basis} Every behavior profile backed by these same weights shares this one physical-model rate.`
           : basis
       }
     >
@@ -226,9 +226,11 @@ function glossary(rate: UsageEnergyRate): Array<{ term: string; detail: string }
 export function BenchProvenance({
   rate,
   preferences,
+  modelLabel,
 }: {
   rate: UsageEnergyRate;
   preferences: EnergyPreferences;
+  modelLabel: string;
 }) {
   const measuredAt = instantLabel(rate.measured_at, preferences.timezone);
   const sample = [
@@ -291,7 +293,7 @@ export function BenchProvenance({
   return (
     <details className="mx-auto mt-3 max-w-[55rem] overflow-hidden rounded-[var(--rad-xl)] bg-(--ui-surface)/60">
       <summary className="cursor-pointer px-5 py-3 text-[length:var(--fs-xs)] font-medium uppercase tracking-[0.1em] text-(--ui-muted) hover:text-(--ui-fg)">
-        How {rate.model} was measured
+        How {modelLabel} was measured
       </summary>
       <div className="space-y-3 px-5 pb-5 text-[length:var(--fs-2xs)] leading-relaxed text-(--ui-muted)/80">
         <p>

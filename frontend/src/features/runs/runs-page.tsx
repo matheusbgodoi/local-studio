@@ -1,6 +1,7 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
+import { useState } from "react";
 import {
   AppPage,
   Button,
@@ -15,12 +16,29 @@ import {
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 import { humanStatus, runTone } from "./run-formatters";
 import { RunDetail } from "./run-detail";
-import { cancelSelectedRun, refreshRuns, selectRun, resumeSelectedRun } from "./runs-store";
+import { useRunSnapshotState } from "./use-session-run";
+import {
+  archiveSelectedRun,
+  cancelSelectedRun,
+  deleteSelectedRun,
+  refreshRuns,
+  selectRun,
+  resumeSelectedRun,
+} from "./runs-store";
 import { useRuns } from "./use-runs";
 
 export default function RunsPage() {
-  const { runs, snapshot, selectedId, loading, error } = useRuns();
+  const { runs, selectedId, loading, error } = useRuns();
+  const selectedSnapshot = useRunSnapshotState(selectedId);
+  const snapshot = selectedSnapshot.snapshot;
   const requestedId = useSearchParams().get("run");
+  const [view, setView] = useState<"current" | "history" | "archived">("current");
+  const terminal = new Set(["COMPLETED", "FAILED", "CANCELLED"]);
+  const visibleRuns = runs.filter((run) => {
+    if (view === "archived") return run.archivedAtMs !== null;
+    if (run.archivedAtMs !== null) return false;
+    return view === "history" ? terminal.has(run.status) : !terminal.has(run.status);
+  });
 
   //
   // A Run is addressable: `/runs?run=<id>` is how the conversation's Run tab
@@ -37,10 +55,22 @@ export default function RunsPage() {
     (snapshot.run.status === "PAUSED" || snapshot.run.status === "WAITING_USER");
   const canCancel =
     snapshot !== null && !["COMPLETED", "FAILED", "CANCELLED"].includes(snapshot.run.status);
+  const selectedVisible = visibleRuns.some((run) => run.id === selectedId);
+  const displayedError = error ?? selectedSnapshot.error;
+
+  const selectView = (next: "current" | "history" | "archived") => {
+    setView(next);
+    const first = runs.find((run) => {
+      if (next === "archived") return run.archivedAtMs !== null;
+      if (run.archivedAtMs !== null) return false;
+      return next === "history" ? terminal.has(run.status) : !terminal.has(run.status);
+    });
+    selectRun(first?.id ?? null);
+  };
 
   return (
     <AppPage>
-      <PageContainer width="lg">
+      <PageContainer width="sm">
         <PageHeader
           eyebrow="Agentic"
           title="Runs"
@@ -54,21 +84,39 @@ export default function RunsPage() {
           }
         />
 
-        {error ? <ErrorBox>{error}</ErrorBox> : null}
+        {displayedError ? <ErrorBox>{displayedError}</ErrorBox> : null}
+
+        <div className="flex w-fit gap-1 rounded-lg border border-(--ui-separator) p-1">
+          {(["current", "history", "archived"] as const).map((item) => (
+            <button
+              key={item}
+              type="button"
+              onClick={() => selectView(item)}
+              className={`rounded-md px-3 py-1.5 text-[length:var(--fs-sm)] capitalize ${
+                view === item ? "bg-(--ui-active) text-(--ui-fg)" : "text-(--ui-muted)"
+              }`}
+            >
+              {item}
+            </button>
+          ))}
+        </div>
 
         {loading && runs.length === 0 ? (
           <div className="flex justify-center py-16">
             <Spinner />
           </div>
-        ) : runs.length === 0 ? (
+        ) : visibleRuns.length === 0 ? (
           <Card className="p-6 text-(--ui-muted)">
-            No runs yet. A run is created when a goal is handed to the agent; ordinary chat stays
-            ordinary chat and never becomes one.
+            {view === "current"
+              ? "No active Runs. Completed work remains available in History."
+              : view === "history"
+                ? "No completed Runs yet."
+                : "No archived Runs."}
           </Card>
         ) : (
           <div className="grid gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
             <Card className="divide-y divide-(--ui-separator)/60">
-              {runs.map((run) => (
+              {visibleRuns.map((run) => (
                 <button
                   key={run.id}
                   type="button"
@@ -88,7 +136,7 @@ export default function RunsPage() {
             </Card>
 
             <div className="min-w-0 space-y-4">
-              {snapshot ? (
+              {snapshot && selectedVisible ? (
                 <RunDetail
                   snapshot={snapshot}
                   actions={
@@ -109,13 +157,44 @@ export default function RunsPage() {
                           Cancel
                         </Button>
                       ) : null}
+                      {terminal.has(snapshot.run.status) ? (
+                        <Button
+                          variant="secondary"
+                          onClick={() => {
+                            const nextId = nextRunIdAfterRemoval(visibleRuns, snapshot.run.id);
+                            void archiveSelectedRun(
+                              snapshot.run.id,
+                              snapshot.run.archivedAtMs === null,
+                            ).then((updated) => {
+                              if (updated) selectRun(nextId);
+                            });
+                          }}
+                        >
+                          {snapshot.run.archivedAtMs === null ? "Archive" : "Restore"}
+                        </Button>
+                      ) : null}
+                      {snapshot.run.archivedAtMs !== null ? (
+                        <Button
+                          variant="danger"
+                          onClick={() => {
+                            const confirmed = window.confirm(
+                              `Delete “${snapshot.run.goal}” and its complete Run history? This cannot be undone.`,
+                            );
+                            if (confirmed) void deleteSelectedRun(snapshot.run.id);
+                          }}
+                        >
+                          Delete
+                        </Button>
+                      ) : null}
                     </>
                   }
                 />
-              ) : (
+              ) : selectedVisible && selectedSnapshot.loading ? (
                 <div className="flex justify-center py-16">
                   <Spinner />
                 </div>
+              ) : (
+                <Card className="p-6 text-(--ui-muted)">Select a Run to inspect it.</Card>
               )}
             </div>
           </div>
@@ -123,4 +202,10 @@ export default function RunsPage() {
       </PageContainer>
     </AppPage>
   );
+}
+
+function nextRunIdAfterRemoval(runs: readonly { id: string }[], currentId: string): string | null {
+  const index = runs.findIndex((run) => run.id === currentId);
+  if (index < 0) return runs[0]?.id ?? null;
+  return runs[index + 1]?.id ?? runs[index - 1]?.id ?? null;
 }

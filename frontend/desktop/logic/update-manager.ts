@@ -16,12 +16,28 @@ function setUpdateState(nextState: DesktopUpdateSnapshot): void {
 
 function setUpdateError(error: unknown): void {
   installIntent.clear();
-  const message = String(error);
+  const message = redactUrlDetails(String(error));
   setUpdateState({ status: "error", message });
   log.error(`Auto update error: ${message}`);
 }
 
-function resolveFeedUrl(): string | null {
+function redactUrlDetails(message: string): string {
+  return message.replace(/https?:\/\/[^\s"'<>]+/gi, (candidate) => {
+    try {
+      const parsed = new URL(candidate);
+      return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+    } catch {
+      return "[update URL]";
+    }
+  });
+}
+
+function feedLogLabel(feedUrl: string): string {
+  const parsed = new URL(feedUrl);
+  return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+}
+
+export function resolveFeedUrl(): string | null {
   const raw = process.env.LOCAL_STUDIO_UPDATE_URL?.trim();
   if (!raw) return null;
   // Refuse cleartext update feeds — auto-update over http is trivially
@@ -29,18 +45,28 @@ function resolveFeedUrl(): string | null {
   // (local testing of an update server).
   try {
     const parsed = new URL(raw);
+    if (parsed.username || parsed.password) {
+      log.warn("[update] Ignoring update feed containing embedded credentials");
+      return null;
+    }
     if (parsed.protocol !== "https:" && !isLoopbackHttpUrl(raw)) {
       log.warn(`[update] Ignoring non-https update feed: ${parsed.protocol}//${parsed.host}`);
       return null;
     }
+    parsed.hash = "";
+    parsed.pathname = parsed.pathname.replace(/\/+$/, "");
+    return parsed.toString();
   } catch {
     log.warn("[update] Ignoring malformed LOCAL_STUDIO_UPDATE_URL");
     return null;
   }
-  return raw.replace(/\/+$/, "");
 }
 
-function ensureFeedConfigured(): { ok: true; url: string } {
+export function resolveUpdatePolicy(): "manual-merge" | "owner-feed" {
+  return resolveFeedUrl() ? "owner-feed" : "manual-merge";
+}
+
+function ensureFeedConfigured(): { ok: true; url: string } | { ok: false } {
   const feedUrl = resolveFeedUrl();
   if (feedUrl) {
     autoUpdater.setFeedURL({
@@ -50,16 +76,7 @@ function ensureFeedConfigured(): { ok: true; url: string } {
     });
     return { ok: true, url: feedUrl };
   }
-
-  // Default feed: the public GitHub releases, which ship latest-mac.yml plus
-  // signed zip/dmg assets. electron-updater verifies the download's code
-  // signature against the running app before installing.
-  autoUpdater.setFeedURL({
-    provider: "github",
-    owner: "sybil-solutions",
-    repo: "local-studio",
-  });
-  return { ok: true, url: "github:sybil-solutions/local-studio" };
+  return { ok: false };
 }
 
 export function getUpdateState(): DesktopUpdateSnapshot {
@@ -67,18 +84,11 @@ export function getUpdateState(): DesktopUpdateSnapshot {
 }
 
 function installDownloadedUpdate(): void {
-  // Refuses on principle: replacing this binary with an upstream artefact would
-  // discard the fork's changes. See initializeAutoUpdates.
-  log.warn(
-    "[update] Refusing to install an upstream artefact over the owner-fork build. " +
-      "Upgrade by merging upstream into matheusbgodoi/local-studio and rebuilding " +
-      "(docs/upstream-updates.md).",
-  );
-  setUpdateState({
-    status: "error",
-    message:
-      "This is a customized build. Upgrade by merging upstream into the fork and rebuilding.",
-  });
+  if (!resolveFeedUrl()) {
+    setUpdateState({ status: "idle", message: "Owner build updates through merge and rebuild" });
+    return;
+  }
+  autoUpdater.quitAndInstall(false, true);
 }
 
 export async function checkForUpdates(force = false): Promise<DesktopUpdateSnapshot> {
@@ -91,19 +101,17 @@ export async function checkForUpdates(force = false): Promise<DesktopUpdateSnaps
     return disabledState;
   }
 
-  // Dev-channel builds install via the dev mirror, never the stable releases —
-  // the default GitHub feed would happily "update" them onto stable. An
-  // explicit LOCAL_STUDIO_UPDATE_URL override still wins for feed testing.
-  if (isDevChannelBuild && !resolveFeedUrl()) {
-    const devChannelState = {
+  if (!resolveFeedUrl()) {
+    const ownerState = {
       status: "idle",
-      message: "Dev-channel builds do not auto-update from stable releases",
+      message: "Customized owner build — upstream releases require merge and rebuild",
     } satisfies DesktopUpdateSnapshot;
-    setUpdateState(devChannelState);
-    return devChannelState;
+    setUpdateState(ownerState);
+    return ownerState;
   }
 
-  ensureFeedConfigured();
+  const feed = ensureFeedConfigured();
+  if (!feed.ok) return latestUpdateState;
 
   if (!app.isPackaged && !force) {
     const devState = {
@@ -128,7 +136,7 @@ export async function checkForUpdates(force = false): Promise<DesktopUpdateSnaps
   } catch (error) {
     const errorState = {
       status: "error",
-      message: String(error),
+      message: redactUrlDetails(String(error)),
     } satisfies DesktopUpdateSnapshot;
     setUpdateState(errorState);
     return errorState;
@@ -139,6 +147,15 @@ export async function startUpdate(): Promise<DesktopUpdateSnapshot> {
   const action = installIntent.request(latestUpdateState.status);
   if (action === "install") {
     installDownloadedUpdate();
+    return latestUpdateState;
+  }
+  if (action === "download") {
+    try {
+      setUpdateState({ status: "downloading", version: latestUpdateState.version });
+      await autoUpdater.downloadUpdate();
+    } catch (error) {
+      setUpdateError(error);
+    }
     return latestUpdateState;
   }
   if (action === "wait") return latestUpdateState;
@@ -166,18 +183,19 @@ export function initializeAutoUpdates(): void {
     return;
   }
 
-  const feed = ensureFeedConfigured();
-  log.info(`[update] Feed: ${feed.url}`);
+  if (!resolveFeedUrl()) {
+    setUpdateState({
+      status: "idle",
+      message: "Customized owner build — update by merging upstream and rebuilding",
+    });
+    log.info("[update] Owner build without an explicit feed; automatic updates disabled");
+    return;
+  }
 
-  // OWNER FORK BUILD - this app is built from matheusbgodoi/local-studio and
-  // carries changes that do not exist upstream (the RTX3090 controller identity,
-  // Status/Usage telemetry, personal MCP wiring). An upstream release artefact
-  // would replace all of it with stock, silently, on the next quit.
-  //
-  // So: keep CHECKING and keep telling the user a newer upstream version exists -
-  // that information is useful - but never download or install it behind their
-  // back. Upgrading is a deliberate merge into the fork, documented in
-  // docs/upstream-updates.md, followed by a local rebuild.
+  const feed = ensureFeedConfigured();
+  if (!feed.ok) return;
+  log.info(`[update] Feed: ${feedLogLabel(feed.url)}`);
+
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.autoRunAppAfterInstall = false;
@@ -190,6 +208,10 @@ export function initializeAutoUpdates(): void {
   autoUpdater.on("update-available", (info) => {
     setUpdateState({ status: "available", version: info.version });
     log.info(`Update available: ${info.version}`);
+    if (installIntent.shouldDownload()) {
+      setUpdateState({ status: "downloading", version: info.version });
+      void autoUpdater.downloadUpdate().catch(setUpdateError);
+    }
   });
 
   autoUpdater.on("update-not-available", (info) => {
@@ -208,12 +230,9 @@ export function initializeAutoUpdates(): void {
   });
 
   autoUpdater.on("update-downloaded", (info) => {
+    installIntent.clear();
     setUpdateState({ status: "downloaded", version: info.version });
     log.info(`Update downloaded: ${info.version}`);
-    if (installIntent.downloadCompleted()) {
-      log.info(`Restarting to install update: ${info.version}`);
-      installDownloadedUpdate();
-    }
   });
 
   autoUpdater.on("error", (error) => {
@@ -223,7 +242,7 @@ export function initializeAutoUpdates(): void {
   if (app.isPackaged) {
     setTimeout(() => {
       void checkForUpdates().catch((error) => {
-        log.error(`Background update check failed: ${String(error)}`);
+        log.error(`Background update check failed: ${redactUrlDetails(String(error))}`);
       });
     }, 4_000);
   }

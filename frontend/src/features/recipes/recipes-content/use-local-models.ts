@@ -1,16 +1,9 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
-import api from "@/lib/api/client";
-import {
-  groupByPhysicalModel,
-  normalizeOpenAIModels,
-  type AgentModel,
-  type OpenAIModelListItem,
-  type PhysicalModel,
-} from "@/features/agent/models";
-import { useMountSubscription } from "@/hooks/use-mount-subscription";
+import { useMemo } from "react";
+import { type AgentModel, type PhysicalModel } from "@/features/agent/models";
 import { useRealtimeStatusStore } from "@/hooks/realtime-status-store";
+import { refreshServedModels, useServedModels } from "@/hooks/served-models-store";
 import { toGBFromMB } from "@/lib/formatters";
 import type { GPU } from "@/lib/types";
 
@@ -24,7 +17,6 @@ export interface LocalModelProfile {
 export interface LocalModelCard {
   id: string;
   displayName: string;
-  aliases: string[];
   resident: boolean;
   contextWindow: number | null;
   tools: boolean;
@@ -61,6 +53,10 @@ function buildPool(gpus: GPU[]): LocalVramPool | null {
 function buildCard(physical: PhysicalModel, residentAlias: string | null): LocalModelCard {
   const isResident = (profile: AgentModel) =>
     profile.active || (residentAlias !== null && profile.id === residentAlias);
+  const displayName =
+    physical.profiles
+      .map((profile) => profile.displayName?.trim())
+      .find((label): label is string => Boolean(label)) ?? "Model identity unavailable";
   // EVERY FIELD BELOW COMES FROM THE WIRE OR IS ABSENT. That is this tab's entire claim, so
   // each one asks the *declared* value: `contextWindowDeclared` rather than `contextWindow`,
   // which carries a 128,000 fallback, and `visionDeclared` rather than `vision`, which falls
@@ -69,8 +65,7 @@ function buildCard(physical: PhysicalModel, residentAlias: string | null): Local
   const declared = physical.profiles.find((profile) => profile.contextWindowDeclared !== undefined);
   return {
     id: physical.physicalModelId,
-    displayName: physical.displayName,
-    aliases: physical.profiles.map((profile) => profile.id),
+    displayName,
     resident: physical.profiles.some(isResident),
     contextWindow: declared?.contextWindowDeclared ?? null,
     tools: physical.profiles.some((profile) => profile.tools === true),
@@ -86,30 +81,8 @@ function buildCard(physical: PhysicalModel, residentAlias: string | null): Local
 }
 
 export function useLocalModels() {
-  const [physicalModels, setPhysicalModels] = useState<PhysicalModel[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { physicalModels, loading, stale, error } = useServedModels();
   const { status, statusLoading, gpus, connected } = useRealtimeStatusStore();
-
-  const refresh = useCallback(async () => {
-    // `loading` goes back up here, not only down in the `finally`. Without this the Refresh
-    // button was inert from the first paint on: it never disabled and never spun, so repeated
-    // clicks fired concurrent requests at a 30 s timeout with three retries each.
-    setLoading(true);
-    try {
-      const payload = await api.getOpenAIModels();
-      setPhysicalModels(groupByPhysicalModel(normalizeOpenAIModels(payload)));
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Served models could not be read");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useMountSubscription(() => {
-    void refresh();
-  }, [refresh]);
 
   const residentAlias = status?.process?.served_model_name?.trim() || null;
 
@@ -123,6 +96,7 @@ export function useLocalModels() {
   return {
     cards,
     loading,
+    stale,
     error,
     connected,
     // "not connected" and "we have not asked yet" are different states, and the store starts
@@ -131,6 +105,6 @@ export function useLocalModels() {
     statusKnown: !statusLoading,
     residentAlias,
     pool,
-    refresh,
+    refresh: refreshServedModels,
   };
 }

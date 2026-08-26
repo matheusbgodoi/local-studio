@@ -7,9 +7,15 @@ import {
   listArchivedSessionMetadata,
   setSessionArchived,
 } from "../session-metadata-store";
-import { findSessionFile, listSessions, loadSession } from "../sessions-store";
+import {
+  findSessionFile,
+  listSessions,
+  loadSession,
+  moveSessionToWorkspace,
+} from "../sessions-store";
 import { errorMessage, jsonError } from "./helpers";
 import { networkService } from "../network";
+import { searchProjectSessions } from "../session-search";
 
 function parseRelativeSince(value: string | null): Date | null {
   if (!value) return null;
@@ -136,6 +142,33 @@ export async function handleAllSessions(request: Request): Promise<Response> {
   return Response.json({ sessions: aggregated });
 }
 
+export async function handleSessionSearch(request: Request): Promise<Response> {
+  const searchParams = new URL(request.url).searchParams;
+  const query = searchParams.get("q")?.trim() ?? "";
+  if (query.length < 2) return jsonError("q must contain at least 2 characters");
+  if (query.length > 200) return jsonError("q must contain at most 200 characters");
+  const requestedLimit = positiveInteger(searchParams.get("limit"));
+  const limit = Math.min(requestedLimit ?? 40, 50);
+  const projects = listProjectsFromStore();
+  const searches = await Promise.allSettled(
+    projects.map(async (project) => {
+      const cwd = resolveAllowedWorkspace(project.path);
+      return searchProjectSessions(project, cwd, query, limit);
+    }),
+  );
+  const successful = searches.flatMap((search) =>
+    search.status === "fulfilled" ? [search.value] : [],
+  );
+  if (projects.length > 0 && successful.length === 0) {
+    return jsonError("Conversation search failed", 500);
+  }
+  const results = successful
+    .flat()
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+    .slice(0, limit);
+  return Response.json({ results });
+}
+
 function validSessionId(value: string): boolean {
   return /^[A-Za-z0-9._:-]{1,256}$/.test(value);
 }
@@ -185,6 +218,35 @@ export async function handleSessionPatch(request: Request, id: string): Promise<
     return Response.json({ session: { id, ...archiveState } });
   } catch (error) {
     return jsonError(errorMessage(error, "Failed to update session archive"), 500);
+  }
+}
+
+//
+// Moving a conversation between projects.
+//
+// Separate from PATCH deliberately. PATCH is the archive route: it requires an
+// `archived` boolean and its whole contract is that flag. A move is a different
+// operation on different data — it relocates the transcript on disk — and
+// folding it into the archive body would make one request able to do two
+// unrelated things by accident.
+//
+export async function handleSessionMove(request: Request, id: string): Promise<Response> {
+  if (!validSessionId(id)) return jsonError("session id is invalid");
+  const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+  const fromValue = typeof body?.from === "string" ? body.from.trim() : "";
+  const toValue = typeof body?.to === "string" ? body.to.trim() : "";
+  if (!fromValue || !toValue) return jsonError("from and to are required");
+
+  const from = existingWorkspace(fromValue);
+  if (from instanceof Response) return from;
+  const to = existingWorkspace(toValue);
+  if (to instanceof Response) return to;
+
+  try {
+    moveSessionToWorkspace(from, to, id);
+    return Response.json({ session: { id, cwd: to } });
+  } catch (error) {
+    return jsonError(errorMessage(error, "Failed to move session"), 400);
   }
 }
 

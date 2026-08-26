@@ -33,7 +33,7 @@ export function downloadCompletedText(
 export function DownloadsTab({
   onCreateServe,
 }: {
-  onCreateServe: (download: ModelDownload) => void;
+  onCreateServe?: (download: ModelDownload) => void;
 }) {
   const { downloads, error, unsupported, pauseDownload, resumeDownload, cancelDownload } =
     useDownloads();
@@ -52,7 +52,7 @@ export function DownloadsTab({
       {unsupported ? (
         <ModelRow
           label="This backend has no download queue"
-          description="The route the queue is read from is not implemented here, so nothing can be queued, paused, or retried from Local Studio."
+          description="The route the queue is read from is not implemented here, so nothing can be queued, paused, or retried from CRIAs AI."
           value={<ModelValue dim>{error ?? "Route not implemented."}</ModelValue>}
           status={<ModelStatus tone="warning">unavailable</ModelStatus>}
         />
@@ -113,10 +113,10 @@ export function DownloadsTab({
                       <X className="h-3 w-3" />
                     </ModelButton>
                   ) : null}
-                  {download.status === "completed" ? (
+                  {download.status === "completed" && onCreateServe ? (
                     <ModelButton tone="primary" onClick={() => onCreateServe(download)}>
                       <Plus className="h-3 w-3" />
-                      Create Serve
+                      Create launch profile
                     </ModelButton>
                   ) : null}
                 </>

@@ -24,12 +24,8 @@ import type {
 } from "@/features/agent/workspace/types";
 import { useProjects } from "@/features/agent/projects/context";
 import { useToolsRef } from "@/features/agent/tools/context";
-import { BACKEND_URL_STORAGE_KEY, getApiKey, getStoredBackendUrl } from "@/lib/api/connection";
-import {
-  CONTROLLERS_STORAGE_KEY,
-  loadSavedControllers,
-  normalizeControllerUrl,
-} from "@/lib/api/controllers";
+import { BACKEND_URL_STORAGE_KEY } from "@/lib/api/connection";
+import { CONTROLLERS_STORAGE_KEY } from "@/lib/api/controllers";
 import type { Session, UpdateSession } from "@/features/agent/runtime/types";
 import {
   useWorkspaceHydrationEffects,
@@ -113,36 +109,12 @@ function createWorkspaceWindow(source: Window): WorkspaceWindow {
   };
 }
 
-function agentModelControllersPayload() {
-  const activeUrl = normalizeControllerUrl(getStoredBackendUrl());
-  const saved = loadSavedControllers().flatMap((controller) => {
-    const url = normalizeControllerUrl(controller.url);
-    return url ? [{ ...controller, url }] : [];
-  });
-  const byUrl = new Map(saved.map((controller) => [controller.url, controller]));
-  if (activeUrl) {
-    const activeApiKey = getApiKey();
-    const savedActive = byUrl.get(activeUrl);
-    byUrl.delete(activeUrl);
-    return [
-      {
-        ...savedActive,
-        url: activeUrl,
-        ...(activeApiKey ? { apiKey: activeApiKey } : {}),
-        name: savedActive?.name ?? "primary",
-      },
-      ...byUrl.values(),
-    ];
-  }
-  return [...byUrl.values()];
-}
-
 async function loadAgentModelsPayload(): Promise<{ models?: AgentModel[]; error?: string }> {
   const response = await fetch("/api/agent/models", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     cache: "no-store",
-    body: JSON.stringify({ controllers: agentModelControllersPayload() }),
+    body: "{}",
   });
   const payload = await safeJson<{ models?: AgentModel[]; error?: string }>(response);
   if (!response.ok) throw new Error(payload.error || "Failed to load models");

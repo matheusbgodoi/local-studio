@@ -7,6 +7,37 @@ import { ChevronDownIcon } from "@/ui/icons";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 import { effectTimeout, type EffectTimer } from "@/lib/effect-timers";
 import { patchSessionView, readSessionView } from "@/features/agent/workspace/session-view-state";
+import type { GeneratedImageDecisionHandler } from "@/features/agent/ui/timeline/generated-image-block";
+
+// A turn that has streamed nothing yet renders as a bare "Thinking", which is
+// the same picture whether the model is a second away or several minutes away.
+// Two measured causes produce the long version on a local server: the prompt
+// prefix stopped matching — changing the reasoning level rewrites the top of it,
+// so the whole conversation is re-read — or the single inference slot is still
+// finishing someone else's turn. Neither is visible from here, so this says what
+// is actually known: it has not started, and here is why it might not have.
+const SLOW_TURN_MS = 20_000;
+
+function PendingTurnIndicator() {
+  const [slow, setSlow] = useState(false);
+  useMountSubscription(() => {
+    const timer: EffectTimer = effectTimeout(() => setSlow(true), SLOW_TURN_MS);
+    return () => timer.cancel();
+  }, []);
+  return (
+    <div className="pt-4 pb-4 sm:pt-6">
+      <span className="codex-shimmer-text text-[length:var(--fs-base)] font-normal leading-5">
+        Thinking
+      </span>
+      {slow ? (
+        <p className="pt-1 text-[length:var(--fs-sm)] leading-snug text-(--dim)">
+          Still waiting on the model — it may be re-reading a long conversation, or busy with
+          another request.
+        </p>
+      ) : null}
+    </div>
+  );
+}
 
 // Mirrors `groupAssistantBlocks`: a message renders something only if it has a
 // non-empty text block or any tool/thinking/event block. Assistant messages
@@ -26,6 +57,7 @@ type TimelineProps = {
   messages: ChatMessage[];
   running: boolean;
   onForkSession?: () => void;
+  onGeneratedImageDecision?: GeneratedImageDecisionHandler;
   emptyPrompt?: boolean;
   stickToBottom?: boolean;
   onStickToBottomChange?: (value: boolean) => void;
@@ -42,27 +74,37 @@ const MemoMessage = memo(
     live,
     running,
     onForkSession,
+    onGeneratedImageDecision,
   }: {
     message: ChatMessage;
     live: boolean;
     running: boolean;
     onForkSession?: () => void;
+    onGeneratedImageDecision?: GeneratedImageDecisionHandler;
   }) {
     return (
-      <MessageView message={message} live={live} running={running} onForkSession={onForkSession} />
+      <MessageView
+        message={message}
+        live={live}
+        running={running}
+        onForkSession={onForkSession}
+        onGeneratedImageDecision={onGeneratedImageDecision}
+      />
     );
   },
   (prev, next) =>
     prev.message === next.message &&
     prev.live === next.live &&
     prev.running === next.running &&
-    prev.onForkSession === next.onForkSession,
+    prev.onForkSession === next.onForkSession &&
+    prev.onGeneratedImageDecision === next.onGeneratedImageDecision,
 );
 
 export function Timeline({
   messages,
   running,
   onForkSession,
+  onGeneratedImageDecision,
   emptyPrompt = false,
   stickToBottom = true,
   onStickToBottomChange,
@@ -132,16 +174,13 @@ export function Timeline({
                     live={isLast && running}
                     running={running}
                     onForkSession={onForkSession}
+                    onGeneratedImageDecision={onGeneratedImageDecision}
                   />
                 </div>
               );
             })}
             {running && visibleMessages[visibleMessages.length - 1]?.role !== "assistant" ? (
-              <div className="pt-4 pb-4 sm:pt-6">
-                <span className="codex-shimmer-text text-[length:var(--fs-base)] font-normal leading-5">
-                  Thinking
-                </span>
-              </div>
+              <PendingTurnIndicator />
             ) : null}
             <div ref={setBottom} aria-hidden="true" className="[overflow-anchor:none]" />
           </div>
@@ -671,11 +710,13 @@ function MessageView({
   live = false,
   running = false,
   onForkSession,
+  onGeneratedImageDecision,
 }: {
   message: ChatMessage;
   live?: boolean;
   running?: boolean;
   onForkSession?: () => void;
+  onGeneratedImageDecision?: GeneratedImageDecisionHandler;
 }) {
   return (
     <SessionPaneBlockRouter
@@ -683,6 +724,7 @@ function MessageView({
       live={live}
       running={running}
       onForkSession={onForkSession}
+      onGeneratedImageDecision={onGeneratedImageDecision}
     />
   );
 }

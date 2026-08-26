@@ -20,10 +20,12 @@ function BenchHero({
   rate,
   preferences,
   nowMs,
+  modelLabel,
 }: {
   rate: UsageEnergyRate;
   preferences: EnergyPreferences;
   nowMs: number | null;
+  modelLabel: string;
 }) {
   const { currency, pricePerKwh: price } = preferences;
   const whIn = rate.wh_per_1m_input;
@@ -55,7 +57,7 @@ function BenchHero({
       caption={
         price === null ? (
           <>
-            Energy for one million tokens on {rate.model}. Set your electricity rate{" "}
+            Energy for one million tokens on {modelLabel}. Set your electricity rate{" "}
             <a
               className="underline underline-offset-2 hover:text-(--ui-fg)"
               href="#efficiency-tariff"
@@ -65,7 +67,7 @@ function BenchHero({
             to see this in {currency}.
           </>
         ) : (
-          `Electricity for one million tokens on ${rate.model}, at your ${money(price, currency, 4)} per kWh. Reading a prompt and writing an answer are not the same price.`
+          `Electricity for one million tokens on ${modelLabel}, at your ${money(price, currency, 4)} per kWh. Reading a prompt and writing an answer are not the same price.`
         )
       }
       footnote={heroFootnote(rate, preferences.timezone, benchAgeDays(rate.measured_at, nowMs))}
@@ -118,26 +120,29 @@ export function EfficiencyHero({
   rate,
   reason,
   totals,
-  selected,
   ratesPublished,
   preferences,
   nowMs,
+  modelLabel,
 }: {
   rate: UsageEnergyRate | null;
   reason: "unmeasured" | "ambiguous" | null;
   totals: EfficiencyTotals | null;
-  selected: string;
   ratesPublished: boolean;
   preferences: EnergyPreferences;
   nowMs: number | null;
+  modelLabel: string;
 }) {
-  if (rate !== null) return <BenchHero rate={rate} preferences={preferences} nowMs={nowMs} />;
+  if (rate !== null)
+    return (
+      <BenchHero rate={rate} preferences={preferences} nowMs={nowMs} modelLabel={modelLabel} />
+    );
   if (reason === "unmeasured") {
     return (
       <HeroMetric
         value={UNAVAILABLE}
         label="Cost per 1M tokens"
-        caption={`No bench run has measured ${selected}, so it has no per-side price. An unmeasured model does not borrow a measured one's rate, and the combined figure is not divided into one.`}
+        caption={`No bench run has measured ${modelLabel}, so it has no per-side price. An unmeasured model does not borrow a measured one's rate, and the combined figure is not divided into one.`}
       />
     );
   }
@@ -175,7 +180,7 @@ export function EfficiencyStrip({
     <>
       <MetricStrip metrics={stripMetrics(totals, rate, priced, preferences)} />
       <p className="mx-auto mt-2 max-w-[55rem] text-[length:var(--fs-2xs)] leading-relaxed text-(--ui-muted)/80">
-        {stripFootnote(totals, rate, priced, preferences.pricePerKwh)}
+        {stripFootnote(totals, rate, priced, preferences)}
       </p>
     </>
   );

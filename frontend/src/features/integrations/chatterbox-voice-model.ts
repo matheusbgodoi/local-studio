@@ -86,7 +86,7 @@ export function speechIssue(status: SpeechStatus): SpeechIssue | null {
   if (status.install.phase !== "ready" && !storage.ready) {
     const capacity =
       storage.available_bytes === null
-        ? `Local Studio could not verify free space. ${formattedStorage(storage.required_bytes)} must be available on the controller data volume.`
+        ? `CRIAs AI could not verify free space. ${formattedStorage(storage.required_bytes)} must be available on the controller data volume.`
         : `${formattedStorage(storage.available_bytes)} is available; ${formattedStorage(storage.required_bytes)} is required.`;
     return {
       variant: "error",

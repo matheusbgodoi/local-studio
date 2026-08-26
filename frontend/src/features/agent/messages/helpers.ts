@@ -68,6 +68,38 @@ export function extractToolText(value: unknown): string {
     .join("\n");
 }
 
+export function extractToolImages(value: unknown): Array<{ data: string; mimeType: string }> {
+  if (!value || typeof value !== "object") return [];
+  const result = value as {
+    content?: Array<{ type?: string; data?: string; mimeType?: string }>;
+  };
+  if (!Array.isArray(result.content)) return [];
+  return result.content.flatMap((item) =>
+    item?.type === "image" &&
+    typeof item.data === "string" &&
+    item.data.length > 0 &&
+    typeof item.mimeType === "string" &&
+    item.mimeType.startsWith("image/")
+      ? [{ data: item.data, mimeType: item.mimeType }]
+      : [],
+  );
+}
+
+export function toolImagesFromContent(
+  content: string | Array<Record<string, unknown>> | undefined,
+): Array<{ data: string; mimeType: string }> {
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((item) =>
+    item?.type === "image" &&
+    typeof item.data === "string" &&
+    item.data.length > 0 &&
+    typeof item.mimeType === "string" &&
+    item.mimeType.startsWith("image/")
+      ? [{ data: item.data, mimeType: item.mimeType }]
+      : [],
+  );
+}
+
 export function piSessionIdFromEvent(event: Record<string, unknown>): string | null {
   if (event.type !== "session") return null;
   for (const key of ["id", "sessionId", "session_id"]) {
@@ -246,9 +278,9 @@ export function reconcileQueueWithPiEvent(
 
   const next = queue.flatMap((item) => {
     if (item.mode !== "follow_up") return [];
-    const acceptedByPi = consumePending(pending, item.mode, item.text);
-    if (acceptedByPi) return [{ ...item, text: queueDisplayText(acceptedByPi), sent: true }];
-    return item.sent ? [] : [item];
+    const acceptedByPi = consumePending(pending, item.mode, item.runtimeText ?? item.text);
+    if (acceptedByPi) return [{ ...item, runtimeText: acceptedByPi, sent: true }];
+    return item.sent && !item.attachments?.length ? [] : [item];
   });
 
   for (const [key, messages] of pending) {
@@ -261,14 +293,19 @@ export function reconcileQueueWithPiEvent(
   return next;
 }
 
-export function removeDeliveredQueuedMessage(
+export function takeDeliveredQueuedMessage(
   queue: QueuedMessage[],
   deliveredText: string,
-): QueuedMessage[] {
+): { item: QueuedMessage | null; queue: QueuedMessage[] } {
   const delivered = queueDisplayText(deliveredText);
-  const index = queue.findIndex((item) => queueDisplayText(item.text) === delivered);
-  if (index === -1) return queue;
-  return [...queue.slice(0, index), ...queue.slice(index + 1)];
+  const index = queue.findIndex(
+    (item) => queueDisplayText(item.runtimeText ?? item.text) === delivered,
+  );
+  if (index === -1) return { item: null, queue };
+  return {
+    item: queue[index] ?? null,
+    queue: [...queue.slice(0, index), ...queue.slice(index + 1)],
+  };
 }
 
 function eventKey(event: Record<string, unknown>): string {

@@ -59,7 +59,7 @@ export const runtimeOptionsFor = (
     {
       id: runtimeId(defaultRuntime),
       label: defaultRuntime.label ?? `Managed ${ENGINE_LABEL[backend]}`,
-      detail: managed?.version ? `managed venv · ${managed.version}` : "managed by Local Studio",
+      detail: managed?.version ? `managed venv · ${managed.version}` : "managed by CRIAs AI",
       runtime: defaultRuntime,
       installed: backend === "llamacpp" ? Boolean(managed) : Boolean(managed?.installed),
       canInstall: backend !== "llamacpp" && !managed?.installed,

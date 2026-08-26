@@ -21,6 +21,7 @@ import { downloadProgressText } from "./downloads-tab";
 import { sumGpuMemoryPoolGb } from "./explore-eligibility";
 import { readExplorePoolOverrideGb } from "./explore-pool-storage";
 import { buildHardwareProfile } from "./hardware-profile";
+import { useControllerCapabilities } from "@/hooks/controller-capabilities-store";
 
 const FORMAT_ORDER: ModelIndexVariantFormat[] = ["bf16", "fp8", "nvfp4", "q4"];
 
@@ -54,11 +55,19 @@ function formatContextTokens(tokens: number): string {
 }
 
 export function useModelIndex() {
+  const { capabilities } = useControllerCapabilities();
+  const modelIndexSupported = capabilities.features.modelIndex === "supported";
   const [data, setData] = useState<ModelIndexResult | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(modelIndexSupported);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
+    if (!modelIndexSupported) {
+      setLoading(false);
+      setError(null);
+      return;
+    }
+    setLoading(true);
     try {
       const result = await api.getModelIndex();
       setData(result);
@@ -68,7 +77,7 @@ export function useModelIndex() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [modelIndexSupported]);
 
   useMountSubscription(() => {
     void refresh();

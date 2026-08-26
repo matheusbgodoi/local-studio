@@ -50,7 +50,7 @@ function shortGoal(run: AgenticRun): string {
 }
 
 function titleFor(status: string): string {
-  if (status === "WAITING_USER") return "Local Studio needs an answer";
+  if (status === "WAITING_USER") return "CRIAs AI needs an answer";
   if (status === "FAILED") return "A run failed";
   return "A run finished";
 }

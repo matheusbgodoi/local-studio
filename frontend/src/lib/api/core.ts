@@ -457,6 +457,20 @@ export function createApiCore(params: {
     }
   };
 
+  const probe = async (endpoint: string): Promise<"supported" | "unsupported" | "unknown"> => {
+    try {
+      await fetchResponse(buildUrl(endpoint), endpoint, {
+        method: "GET",
+        timeout: 3_000,
+        retries: 0,
+      });
+      return "supported";
+    } catch (error) {
+      const status = (error as { status?: unknown }).status;
+      return status === 404 || status === 405 ? "unsupported" : "unknown";
+    }
+  };
+
   return {
     baseUrl,
     useProxy,
@@ -468,5 +482,6 @@ export function createApiCore(params: {
     postSseJson,
     getSseJson,
     healthPoll,
+    probe,
   };
 }

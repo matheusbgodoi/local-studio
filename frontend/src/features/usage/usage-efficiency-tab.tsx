@@ -3,7 +3,13 @@
 import { useState } from "react";
 import { EfficiencyCards } from "@/features/usage/usage-efficiency-cards";
 import { EfficiencyHero, EfficiencyStrip } from "@/features/usage/usage-efficiency-hero";
-import { dailyCells, pricedTraffic, product } from "@/features/usage/usage-efficiency-pricing";
+import {
+  dailyCells,
+  effectiveEnergy,
+  effectiveRatios,
+  pricedTraffic,
+  product,
+} from "@/features/usage/usage-efficiency-pricing";
 import { ActivityHeatmap, type ActivityCell } from "@/features/usage/activity-heatmap";
 import type { EnergyPreferences } from "@/features/usage/energy-preferences";
 import { EnergySettings } from "@/features/usage/energy-settings";
@@ -37,6 +43,7 @@ import {
   tokensPerSecond,
   UNAVAILABLE,
 } from "@/features/usage/usage-formatters";
+import { usageModelLabel, usageModelLabels } from "@/features/usage/usage-model-identity";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 import type {
   UsageEfficiency,
@@ -59,22 +66,25 @@ function ByModelBlock({
   efficiency,
   rates,
   preferences,
+  filters,
 }: {
   efficiency: UsageEfficiency;
   rates: UsageEnergyRates | undefined;
   preferences: EnergyPreferences;
+  filters: UsageFilters | undefined;
 }) {
   const { currency, pricePerKwh: price } = preferences;
   const measured = rates?.measured ? rates.by_physical_model : [];
-  const aliasToRate = new Map<string, UsageEnergyRate>(
-    measured.flatMap((rate) => rate.aliases.map((alias) => [alias, rate] as const)),
+  const physicalToRate = new Map<string, UsageEnergyRate>(
+    measured.map((rate) => [rate.model, rate] as const),
   );
   // Off the rates themselves, not off the alias map: a measured rate that arrived with an
   // empty alias list dropped the two columns while the hero above kept pricing with it.
   const hasRates = measured.length > 0;
   const excluded = excludedByRates(measured);
 
-  const columns = ["Model", "Processed", "Energy", "Tokens / kWh", "kWh / 1M"];
+  const energyLabel = preferences.grossEnergy ? "GPU energy" : "Inference energy";
+  const columns = ["Model", "Processed", energyLabel, "Tokens / kWh", "kWh / 1M"];
   if (price !== null || !hasRates) columns.push("Cost / 1M");
   if (hasRates) {
     columns.push(
@@ -94,19 +104,20 @@ function ByModelBlock({
         columns={columns}
         minWidthClass={hasRates ? "min-w-[46rem]" : "min-w-[34rem]"}
         emptyLabel="No model has both energy and token data in this period."
-        rows={efficiency.by_model.map((model) => {
+        rows={efficiency.by_physical_model.map((model) => {
           // No match means no price. A rate is not transferable between models, and the
           // combined figure cannot be divided into one.
-          const bench = aliasToRate.get(model.model);
+          const bench = physicalToRate.get(model.model);
+          const selected = effectiveRatios(model, preferences.grossEnergy);
           const cells = [
-            model.model,
+            usageModelLabel(model.model, filters),
             compactTokens(model.processed_tokens),
-            kilowattHours(model.energy_kwh),
-            perKwh(model.tokens_per_kwh),
-            decimals(model.kwh_per_million_processed, 3),
+            kilowattHours(selected.energyKwh),
+            perKwh(selected.tokensPerKwh),
+            decimals(selected.kwhPerMillion, 3),
           ];
           if (price !== null || !hasRates) {
-            cells.push(money(product(model.kwh_per_million_processed, price), currency, 4));
+            cells.push(money(product(selected.kwhPerMillion, price), currency, 4));
           }
           if (hasRates) {
             cells.push(side(bench?.wh_per_1m_input), side(bench?.wh_per_1m_output));
@@ -164,9 +175,11 @@ function ProvenanceLegend({
 function BenchNotes({
   rates,
   measuredCount,
+  filters,
 }: {
   rates: UsageEnergyRates | undefined;
   measuredCount: number;
+  filters: UsageFilters | undefined;
 }) {
   const unmeasured = rates?.unmeasured_physical_models ?? [];
   return (
@@ -180,10 +193,10 @@ function BenchNotes({
       ) : null}
       {unmeasured.length > 0 ? (
         <p className="mx-auto mt-3 max-w-[55rem] text-[length:var(--fs-2xs)] leading-relaxed text-(--ui-muted)/80">
-          Not measured: {unmeasured.join(", ")}. Named rather than left blank — &ldquo;nobody
-          measured this&rdquo; and &ldquo;this costs nothing&rdquo; are different statements. An
-          unmeasured model does not borrow a measured one&rsquo;s rate, and the combined figure is
-          not divided into one.
+          Not measured: {usageModelLabels(unmeasured, filters).join(", ")}. Named rather than left
+          blank — &ldquo;nobody measured this&rdquo; and &ldquo;this costs nothing&rdquo; are
+          different statements. An unmeasured model does not borrow a measured one&rsquo;s rate, and
+          the combined figure is not divided into one.
         </p>
       ) : null}
     </>
@@ -211,14 +224,23 @@ function EfficiencyHistory({
         ) : (
           <ActivityHeatmap
             cells={cells}
-            metricLabel="processed tokens per kWh"
+            metricLabel={
+              preferences.grossEnergy
+                ? "processed tokens per GPU board kWh"
+                : "processed tokens per inference kWh"
+            }
             timezone={preferences.timezone}
             rangeStart={filters?.range.first_day ?? null}
             rangeEnd={filters?.range.last_day ?? null}
           />
         )}
       </PanelBlock>
-      <ByModelBlock efficiency={efficiency} rates={rates} preferences={preferences} />
+      <ByModelBlock
+        efficiency={efficiency}
+        rates={rates}
+        preferences={preferences}
+        filters={filters}
+      />
     </>
   );
 }
@@ -244,7 +266,8 @@ export function UsageEfficiencyTab({
   useMountSubscription(() => setNowMs(Date.now()), []);
 
   const totals = efficiency?.totals ?? null;
-  const ratio = totals !== null && totals.tokens_per_kwh !== null;
+  const ratio =
+    totals !== null && effectiveEnergy(totals, preferences.grossEnergy).tokensPerKwh !== null;
   const measuredRates = rates?.measured ? rates.by_physical_model : [];
   const { rate, reason } = pickRate(rates, filters);
   const priced = rate === null ? null : pricedTraffic(tokens, rate, filters);
@@ -252,6 +275,7 @@ export function UsageEfficiencyTab({
   // A card that is not the rate the page is scoped to must carry its model name, or a rig
   // filtered to an unmeasured model shows another model's numbers titled "Bench rate".
   const named = rate === null || benchRates.length > 1;
+  const selectedModelLabel = usageModelLabel(filters?.model ?? "", filters);
 
   return (
     <>
@@ -259,10 +283,10 @@ export function UsageEfficiencyTab({
         rate={rate}
         reason={reason}
         totals={totals}
-        selected={filters?.model ?? ""}
         ratesPublished={rates !== undefined}
         preferences={preferences}
         nowMs={nowMs}
+        modelLabel={rate ? usageModelLabel(rate.model, filters) : selectedModelLabel}
       />
 
       {preferences.pricePerKwh === null ? (
@@ -271,7 +295,7 @@ export function UsageEfficiencyTab({
         </div>
       ) : null}
 
-      {totals !== null && ratio ? (
+      {totals !== null ? (
         <EfficiencyStrip totals={totals} rate={rate} priced={priced} preferences={preferences} />
       ) : null}
 
@@ -294,12 +318,17 @@ export function UsageEfficiencyTab({
       />
 
       {benchRates.map((entry) => (
-        <BenchProvenance key={entry.model} rate={entry} preferences={preferences} />
+        <BenchProvenance
+          key={entry.model}
+          rate={entry}
+          preferences={preferences}
+          modelLabel={usageModelLabel(entry.model, filters)}
+        />
       ))}
 
-      <BenchNotes rates={rates} measuredCount={measuredRates.length} />
+      <BenchNotes rates={rates} measuredCount={measuredRates.length} filters={filters} />
 
-      {efficiency !== undefined && ratio ? (
+      {efficiency !== undefined ? (
         <EfficiencyHistory
           efficiency={efficiency}
           cells={dailyCells(efficiency, preferences)}

@@ -18,6 +18,7 @@ import {
   profileImageFromFile,
   useLocalProfile,
 } from "@/features/shell/local-profile";
+import { useControllerCapabilities } from "@/hooks/controller-capabilities-store";
 
 type UsageTab = "tokens" | "energy" | "efficiency";
 
@@ -60,14 +61,17 @@ function buildModelOptions(filters: UsageFilters | undefined) {
   const all = { value: ALL_MODELS, label: "All models" };
   const models = filters?.models ?? [];
   if (models.length === 0) {
-    // A host that predates `filters.models` publishes only raw aliases, and a filter with no
-    // options at all would be worse than an ugly one.
-    return [all, ...(filters?.supported_models ?? []).map((a) => ({ value: a, label: a }))];
+    return [all];
   }
   return [all, ...models.filter((m) => m.served).map((m) => ({ value: m.id, label: m.label }))];
 }
 
 export default function UsagePage() {
+  const { controllerKey } = useControllerCapabilities();
+  return <UsagePageForController key={controllerKey} controllerKey={controllerKey} />;
+}
+
+function UsagePageForController({ controllerKey }: { controllerKey: string }) {
   const [tab, setTab] = useState<UsageTab>("tokens");
   const [period, setPeriod] = useState<UsagePeriod>("today");
   const [model, setModel] = useState(ALL_MODELS);
@@ -80,7 +84,7 @@ export default function UsagePage() {
     () => ({ period, model, timezone: preferences.timezone }),
     [period, model, preferences.timezone],
   );
-  const { stats, loading, error, loadStats } = useUsage(query);
+  const { stats, loading, error, loadStats } = useUsage(query, controllerKey);
 
   const updateImage = async (file: File | undefined) => {
     if (!file) return;

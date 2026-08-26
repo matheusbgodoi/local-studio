@@ -3,6 +3,7 @@
 import { useState, type ReactNode } from "react";
 import { SegmentedControl } from "@/ui";
 import type { AgenticRunSnapshot } from "@shared/agent/agentic-run";
+import { displayNameForModel, useServedModels } from "@/hooks/served-models-store";
 import { RunActivity } from "./run-activity";
 import { RunAgents } from "./run-agents";
 import { RunOverview } from "./run-overview";
@@ -32,16 +33,31 @@ export function RunDetail({
   actions?: ReactNode;
 }) {
   const [section, setSection] = useState<RunSection>("tasks");
+  const { physicalModels } = useServedModels();
+  const displayName = (modelDisplayName: string | null, physicalModelId: string, modelId: string) =>
+    modelDisplayName ??
+    displayNameForModel(physicalModels, physicalModelId) ??
+    displayNameForModel(physicalModels, modelId) ??
+    "Model identity unavailable";
+  const runModelDisplayName = displayName(
+    snapshot.run.modelDisplayName,
+    snapshot.run.physicalModelId,
+    snapshot.run.modelId,
+  );
   return (
     <div className="min-w-0 space-y-4">
-      <RunOverview snapshot={snapshot} asOfMs={snapshot.run.updatedAtMs} />
+      <RunOverview
+        snapshot={snapshot}
+        asOfMs={snapshot.run.updatedAtMs}
+        modelDisplayName={runModelDisplayName}
+      />
       <div className="flex flex-wrap items-center gap-2">
         <SegmentedControl items={SECTIONS} value={section} onChange={setSection} size="sm" />
         <div className="grow" />
         {actions}
       </div>
       {section === "tasks" ? <RunTasks snapshot={snapshot} /> : null}
-      {section === "agents" ? <RunAgents snapshot={snapshot} /> : null}
+      {section === "agents" ? <RunAgents snapshot={snapshot} displayName={displayName} /> : null}
       {section === "activity" ? <RunActivity snapshot={snapshot} /> : null}
     </div>
   );

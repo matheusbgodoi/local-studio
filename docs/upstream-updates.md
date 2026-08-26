@@ -37,7 +37,7 @@ if even the notification is unwanted.
 |                |                                                                                                             |
 | -------------- | ----------------------------------------------------------------------------------------------------------- |
 | Fork base      | upstream **2.1.0** (merge-base `eeeb3406`)                                                                  |
-| Fork build     | **`v2.1.0-local.14`** — [release](https://github.com/matheusbgodoi/local-studio/releases/tag/v2.1.0-local.14) |
+| Fork build     | **`v2.1.0-local.15`** — [release](https://github.com/matheusbgodoi/local-studio/releases/tag/v2.1.0-local.15) |
 | Upstream today | **v2.15.2**                                                                                                  |
 
 The fork is deliberately behind. Upstream has released fourteen minor versions on top

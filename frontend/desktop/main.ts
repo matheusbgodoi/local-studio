@@ -7,10 +7,13 @@ import {
   ipcMain,
   Notification,
   shell,
-  type BrowserWindow,
+  BrowserWindow,
+  type WebContents,
 } from "electron";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import QRCode from "qrcode";
 import type { DesktopAppState } from "./types";
 import { DESKTOP_CONFIG } from "./configs";
 import { writeJsonAtomic } from "./helpers/fs-json";
@@ -18,24 +21,34 @@ import { log } from "./helpers/logger";
 import { isHttpUrl } from "./helpers/url";
 import { createMainWindow } from "./logic/window-manager";
 import { probeDictation, startDictation, stopDictation } from "./logic/dictation";
+import { generateSessionTitle } from "./logic/session-title";
+import { readFrontendToken, readRemoteHost } from "./logic/frontend-token";
+import { createRemoteAccessPairingTicket } from "./logic/remote-access-pairing";
 import { registerNavigationPolicy } from "./logic/security";
 import { startFrontendServer, stopFrontendServer, type ServerHandle } from "./logic/app-server";
 import {
   resolveFrontendRestartUrl,
   shouldReloadAfterFrontendRestart,
 } from "./logic/frontend-restart";
-import { getUpdateState, initializeAutoUpdates, startUpdate } from "./logic/update-manager";
+import {
+  getUpdateState,
+  initializeAutoUpdates,
+  resolveUpdatePolicy,
+  startUpdate,
+} from "./logic/update-manager";
 import { addProject, listProjectsWithMeta, removeProject } from "./logic/projects-store";
 import { deployController } from "./logic/controller-deploy";
 import {
-  getKittylitterPairingJson,
-  normalizeKittylitterPairingJson,
-} from "./logic/kittylitter-pairing";
+  migrateControllerCredentials,
+  saveControllerCredential,
+} from "./logic/controller-credential-migration";
 import {
+  getQuickPanelWindow,
   hideQuickPanel,
   resetQuickPanel,
   resizeQuickPanelToHome,
   resizeQuickPanelToThread,
+  showQuickPanel,
   toggleQuickPanel,
 } from "./logic/quick-panel-window";
 import { getStoredQuickPanelHotkey, setStoredQuickPanelHotkey } from "./logic/desktop-settings";
@@ -49,6 +62,15 @@ import {
   resizePty,
   writePty,
 } from "./logic/pty-manager";
+import {
+  dictationShortcutHotkey,
+  dictationShortcutMode,
+  getDictationShortcutState,
+  initializeDictationShortcut,
+  setDictationShortcut,
+  stopDictationShortcut,
+} from "./logic/dictation-shortcut";
+import type { DictationShortcutMode as DictationMode } from "./dictation-shortcut-contract";
 
 let appState: DesktopAppState = "starting";
 let mainWindow: BrowserWindow | null = null;
@@ -59,9 +81,18 @@ let frontendHealthFailures = 0;
 let restartAttempts = 0;
 let lastRestartAt = 0;
 let shutdownPromise: Promise<void> | undefined;
+let titleGenerationQueue: Promise<void> = Promise.resolve();
 let quitAfterShutdown = false;
 let relaunchAfterShutdown = false;
 const expectedFrontendStopPids = new Set<number>();
+
+type DictationTarget = { sender: WebContents; ownerId: string };
+
+const dictationTargets = new Map<number, Map<string, number>>();
+let dictationTargetSequence = 0;
+let activeDictationTarget: DictationTarget | null = null;
+let pendingDictationWindowId: number | null = null;
+let pendingDictationTimer: NodeJS.Timeout | null = null;
 
 const HEALTH_CHECK_INTERVAL_MS = 5_000;
 const HEALTH_CHECK_TIMEOUT_MS = 4_000;
@@ -88,6 +119,7 @@ async function processMemorySummary(): Promise<string> {
 
 async function bootstrap(): Promise<void> {
   if (!frontendServer) {
+    migrateControllerCredentials(app.getPath("userData"));
     frontendServer = await startFrontendServer({ onExit: handleFrontendServerExit });
     registerNavigationPolicy(new URL(frontendServer.runtime.url).origin);
     startFrontendHealthMonitor();
@@ -273,12 +305,131 @@ function resolveHomeConfinedPath(target: unknown): string | null {
   return null;
 }
 
+function latestDictationTarget(window: BrowserWindow | null): DictationTarget | null {
+  if (!window || window.isDestroyed()) return null;
+  const owners = dictationTargets.get(window.webContents.id);
+  if (!owners?.size) return null;
+  let ownerId = "";
+  let sequence = -1;
+  for (const [candidate, candidateSequence] of owners) {
+    if (candidateSequence > sequence) {
+      ownerId = candidate;
+      sequence = candidateSequence;
+    }
+  }
+  return ownerId ? { sender: window.webContents, ownerId } : null;
+}
+
+function currentDictationTarget(): DictationTarget | null {
+  const focused = BrowserWindow.getFocusedWindow();
+  const focusedTarget = latestDictationTarget(focused);
+  if (focusedTarget) return focusedTarget;
+  if (mainWindow?.isVisible() && !mainWindow.isMinimized()) {
+    const mainTarget = latestDictationTarget(mainWindow);
+    if (mainTarget) return mainTarget;
+  }
+  const panel = getQuickPanelWindow();
+  return panel?.isVisible() ? latestDictationTarget(panel) : null;
+}
+
+function sendDictationRequest(target: DictationTarget, action: "start" | "stop"): boolean {
+  if (target.sender.isDestroyed()) return false;
+  if (!dictationTargets.get(target.sender.id)?.has(target.ownerId)) return false;
+  target.sender.send("desktop:dictation-shortcut-request", {
+    ownerId: target.ownerId,
+    action,
+  });
+  return true;
+}
+
+function startDictationFromShortcut(): void {
+  let target = currentDictationTarget();
+  if (!target && frontendServer) {
+    const panel = showQuickPanel(frontendServer.runtime.url);
+    target = latestDictationTarget(panel);
+    if (!target) {
+      pendingDictationWindowId = panel.webContents.id;
+      if (pendingDictationTimer) clearTimeout(pendingDictationTimer);
+      pendingDictationTimer = setTimeout(() => {
+        pendingDictationTimer = null;
+        pendingDictationWindowId = null;
+      }, 10_000);
+      return;
+    }
+  }
+  if (!target || !sendDictationRequest(target, "start")) return;
+  pendingDictationWindowId = null;
+  activeDictationTarget = target;
+}
+
+function stopDictationFromShortcut(): void {
+  pendingDictationWindowId = null;
+  if (pendingDictationTimer) clearTimeout(pendingDictationTimer);
+  pendingDictationTimer = null;
+  const target = activeDictationTarget;
+  activeDictationTarget = null;
+  if (target) sendDictationRequest(target, "stop");
+}
+
+function onDictationShortcut(pressed: boolean): void {
+  if (dictationShortcutMode() === "toggle") {
+    if (activeDictationTarget || pendingDictationWindowId !== null) stopDictationFromShortcut();
+    else startDictationFromShortcut();
+    return;
+  }
+  if (pressed) {
+    if (!activeDictationTarget && pendingDictationWindowId === null) startDictationFromShortcut();
+  } else {
+    stopDictationFromShortcut();
+  }
+}
+
+function registerDictationTarget(sender: WebContents, ownerId: string, enabled: boolean): void {
+  if (!ownerId || ownerId.length > 160) return;
+  const senderId = sender.id;
+  let owners = dictationTargets.get(senderId);
+  if (enabled) {
+    if (!owners) {
+      owners = new Map();
+      dictationTargets.set(senderId, owners);
+      sender.once("destroyed", () => {
+        dictationTargets.delete(senderId);
+        if (activeDictationTarget?.sender.id === senderId) {
+          stopDictation("cancel");
+          activeDictationTarget = null;
+        }
+        if (pendingDictationWindowId === senderId) {
+          pendingDictationWindowId = null;
+          if (pendingDictationTimer) clearTimeout(pendingDictationTimer);
+          pendingDictationTimer = null;
+        }
+      });
+    }
+    owners.set(ownerId, ++dictationTargetSequence);
+    if (pendingDictationWindowId === senderId) {
+      const target = { sender, ownerId };
+      pendingDictationWindowId = null;
+      if (pendingDictationTimer) clearTimeout(pendingDictationTimer);
+      pendingDictationTimer = null;
+      if (sendDictationRequest(target, "start")) activeDictationTarget = target;
+    }
+    return;
+  }
+  owners?.delete(ownerId);
+  if (!owners?.size) dictationTargets.delete(senderId);
+  if (activeDictationTarget?.sender.id === senderId && activeDictationTarget.ownerId === ownerId) {
+    activeDictationTarget = null;
+  }
+}
+
 function registerIpcHandlers(): void {
   ipcMain.handle("desktop:get-runtime", async () => ({
     platform: process.platform,
     appVersion: app.getVersion(),
     packaged: app.isPackaged,
     releaseChannel: isDevChannelBuild ? "dev" : "stable",
+    distribution: "owner-fork",
+    updatePolicy: resolveUpdatePolicy(),
     chromeVersion: process.versions.chrome,
     electronVersion: process.versions.electron,
   }));
@@ -336,17 +487,6 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle("desktop:get-update-status", async () => getUpdateState());
   ipcMain.handle("desktop:start-update", async () => startUpdate());
-  ipcMain.handle("desktop:get-kittylitter-pairing-json", async () => getKittylitterPairingJson());
-  ipcMain.handle("desktop:copy-kittylitter-pairing-json", async (_, pairingJson: unknown) => {
-    try {
-      if (typeof pairingJson !== "string") throw new Error("invalid pairing payload");
-      clipboard.writeText(normalizeKittylitterPairingJson(pairingJson));
-      return { ok: true };
-    } catch {
-      return { ok: false, error: "Connection JSON could not be copied." };
-    }
-  });
-
   ipcMain.handle("desktop:open-directory", async () => {
     const owner = mainWindow ?? undefined;
     const result = owner
@@ -363,17 +503,102 @@ function registerIpcHandlers(): void {
     }
   });
 
+  ipcMain.handle("desktop:save-text-file", async (_, request: unknown) => {
+    const payload = (request ?? {}) as { defaultFileName?: unknown; content?: unknown };
+    if (typeof payload.content !== "string") return { ok: false, error: "Nothing to save." };
+    const suggested =
+      typeof payload.defaultFileName === "string" && payload.defaultFileName.trim()
+        ? path.basename(payload.defaultFileName.trim())
+        : "export.txt";
+    const options = { defaultPath: path.join(app.getPath("downloads"), suggested) };
+    const owner = mainWindow ?? undefined;
+    const result = owner
+      ? await dialog.showSaveDialog(owner, options)
+      : await dialog.showSaveDialog(options);
+    if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+    try {
+      await writeFile(result.filePath, payload.content, "utf8");
+      return { ok: true, filePath: result.filePath };
+    } catch (error) {
+      log.error(`Failed to save file from dialog: ${String(error)}`);
+      return { ok: false, error: "The file could not be written." };
+    }
+  });
+
+  ipcMain.handle("desktop:generate-session-title", async (_, excerpt: unknown, locale: unknown) => {
+    if (typeof excerpt !== "string" || typeof locale !== "string") {
+      return { ok: false, reason: "invalid_request" };
+    }
+    const safeLocale = locale.trim().slice(0, 64) || "en-US";
+    const request = titleGenerationQueue.then(() =>
+      generateSessionTitle(excerpt.slice(0, 6000), safeLocale),
+    );
+    titleGenerationQueue = request.then(
+      () => undefined,
+      () => undefined,
+    );
+    return request;
+  });
+
+  ipcMain.handle("desktop:get-remote-access-info", () => {
+    const userData = app.getPath("userData");
+    const host = readRemoteHost(userData);
+    const tokenAvailable = Boolean(readFrontendToken(userData));
+    return {
+      enabled: Boolean(host && tokenAvailable),
+      url: host ? `https://${host}/agent` : null,
+      tokenAvailable,
+    };
+  });
+
+  ipcMain.handle("desktop:get-remote-access-pairing-code", async () => {
+    const userData = app.getPath("userData");
+    const host = readRemoteHost(userData);
+    const token = readFrontendToken(userData);
+    if (!host || !token) return { ok: false, reason: "remote_access_off" };
+    const pairingUrl = new URL(`https://${host}/agent`);
+    pairingUrl.searchParams.set("pair", createRemoteAccessPairingTicket(token));
+    try {
+      const dataUrl = await QRCode.toDataURL(pairingUrl.toString(), {
+        errorCorrectionLevel: "M",
+        margin: 3,
+        width: 512,
+        color: { dark: "#111111ff", light: "#ffffffff" },
+      });
+      return { ok: true, dataUrl };
+    } catch {
+      return { ok: false, reason: "generation_failed" };
+    }
+  });
+
+  ipcMain.handle("desktop:copy-remote-access-token", () => {
+    const token = readFrontendToken(app.getPath("userData"));
+    if (!token) return { ok: false };
+    clipboard.writeText(token);
+    return { ok: true };
+  });
+
   ipcMain.handle(
     "desktop:controller-deploy",
     async (event, options: { host: string; port?: number; installDir?: string }) => {
       const resourcesPath = app.isPackaged
         ? path.join(process.resourcesPath, "app", "scripts")
         : path.join(app.getAppPath(), "..", "scripts");
-      return deployController(options, resourcesPath, (line) => {
+      const result = await deployController(options, resourcesPath, (line) => {
         if (!event.sender.isDestroyed()) {
           event.sender.send("desktop:controller-deploy-log", { line });
         }
       });
+      if (!result.ok) return { ok: false, error: result.error };
+      if (!result.url || !result.apiKey) {
+        return { ok: false, error: "Controller deployment returned no credential" };
+      }
+      saveControllerCredential(app.getPath("userData"), {
+        url: result.url,
+        apiKey: result.apiKey,
+        name: options.host.trim().split("@").pop() || options.host.trim(),
+      });
+      return { ok: true, url: result.url, hasApiKey: true };
     },
   );
 
@@ -395,6 +620,63 @@ function registerIpcHandlers(): void {
     stopDictation(mode === "cancel" ? "cancel" : "stop");
     return { ok: true };
   });
+
+  ipcMain.handle("desktop:dictation-shortcut-get", () => getDictationShortcutState());
+  ipcMain.handle("desktop:dictation-shortcut-set", async (_, input: unknown) => {
+    if (!input || typeof input !== "object") {
+      return {
+        ...(await getDictationShortcutState()),
+        ok: false,
+        error: "Shortcut settings are invalid.",
+      };
+    }
+    const candidate = input as { mode?: unknown; hotkey?: unknown };
+    if (
+      (candidate.mode !== "toggle" && candidate.mode !== "hold") ||
+      typeof candidate.hotkey !== "string"
+    ) {
+      return {
+        ...(await getDictationShortcutState()),
+        ok: false,
+        error: "Shortcut settings are invalid.",
+      };
+    }
+    if (
+      candidate.mode !== dictationShortcutMode() ||
+      candidate.hotkey.trim() !== dictationShortcutHotkey()
+    ) {
+      stopDictationFromShortcut();
+    }
+    return setDictationShortcut(
+      { mode: candidate.mode as DictationMode, hotkey: candidate.hotkey },
+      quickPanelHotkey ?? DESKTOP_CONFIG.quickPanel.hotkey,
+    );
+  });
+  ipcMain.handle(
+    "desktop:dictation-shortcut-register-target",
+    (event, ownerId: unknown, enabled: unknown) => {
+      if (typeof ownerId === "string" && typeof enabled === "boolean") {
+        registerDictationTarget(event.sender, ownerId, enabled);
+      }
+    },
+  );
+  ipcMain.handle(
+    "desktop:dictation-shortcut-report-recording",
+    (event, ownerId: unknown, recording: unknown) => {
+      if (typeof ownerId !== "string" || typeof recording !== "boolean") return;
+      if (recording && dictationTargets.get(event.sender.id)?.has(ownerId)) {
+        activeDictationTarget = { sender: event.sender, ownerId };
+        return;
+      }
+      if (
+        !recording &&
+        activeDictationTarget?.sender.id === event.sender.id &&
+        activeDictationTarget.ownerId === ownerId
+      ) {
+        activeDictationTarget = null;
+      }
+    },
+  );
 
   ipcMain.handle("desktop:list-projects", async () => listProjectsWithMeta());
 
@@ -438,6 +720,7 @@ function registerIpcHandlers(): void {
           typeof entry[0] === "string" && typeof entry[1] === "string",
       ),
     );
+    delete stringPrefs["local-studio.controllers"];
     writeUiPreferencesFile(stringPrefs);
   });
 
@@ -548,6 +831,9 @@ function setQuickPanelHotkey(hotkey: unknown): { ok: boolean; hotkey: string; er
     return { ok: false, hotkey: current, error: "Hotkey must be a non-empty string" };
   }
   const next = hotkey.trim();
+  if (next === dictationShortcutHotkey()) {
+    return { ok: false, hotkey: current, error: "That hotkey is assigned to dictation." };
+  }
   if (next === quickPanelHotkey) {
     setStoredQuickPanelHotkey(next);
     return { ok: true, hotkey: next };
@@ -585,6 +871,11 @@ async function shutdown(): Promise<void> {
   shutdownPromise = (async () => {
     appState = "stopping";
     stopFrontendHealthMonitor();
+    pendingDictationWindowId = null;
+    if (pendingDictationTimer) clearTimeout(pendingDictationTimer);
+    pendingDictationTimer = null;
+    stopDictation("cancel");
+    stopDictationShortcut();
     globalShortcut.unregisterAll();
     killAllPtys();
     await stopFrontendServer(frontendServer);
@@ -668,13 +959,17 @@ async function run(): Promise<void> {
   try {
     await bootstrap();
     registerQuickPanelHotkey();
+    await initializeDictationShortcut(
+      onDictationShortcut,
+      quickPanelHotkey ?? DESKTOP_CONFIG.quickPanel.hotkey,
+    );
   } catch (error) {
     log.error(`Failed to bootstrap desktop app: ${String(error)}`);
     // Surface the failure instead of vanishing from the dock with no feedback
     // (port in use, unwritable userData, missing server.js, slow-start timeout).
     try {
       dialog.showErrorBox(
-        "Local Studio failed to start",
+        "CRIAs AI failed to start",
         `${error instanceof Error ? error.message : String(error)}\n\nSee the app logs for details.`,
       );
     } catch {
@@ -719,12 +1014,14 @@ function readUiPreferencesFile(): Record<string, string> {
     const raw = readFileSync(filePath, "utf8");
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    return Object.fromEntries(
+    const preferences = Object.fromEntries(
       Object.entries(parsed as Record<string, unknown>).filter(
         (entry): entry is [string, string] =>
           typeof entry[0] === "string" && typeof entry[1] === "string",
       ),
     );
+    delete preferences["local-studio.controllers"];
+    return preferences;
   } catch {
     return {};
   }

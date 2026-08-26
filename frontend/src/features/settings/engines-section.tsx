@@ -34,7 +34,13 @@ import {
 
 type UpgradeState = { status: "idle" | "upgrading" | "success" | "error"; message?: string };
 
-export function EnginesSection({ runtime }: { runtime?: SystemRuntimeInfo | null }) {
+export function EnginesSection({
+  runtime,
+  capability,
+}: {
+  runtime?: SystemRuntimeInfo | null;
+  capability: "supported" | "unsupported" | "unknown";
+}) {
   const { runtimeSummary, status, lease } = useRealtimeStatusStore();
   const [targets, setTargets] = useState<RuntimeTarget[]>([]);
   const [jobs, setJobs] = useState<EngineJob[]>([]);
@@ -75,13 +81,16 @@ export function EnginesSection({ runtime }: { runtime?: SystemRuntimeInfo | null
   }, []);
 
   useMountSubscription(() => {
+    if (capability !== "supported") return;
     void Promise.resolve().then(refreshRuntimeJobs);
     const jobTimer = effectInterval(() => void refreshRuntimeJobs(), 2500);
     return () => jobTimer.cancel();
-  }, [refreshRuntimeJobs]);
+  }, [capability, refreshRuntimeJobs]);
 
   const engineRows = useMemo(() => resolveEngineRowsView(targets, backends), [backends, targets]);
   const hasRows = hasHydratedEngineRows(engineRows);
+
+  if (capability !== "supported") return null;
 
   return (
     <div>

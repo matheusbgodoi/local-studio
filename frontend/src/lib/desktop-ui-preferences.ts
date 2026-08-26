@@ -1,6 +1,10 @@
-import { CONTROLLERS_CHANGED_EVENT, CONTROLLERS_STORAGE_KEY } from "@/lib/api/controllers";
-import { BACKEND_URL_CHANGED_EVENT, BACKEND_URL_STORAGE_KEY } from "@/lib/api/connection";
-import { Schema } from "effect";
+import { CONTROLLERS_STORAGE_KEY } from "@/lib/api/controllers";
+import {
+  BACKEND_URL_CHANGED_EVENT,
+  BACKEND_URL_STORAGE_KEY,
+  getStoredBackendUrl,
+  setStoredBackendUrl,
+} from "@/lib/api/connection";
 
 type DesktopUiPreferencesBridge = {
   loadUiPreferences?: () => Promise<Record<string, string>>;
@@ -10,7 +14,6 @@ type DesktopUiPreferencesBridge = {
 const DURABLE_EXACT_KEYS = new Set([
   "local-studio-state",
   "local-studio.customThemeTokens",
-  CONTROLLERS_STORAGE_KEY,
   "local-studio-setup-complete",
   BACKEND_URL_STORAGE_KEY,
 ]);
@@ -24,18 +27,18 @@ const EXCLUDED_DURABLE_KEYS = new Set([
 
 const EXCLUDED_DURABLE_PREFIXES = ["local-studio.agent.transcript."];
 const UI_PREFERENCES_TIMEOUT_MS = 1_500;
-const ControllerPreferenceSchema = Schema.Record(Schema.String, Schema.Unknown);
-
 let saveTimer: number | null = null;
 
-type ControllerPreference = typeof ControllerPreferenceSchema.Type;
-
-type ParsedJson = { valid: true; value: unknown } | { valid: false };
-
 type StudioSettingsPayload = {
+  backendUrl?: string;
   persisted?: {
     ui_preferences?: Record<string, string>;
   };
+};
+
+type ControllerUiPreferences = {
+  backendUrl: string;
+  preferences: Record<string, string>;
 };
 
 function bridge(): DesktopUiPreferencesBridge | null {
@@ -75,17 +78,20 @@ function withoutControllerCredentials(prefs: Record<string, string>): Record<str
   return rest;
 }
 
-async function loadControllerUiPreferences(): Promise<Record<string, string>> {
+async function loadControllerUiPreferences(): Promise<ControllerUiPreferences> {
   try {
     const response = await fetch("/api/settings", {
       cache: "no-store",
       signal: AbortSignal.timeout(UI_PREFERENCES_TIMEOUT_MS),
     });
-    if (!response.ok) return {};
+    if (!response.ok) return { backendUrl: "", preferences: {} };
     const settings = (await response.json()) as StudioSettingsPayload;
-    return withoutControllerCredentials(settings.persisted?.ui_preferences ?? {});
+    return {
+      backendUrl: settings.backendUrl?.trim() ?? "",
+      preferences: withoutControllerCredentials(settings.persisted?.ui_preferences ?? {}),
+    };
   } catch {
-    return {};
+    return { backendUrl: "", preferences: {} };
   }
 }
 
@@ -100,98 +106,12 @@ async function saveControllerUiPreferences(prefs: Record<string, string>): Promi
   } catch {}
 }
 
-function parseJson(value: string): ParsedJson {
-  try {
-    const parsed: unknown = JSON.parse(value);
-    return { valid: true, value: parsed };
-  } catch {
-    return { valid: false };
-  }
-}
-
-function controllerPreference(value: unknown): ControllerPreference | null {
-  try {
-    return Schema.decodeUnknownSync(ControllerPreferenceSchema)(value);
-  } catch {
-    return null;
-  }
-}
-
-function controllerPreferences(value: unknown): ControllerPreference[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((entry) => {
-    const preference = controllerPreference(entry);
-    return preference ? [preference] : [];
-  });
-}
-
-function preferenceUrl(preference: ControllerPreference): string | null {
-  const url = preference.url;
-  return typeof url === "string" && url ? url : null;
-}
-
-function preferredString(
-  current: ControllerPreference | undefined,
-  incoming: ControllerPreference,
-  key: "apiKey" | "name",
-): unknown {
-  const currentValue = current?.[key];
-  return typeof currentValue === "string" && currentValue.trim() ? currentValue : incoming[key];
-}
-
-function mergedControllerPreference(
-  current: ControllerPreference | undefined,
-  incoming: ControllerPreference,
-): ControllerPreference {
-  return {
-    ...incoming,
-    ...(current ?? {}),
-    apiKey: preferredString(current, incoming, "apiKey"),
-    name: preferredString(current, incoming, "name"),
-  };
-}
-
-function preferencesByUrl(preferences: ControllerPreference[]): Map<string, ControllerPreference> {
-  const byUrl = new Map<string, ControllerPreference>();
-  for (const preference of preferences) {
-    const url = preferenceUrl(preference);
-    if (url) byUrl.set(url, preference);
-  }
-  return byUrl;
-}
-
-export function mergeControllersPreference(
-  currentValue: string | null,
-  incomingValue: string,
-): string | null {
-  const current = parseJson(currentValue || "[]");
-  const incoming = parseJson(incomingValue);
-  if (!current.valid || !incoming.valid || !Array.isArray(incoming.value)) return null;
-  const byUrl = preferencesByUrl(controllerPreferences(current.value));
-  for (const incomingPreference of controllerPreferences(incoming.value)) {
-    const url = preferenceUrl(incomingPreference);
-    if (url) {
-      byUrl.set(url, mergedControllerPreference(byUrl.get(url), incomingPreference));
-    }
-  }
-  const merged = JSON.stringify([...byUrl.values()]);
-  return merged === (currentValue || "") ? null : merged;
-}
-
 function applyMissingPreferences(prefs: Record<string, string>): Set<string> {
   const applied = new Set<string>();
   if (typeof window === "undefined") return applied;
   for (const [key, value] of Object.entries(prefs ?? {})) {
     if (!isDurableUiPreferenceKey(key) || typeof value !== "string") continue;
     const currentValue = window.localStorage.getItem(key);
-    if (key === CONTROLLERS_STORAGE_KEY && currentValue !== null) {
-      const merged = mergeControllersPreference(currentValue, value);
-      if (merged !== null) {
-        window.localStorage.setItem(key, merged);
-        applied.add(key);
-      }
-      continue;
-    }
     if (currentValue === null) {
       window.localStorage.setItem(key, value);
       applied.add(key);
@@ -202,13 +122,8 @@ function applyMissingPreferences(prefs: Record<string, string>): Set<string> {
 
 function dispatchHydratedPreferenceEvents(keys: ReadonlySet<string>): void {
   if (typeof window === "undefined" || keys.size === 0) return;
-  if (keys.has(CONTROLLERS_STORAGE_KEY)) {
-    window.dispatchEvent(new Event(CONTROLLERS_CHANGED_EVENT));
-  }
   if (keys.has(BACKEND_URL_STORAGE_KEY)) {
     window.dispatchEvent(new Event(BACKEND_URL_CHANGED_EVENT));
-  }
-  if (keys.has(CONTROLLERS_STORAGE_KEY) || keys.has(BACKEND_URL_STORAGE_KEY)) {
     window.dispatchEvent(new Event("storage"));
   }
 }
@@ -216,8 +131,11 @@ function dispatchHydratedPreferenceEvents(keys: ReadonlySet<string>): void {
 export async function hydrateDurableUiPreferences(): Promise<void> {
   if (typeof window === "undefined") return;
   const desktop = bridge();
-  const controllerPrefs = await loadControllerUiPreferences();
-  const applied = applyMissingPreferences(controllerPrefs);
+  const controller = await loadControllerUiPreferences();
+  if (controller.backendUrl && controller.backendUrl !== getStoredBackendUrl()) {
+    setStoredBackendUrl(controller.backendUrl);
+  }
+  const applied = applyMissingPreferences(controller.preferences);
   if (!desktop?.loadUiPreferences) {
     dispatchHydratedPreferenceEvents(applied);
     return;

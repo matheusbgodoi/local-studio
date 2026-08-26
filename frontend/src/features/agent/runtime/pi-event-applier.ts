@@ -14,10 +14,11 @@ import {
   type AssistantBlock,
   type ChatMessage,
   messageText,
+  toolImagesFromContent,
   newId,
   nowLabel,
   reconcileQueueWithPiEvent,
-  removeDeliveredQueuedMessage,
+  takeDeliveredQueuedMessage,
   sessionTitleFromPrompt,
   usageFromEvent,
   visibleUserTextFromPi,
@@ -292,6 +293,9 @@ function reduceToolResultMessageEvent(
   const owner = assistantWithTool(session.messages, toolCallId);
   const target = owner ? { session, targetId: owner } : resolveAssistantTarget(session, ctx);
   const resultText = messageText(msg.content as string | Record<string, unknown>[] | undefined);
+  const resultImages = toolImagesFromContent(
+    msg.content as string | Record<string, unknown>[] | undefined,
+  );
   const isError = Boolean(msg.isError);
   return patchAssistantMessage(target.session, target.targetId, (current) => ({
     ...current,
@@ -302,12 +306,16 @@ function reduceToolResultMessageEvent(
         ...existing,
         status: isError ? "error" : "done",
         text: resultText || existing.text,
+        resultText: resultText || existing.resultText,
+        resultImages: resultImages.length > 0 ? resultImages : existing.resultImages,
       }),
       () => ({
         kind: "tool",
         id: toolCallId,
         name: (typeof msg.toolName === "string" && msg.toolName) || "tool",
         status: isError ? "error" : "done",
+        resultText,
+        resultImages,
         text: resultText,
       }),
     ),
@@ -579,7 +587,9 @@ function reduceUserMessageEvent(
   if (ctx.replay && event.type === "message_start") return session;
   const msg = event.message as { role?: string; content?: string | Record<string, unknown>[] };
   if (msg?.role !== "user") return null;
-  const text = visibleUserTextFromPi(messageText(msg.content));
+  const runtimeText = messageText(msg.content);
+  const delivered = deliveredQueuedUser(session, runtimeText);
+  const text = delivered.text;
 
   // A canonical settled user message (replayed log / runtime hydration burst):
   // append it verbatim, close the previous turn's bubble, and derive the
@@ -592,14 +602,21 @@ function reduceUserMessageEvent(
     if (!next.title) next = { ...next, title: sessionTitleFromPrompt(text) };
     return {
       ...next,
+      queue: delivered.queue,
       messages: [
         ...next.messages,
-        { id: newId("user"), role: "user", text, timestamp: nowLabel() },
+        {
+          id: newId("user"),
+          role: "user",
+          text,
+          attachments: delivered.item?.attachments,
+          timestamp: nowLabel(),
+        },
       ],
     };
   }
   if (!text) return session;
-  const queue = removeDeliveredQueuedMessage(session.queue ?? [], text);
+  const queue = delivered.queue;
 
   // This echo is Pi showing a steer message to the model. If the UI already
   // dropped it into the transcript optimistically (dimmed), clear `pending` so
@@ -615,9 +632,7 @@ function reduceUserMessageEvent(
       activeAssistantId: nextAssistantId,
       messages: [
         ...session.messages.map((message) =>
-          message.id === pending.id
-            ? { ...message, pending: false, awaitingEcho: false }
-            : message,
+          message.id === pending.id ? { ...message, pending: false, awaitingEcho: false } : message,
         ),
         { id: nextAssistantId, role: "assistant", text: "", blocks: [], timestamp: nowLabel() },
       ],
@@ -637,9 +652,23 @@ function reduceUserMessageEvent(
     activeAssistantId: nextAssistantId,
     messages: [
       ...session.messages,
-      { id: newId("user"), role: "user", text, timestamp: nowLabel() },
+      {
+        id: newId("user"),
+        role: "user",
+        text,
+        attachments: delivered.item?.attachments,
+        timestamp: nowLabel(),
+      },
       { id: nextAssistantId, role: "assistant", text: "", blocks: [], timestamp: nowLabel() },
     ],
+  };
+}
+
+function deliveredQueuedUser(session: Session, runtimeText: string) {
+  const delivered = takeDeliveredQueuedMessage(session.queue ?? [], runtimeText);
+  return {
+    ...delivered,
+    text: visibleUserTextFromPi(runtimeText) || delivered.item?.text || "",
   };
 }
 

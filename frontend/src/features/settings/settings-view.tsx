@@ -8,7 +8,7 @@ import {
   type LucideIcon,
   Paintbrush,
   ServerCog,
-  Smartphone,
+  UserRound,
 } from "@/ui/icon-registry";
 import { SettingsLayout, type SettingsSectionDef, type SettingsSectionId } from "./settings-ui";
 import type { CompatibilityReport, ConfigData } from "@/lib/types";
@@ -21,6 +21,7 @@ import { EnginesSection } from "./engines-section";
 import { ServicesSettings, SystemDetails, SystemOverview } from "./system-settings-section";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 import { ProfileSettings } from "./profile-settings";
+import type { CapabilityState } from "@local-studio/contracts/capabilities";
 interface SettingsViewProps {
   data: ConfigData | null;
   compatibilityReport: CompatibilityReport | null;
@@ -28,7 +29,6 @@ interface SettingsViewProps {
   error: string | null;
   apiSettings: ApiConnectionSettings;
   apiSettingsLoading: boolean;
-  saving: boolean;
   testing: boolean;
   connectionStatus: ConnectionStatus;
   statusMessage: string;
@@ -37,12 +37,14 @@ interface SettingsViewProps {
   onReload: () => void;
   onApiSettingsChange: (nextSettings: ApiConnectionSettings) => void;
   onTestConnection: () => void;
-  onSaveSettings: () => void;
   onSystemSectionActive: () => void;
+  runtimeManagementCapability: CapabilityState;
+  configCapability: CapabilityState;
+  compatibilityCapability: CapabilityState;
 }
 const sectionIcon = (Icon: LucideIcon) => <Icon className="h-3.5 w-3.5" />;
 const SECTIONS: SettingsSectionDef[] = [
-  ["profile", "Profile & phone", "Your identity and phone pairing.", Smartphone],
+  ["profile", "Profile", "Your identity in CRIAs AI.", UserRound],
   ["connection", "General", "Controller connections and API access.", Cable],
   ["system", "System", "Engines, services, storage, and hardware.", Cpu],
   ["appearance", "Appearance", "Theme, typography, and interface scale.", Paintbrush],
@@ -70,7 +72,6 @@ export function SettingsView({
   error,
   apiSettings,
   apiSettingsLoading,
-  saving,
   testing,
   connectionStatus,
   statusMessage,
@@ -79,10 +80,15 @@ export function SettingsView({
   onReload,
   onApiSettingsChange,
   onTestConnection,
-  onSaveSettings,
   onSystemSectionActive,
+  runtimeManagementCapability,
+  configCapability,
+  compatibilityCapability,
 }: SettingsViewProps) {
   const [activeSection, setActiveSection] = useState<SettingsSectionId>("connection");
+  const visibleSection = SECTIONS.some((section) => section.id === activeSection)
+    ? activeSection
+    : "connection";
   useMountSubscription(() => {
     const onHashChange = () => {
       const hash = window.location.hash.replace("#", "");
@@ -112,44 +118,59 @@ export function SettingsView({
   return (
     <SettingsLayout
       sections={SECTIONS}
-      activeSection={activeSection}
+      activeSection={visibleSection}
       title="Settings"
       status={layoutStatus}
       loading={loading}
       onReload={onReload}
       onSelectSection={selectSection}
     >
-      {activeSection === "connection" ? (
+      {visibleSection === "connection" ? (
         <ApiConnectionSection
           apiSettingsLoading={apiSettingsLoading}
           apiSettings={apiSettings}
           testing={testing}
-          saving={saving}
           connectionStatus={connectionStatus}
           statusMessage={statusMessage}
           onApiSettingsChange={onApiSettingsChange}
           onTestConnection={onTestConnection}
-          onSave={onSaveSettings}
         />
       ) : null}
-      {activeSection === "profile" ? <ProfileSettings /> : null}
-      {activeSection === "system" ? (
+      {visibleSection === "profile" ? <ProfileSettings /> : null}
+      {visibleSection === "system" ? (
         <div className="space-y-10">
           <SystemOverview
             data={data}
             compatibilityReport={compatibilityReport}
             loading={loading}
             error={error}
+            configCapability={configCapability}
+            compatibilityCapability={compatibilityCapability}
           />
-          <EnginesSection runtime={data?.runtime ?? null} />
-          <ServicesSettings data={data} apiSettings={apiSettings} loading={loading} error={error} />
-          <SystemDetails data={data} compatibilityReport={compatibilityReport} />
+          <EnginesSection
+            runtime={data?.runtime ?? null}
+            capability={runtimeManagementCapability}
+          />
+          {configCapability === "supported" ? (
+            <ServicesSettings
+              data={data}
+              apiSettings={apiSettings}
+              loading={loading}
+              error={error}
+            />
+          ) : null}
+          <SystemDetails
+            data={data}
+            compatibilityReport={compatibilityReport}
+            configCapability={configCapability}
+            compatibilityCapability={compatibilityCapability}
+          />
         </div>
       ) : null}
-      {activeSection === "appearance" ? <AppearanceSettings /> : null}
-      {activeSection === "terminal" ? <ShortcutsSettings /> : null}
-      {activeSection === "archive" ? <ArchivedChatsSettings /> : null}
-      {activeSection === "setup" ? <SetupChecksSettings /> : null}
+      {visibleSection === "appearance" ? <AppearanceSettings /> : null}
+      {visibleSection === "terminal" ? <ShortcutsSettings /> : null}
+      {visibleSection === "archive" ? <ArchivedChatsSettings /> : null}
+      {visibleSection === "setup" ? <SetupChecksSettings /> : null}
     </SettingsLayout>
   );
 }

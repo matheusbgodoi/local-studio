@@ -3,12 +3,11 @@
  * browser-stored backend URL) and how we authenticate against it (API key).
  */
 import { pickFirstNonEmpty } from "@shared/agent/backend-url";
-import { getControllerApiKey, normalizeControllerUrl } from "./controllers";
+import { normalizeControllerUrl } from "./controllers";
 
 // --- Env-derived defaults ---
 
 const LOCAL_BACKEND_FALLBACK = "http://localhost:8080";
-const CLIENT_PROXY_FALLBACK = "/api/proxy";
 
 /**
  * Server-side API client base URL.
@@ -25,16 +24,6 @@ export const resolveApiServerBaseUrl = (): string =>
 // agent runtime package's settings service can share it; re-exported here for
 // frontend callers.
 export { resolveSettingsDefaultBackendUrl } from "@shared/agent/backend-url";
-
-/**
- * Client-side controller event stream base URL.
- */
-export const resolveControllerEventsBaseUrl = (): string =>
-  pickFirstNonEmpty(
-    process.env.NEXT_PUBLIC_BACKEND_URL,
-    process.env.LOCAL_STUDIO_BACKEND_URL,
-    process.env.BACKEND_URL,
-  ) ?? CLIENT_PROXY_FALLBACK;
 
 // --- Browser-stored backend URL ---
 
@@ -122,8 +111,6 @@ export function clearStoredBackendUrl(): void {
 
 // --- API key ---
 
-let runtimeApiKey = "";
-
 /**
  * Get the API key from the active browser/controller state.
  *
@@ -131,25 +118,5 @@ let runtimeApiKey = "";
  * so public env values become compiled defaults and can outlive key rotation.
  */
 export function getApiKey(): string {
-  if (runtimeApiKey) return runtimeApiKey;
-
-  if (typeof window !== "undefined") {
-    return getControllerApiKey(getStoredBackendUrl());
-  }
-
   return process.env.LOCAL_STUDIO_API_KEY?.trim() || "";
-}
-
-/**
- * Save API key only for the current browser runtime.
- */
-export function setApiKey(key: string): void {
-  runtimeApiKey = key.trim();
-}
-
-/**
- * Remove the in-memory runtime API key.
- */
-export function clearApiKey(): void {
-  runtimeApiKey = "";
 }

@@ -23,9 +23,8 @@ import {
   UNAVAILABLE,
   watts,
 } from "@/features/usage/usage-formatters";
+import { physicalEnergyRows } from "@/features/usage/usage-model-identity";
 import type { UsageEnergy, UsageFilters } from "@/lib/types";
-
-const UNATTRIBUTED = "unattributed";
 
 export const costOf = (kwh: number | null, rate: number | null): number | null =>
   kwh === null || rate === null ? null : kwh * rate;
@@ -46,6 +45,7 @@ export function UsageEnergyTab({
   const totals = energy.totals;
   const rate = preferences.pricePerKwh;
   const cost = costOf(totals.energy_kwh, rate);
+  const byPhysicalModel = physicalEnergyRows(energy.by_model, filters);
 
   const cells: ActivityCell[] = energy.daily.map((day) => ({
     date: day.date,
@@ -147,10 +147,10 @@ export function UsageEnergyTab({
         <BreakdownTable
           columns={["Model", "Energy", "Estimated cost", "Measured", "Avg power", "Peak power"]}
           emptyLabel="No measured energy in this period."
-          rows={energy.by_model.map((model) => ({
-            key: model.model ?? UNATTRIBUTED,
+          rows={byPhysicalModel.map((model) => ({
+            key: model.key,
             cells: [
-              model.model ?? UNATTRIBUTED,
+              model.label,
               kilowattHours(model.energy_kwh),
               rate === null
                 ? UNAVAILABLE

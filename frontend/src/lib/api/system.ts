@@ -7,6 +7,7 @@ import type {
   UsageStats,
   VRAMCalculation,
 } from "../types";
+import type { ControllerCapabilities } from "@local-studio/contracts/capabilities";
 import type { OpenAIModelsResponse } from "@shared/agent/models";
 import { encodePathSegments, type ApiCore, type RequestOptions } from "./core";
 
@@ -64,6 +65,9 @@ export function normalizeGpuAliases(list: unknown): GPU[] {
 
 export function createSystemApi(core: ApiCore) {
   return {
+    getControllerCapabilities: (options?: RequestOptions): Promise<ControllerCapabilities> =>
+      core.request("/capabilities", options),
+    probeControllerCapability: (endpoint: string) => core.probe(endpoint),
     launch: (recipeId: string): Promise<{ success: boolean; pid?: number; message: string }> =>
       core.request(`/launch/${encodePathSegments(recipeId)}`, {
         method: "POST",

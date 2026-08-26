@@ -19,8 +19,9 @@ import type {
 } from "@/lib/types";
 
 import api from "@/lib/api/client";
-import { BACKEND_URL_CHANGED_EVENT, getStoredBackendUrl } from "@/lib/api/connection";
+import { BACKEND_URL_CHANGED_EVENT } from "@/lib/api/connection";
 import { normalizeGpuAliases } from "@/lib/api/system";
+import { captureControllerIdentity, type ControllerIdentity } from "@/lib/controller-identity";
 import {
   areGpusEqual,
   areLaunchProgressEqual,
@@ -43,13 +44,20 @@ const FAST_STATUS_REQUEST = { timeout: 5_000, retries: 0 } as const;
 const FAST_COMPAT_REQUEST = { timeout: 5_000, retries: 0 } as const;
 const FAST_GPU_REQUEST = { timeout: 5_000, retries: 0 } as const;
 
-type ControllerEventDetail = { type?: string; data?: Record<string, unknown> };
+type ControllerEventDetail = ControllerIdentity & {
+  type?: string;
+  data?: Record<string, unknown>;
+};
 type PolledStatus = Awaited<ReturnType<typeof api.getStatus>>;
 type PolledCompatibility = Awaited<ReturnType<typeof api.getCompatibility>>;
+type PolledGpus = { gpus: GPU[]; observedAt: number };
+type PolledMetrics = { metrics: Metrics | null; observedAt: number };
 type PollResults = {
   compatibility: PolledCompatibility | null;
   gpus: GPU[];
+  gpusObservedAt: number;
   metrics: Metrics | null;
+  metricsObservedAt: number;
   status: PolledStatus | null;
   statusConnected: boolean;
 };
@@ -81,6 +89,8 @@ const initialSnapshot: RealtimeStatusSnapshot = {
   runtimeSummary: null,
   services: [],
   lease: null,
+  gpusObservedAt: 0,
+  metricsObservedAt: 0,
   lastEventAt: 0,
 };
 
@@ -91,8 +101,10 @@ let started = false;
 let clearLaunchTimer: EffectTimer | null = null;
 let pollFailureStreak = 0;
 let pollBackoffUntil = 0;
-let activeControllerKey = currentControllerKey();
+let activeControllerIdentity = captureControllerIdentity();
+let activeControllerKey = activeControllerIdentity.controllerKey;
 let statusRequestSeq = 0;
+let eventEpoch = 0;
 
 const POLL_BASE_INTERVAL_MS = 5_000;
 const POLL_MAX_BACKOFF_MS = 30_000;
@@ -111,11 +123,6 @@ function notePollOutcome(connected: boolean) {
   pollBackoffUntil = Date.now() + backoff;
 }
 
-function currentControllerKey(): string {
-  if (typeof window === "undefined") return "server";
-  return getStoredBackendUrl() || "default";
-}
-
 function cacheActiveSnapshot(): void {
   snapshotsByController.set(activeControllerKey, snapshot);
 }
@@ -128,7 +135,37 @@ function processKey(process: ProcessInfo | null | undefined): string {
     process.port,
     process.served_model_name ?? "",
     process.model_path ?? "",
+    process.started_at ?? "unknown-start",
   ].join("|");
+}
+
+function sameProcess(
+  first: ProcessInfo | null | undefined,
+  second: ProcessInfo | null | undefined,
+): boolean {
+  return Boolean(first && second) && processKey(first) === processKey(second);
+}
+
+function identityParts(values: Array<string | null | undefined>): Set<string> {
+  const parts = values.flatMap((value) => {
+    const normalized = value?.trim().toLowerCase();
+    if (!normalized) return [];
+    const basename = normalized.replace(/\\/g, "/").replace(/\/+$/, "").split("/").at(-1);
+    return basename && basename !== normalized ? [normalized, basename] : [normalized];
+  });
+  return new Set(parts);
+}
+
+function metricsBelongToProcess(metrics: Metrics, process: ProcessInfo | null): boolean {
+  if (!process) return false;
+  const processIds = identityParts([process.served_model_name, process.model_path]);
+  const metricIds = identityParts([
+    metrics.model_id,
+    metrics.served_model_name,
+    metrics.model_path,
+  ]);
+  if (processIds.size === 0 || metricIds.size === 0) return false;
+  return [...metricIds].some((id) => processIds.has(id));
 }
 
 function emitIfChanged(next: RealtimeStatusSnapshot) {
@@ -142,7 +179,9 @@ function emitIfChanged(next: RealtimeStatusSnapshot) {
     !arePlatformKindsEqual(snapshot.platformKind, next.platformKind) ||
     !areRuntimeSummariesEqual(snapshot.runtimeSummary, next.runtimeSummary) ||
     !areServicesEqual(snapshot.services, next.services) ||
-    !areLeasesEqual(snapshot.lease, next.lease);
+    !areLeasesEqual(snapshot.lease, next.lease) ||
+    snapshot.gpusObservedAt !== next.gpusObservedAt ||
+    snapshot.metricsObservedAt !== next.metricsObservedAt;
 
   snapshot = changed ? next : { ...snapshot, lastEventAt: next.lastEventAt };
   cacheActiveSnapshot();
@@ -192,16 +231,30 @@ function fetchPollResultsEffect(): Effect.Effect<PollResults> {
     const [statusResult, compatibilityResult, gpuResult, metricsResult] = yield* Effect.all([
       Effect.result(requestEffect(() => api.getStatus(FAST_STATUS_REQUEST))),
       Effect.result(requestEffect(() => api.getCompatibility(FAST_COMPAT_REQUEST))),
-      Effect.result(requestEffect(() => api.getGPUs(FAST_GPU_REQUEST))),
       Effect.result(
-        requestEffect(() => api.getMetrics()).pipe(Effect.catch(() => Effect.succeed(null))),
+        requestEffect(async () => {
+          const payload = await api.getGPUs(FAST_GPU_REQUEST);
+          return { gpus: payload.gpus ?? [], observedAt: Date.now() } satisfies PolledGpus;
+        }),
+      ),
+      Effect.result(
+        requestEffect(async () => {
+          const metrics = await api.getMetrics();
+          return { metrics, observedAt: Date.now() } satisfies PolledMetrics;
+        }),
       ),
     ] as const);
     const status = Result.isSuccess(statusResult) ? statusResult.success : null;
+    const polledMetrics = pollMetrics(metricsResult, status);
+    const polledGpus = Result.isSuccess(gpuResult)
+      ? gpuResult.success
+      : { gpus: snapshot.gpus, observedAt: snapshot.gpusObservedAt };
     return {
       compatibility: Result.isSuccess(compatibilityResult) ? compatibilityResult.success : null,
-      gpus: Result.isSuccess(gpuResult) ? (gpuResult.success.gpus ?? snapshot.gpus) : snapshot.gpus,
-      metrics: pollMetrics(metricsResult, status),
+      gpus: polledGpus.gpus,
+      gpusObservedAt: polledGpus.observedAt,
+      metrics: polledMetrics.metrics,
+      metricsObservedAt: polledMetrics.observedAt,
       status,
       statusConnected: Result.isSuccess(statusResult),
     };
@@ -209,13 +262,18 @@ function fetchPollResultsEffect(): Effect.Effect<PollResults> {
 }
 
 function pollMetrics(
-  result: Result.Result<Metrics | null, unknown>,
+  result: Result.Result<PolledMetrics, unknown>,
   status: PolledStatus | null,
-): Metrics | null {
-  if (Result.isSuccess(result) && result.success) return result.success;
-  return processKey(snapshot.status?.process) === processKey(status?.process)
-    ? snapshot.metrics
-    : null;
+): { metrics: Metrics | null; observedAt: number } {
+  if (Result.isSuccess(result)) {
+    const { metrics, observedAt } = result.success;
+    return metrics && metricsBelongToProcess(metrics, status?.process ?? null)
+      ? { metrics, observedAt }
+      : { metrics: null, observedAt: 0 };
+  }
+  return sameProcess(snapshot.status?.process, status?.process)
+    ? { metrics: snapshot.metrics, observedAt: snapshot.metricsObservedAt }
+    : { metrics: null, observedAt: 0 };
 }
 
 function fallbackRuntimeVendor(
@@ -240,7 +298,7 @@ function runtimeSummaryFromCompatibility(
   };
 }
 
-function emitNoPolledStatus() {
+function emitNoPolledStatus(gpus: GPU[], gpusObservedAt: number) {
   // Keep a warm cache through transient navigation/SSE handoff failures. The
   // next poll failure marks the controller offline, but a single missed fast
   // request should not blank the status page or flash "offline".
@@ -251,12 +309,21 @@ function emitNoPolledStatus() {
     ...snapshot,
     statusLoading: false,
     connected: hasCachedStatus && pollFailureStreak <= 3 ? snapshot.connected : false,
+    gpus,
+    gpusObservedAt,
     lastEventAt: Date.now(),
   });
 }
 
-function emitPolledStatus({ compatibility, gpus, metrics, status }: PollResults) {
-  if (!status) return emitNoPolledStatus();
+function emitPolledStatus({
+  compatibility,
+  gpus,
+  gpusObservedAt,
+  metrics,
+  metricsObservedAt,
+  status,
+}: PollResults) {
+  if (!status) return emitNoPolledStatus(gpus, gpusObservedAt);
   const { running, process, inference_port } = status;
   const launching = status.launching ?? null;
   emitIfChanged({
@@ -273,6 +340,8 @@ function emitPolledStatus({ compatibility, gpus, metrics, status }: PollResults)
     runtimeSummary: runtimeSummaryFromCompatibility(snapshot.runtimeSummary, compatibility),
     services: snapshot.services,
     lease: snapshot.lease,
+    gpusObservedAt,
+    metricsObservedAt,
     lastEventAt: Date.now(),
   });
 }
@@ -291,7 +360,7 @@ function statusFromEventData(
 }
 
 function metricsForEventProcess(process: ProcessInfo | null): Metrics | null {
-  return processKey(snapshot.status?.process) === processKey(process) ? snapshot.metrics : null;
+  return sameProcess(snapshot.status?.process, process) ? snapshot.metrics : null;
 }
 
 function handleStatusEvent(data: Record<string, unknown>, now: number) {
@@ -299,12 +368,14 @@ function handleStatusEvent(data: Record<string, unknown>, now: number) {
   // poll backoff so a recovered connection resumes fast polling.
   notePollOutcome(true);
   const status = statusFromEventData(data);
+  const processUnchanged = sameProcess(snapshot.status?.process, status.process);
   emitIfChanged({
     ...snapshot,
     status,
     statusLoading: false,
     connected: true,
     metrics: metricsForEventProcess(status.process),
+    metricsObservedAt: processUnchanged ? snapshot.metricsObservedAt : 0,
     launchProgress: reconcileLaunchProgress(snapshot.launchProgress, {
       process: status.process,
       launching: status.launching,
@@ -317,14 +388,18 @@ function handleGpuEvent(data: Record<string, unknown>, now: number) {
   emitIfChanged({
     ...snapshot,
     gpus: normalizeGpuAliases(data["gpus"]),
+    gpusObservedAt: now,
     lastEventAt: now,
   });
 }
 
 function handleMetricsEvent(data: Record<string, unknown>, now: number) {
+  const metrics = data as Metrics;
+  if (!metricsBelongToProcess(metrics, snapshot.status?.process ?? null)) return;
   emitIfChanged({
     ...snapshot,
-    metrics: data as Metrics,
+    metrics,
+    metricsObservedAt: now,
     lastEventAt: now,
   });
 }
@@ -392,6 +467,8 @@ function handleRuntimeSummaryEvent(data: Record<string, unknown>, now: number) {
         : snapshot.runtimeSummary,
     services: Array.isArray(rawServices) ? rawServices : snapshot.services,
     lease: rawLease ?? snapshot.lease,
+    gpusObservedAt: snapshot.gpusObservedAt,
+    metricsObservedAt: snapshot.metricsObservedAt,
     lastEventAt: now,
   });
 }
@@ -408,20 +485,43 @@ const controllerEventHandlers: Record<
 };
 
 function handleControllerEvent(detail: ControllerEventDetail | undefined) {
-  controllerEventHandlers[detail?.type ?? ""]?.(detail?.data ?? {}, Date.now());
+  if (
+    !detail ||
+    detail.controllerKey !== activeControllerIdentity.controllerKey ||
+    detail.generation !== activeControllerIdentity.generation
+  ) {
+    return;
+  }
+  const handler = controllerEventHandlers[detail.type ?? ""];
+  if (!handler) return;
+  eventEpoch += 1;
+  handler(detail.data ?? {}, Date.now());
 }
 
-function fetchStatusNow(controllerKey = activeControllerKey): Promise<void> {
-  return Effect.runPromise(fetchStatusNowEffect(controllerKey));
+function fetchStatusNow(identity = activeControllerIdentity): Promise<void> {
+  return Effect.runPromise(fetchStatusNowEffect(identity));
 }
 
-function fetchStatusNowEffect(controllerKey = activeControllerKey): Effect.Effect<void> {
+function fetchStatusNowEffect(identity = activeControllerIdentity): Effect.Effect<void> {
   return Effect.gen(function* () {
     const requestSeq = ++statusRequestSeq;
-    if (controllerKey !== activeControllerKey) return;
+    const requestEventEpoch = eventEpoch;
+    if (
+      identity.controllerKey !== activeControllerIdentity.controllerKey ||
+      identity.generation !== activeControllerIdentity.generation
+    ) {
+      return;
+    }
     emitStatusLoading();
     const results = yield* fetchPollResultsEffect();
-    if (controllerKey !== activeControllerKey || requestSeq !== statusRequestSeq) return;
+    if (
+      identity.controllerKey !== activeControllerIdentity.controllerKey ||
+      identity.generation !== activeControllerIdentity.generation ||
+      requestSeq !== statusRequestSeq ||
+      requestEventEpoch !== eventEpoch
+    ) {
+      return;
+    }
     notePollOutcome(results.statusConnected);
     emitPolledStatus(results);
   });
@@ -429,17 +529,21 @@ function fetchStatusNowEffect(controllerKey = activeControllerKey): Effect.Effec
 
 function resetForControllerSwitch() {
   cacheActiveSnapshot();
-  activeControllerKey = currentControllerKey();
+  activeControllerIdentity = captureControllerIdentity();
+  activeControllerKey = activeControllerIdentity.controllerKey;
   statusRequestSeq += 1;
+  eventEpoch += 1;
   pollFailureStreak = 0;
   pollBackoffUntil = 0;
+  clearLaunchTimer?.cancel();
+  clearLaunchTimer = null;
   const cached = snapshotsByController.get(activeControllerKey);
   emitIfChanged({
     ...(cached ?? initialSnapshot),
     statusLoading: true,
     lastEventAt: Date.now(),
   });
-  void fetchStatusNow(activeControllerKey);
+  void fetchStatusNow(activeControllerIdentity);
 }
 
 function start() {

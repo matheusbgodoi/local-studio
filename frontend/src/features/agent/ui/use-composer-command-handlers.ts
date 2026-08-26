@@ -1,7 +1,11 @@
 "use client";
 
 import { useCallback, type RefObject } from "react";
-import { consumeComposerMention, type ComposerMention } from "@/features/agent/composer-context";
+import {
+  consumeComposerMention,
+  detectComposerMention,
+  type ComposerMention,
+} from "@/features/agent/composer-context";
 import type {
   ComposerCommandRegistry,
   SlashInvocation,
@@ -53,7 +57,9 @@ export function useComposerCommandHandlers({
         updateTab(tabId, (tab) => ({ ...tab, input: nextInput, error: "" }));
         if (!nextInput) resetComposerHeight();
       }
-      setMention(null);
+      const nextMention =
+        outcome.kind === "set-input" ? detectComposerMention(outcome.input) : null;
+      setMention(nextMention);
       requestAnimationFrame(() => textareaRef.current?.focus());
     },
     [

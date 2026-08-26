@@ -11,10 +11,11 @@ import {
   ModelStatus,
   type ModelSummaryItem,
 } from "./model-page";
-import { modelIdFromPath } from "@/lib/huggingface";
 import { visionModeOverrideLabel } from "@/features/recipes/recipe-vision";
 import type { RecipesTableProps } from "./types";
 import { RecipesTable } from "./recipes-table";
+import { displayNameForModel, useServedModels } from "@/hooks/served-models-store";
+import { ModelStopConfirm } from "@/features/dashboard/model-stop-confirm";
 
 type Props = {
   loading: boolean;
@@ -26,7 +27,7 @@ type Props = {
   runningRecipeId: string | null;
   runningRecipeName: string | null;
   launchProgressMessage: string | null;
-  onEvictModel: () => void;
+  onEvictModel: () => Promise<void> | void;
   onNewRecipe: () => void;
   table: RecipesTableProps;
 };
@@ -35,6 +36,29 @@ const activeRecipeFor = (recipes: RecipeWithStatus[], runningRecipeId: string | 
   recipes.find((recipe) => recipe.id === runningRecipeId) ??
   recipes.find((recipe) => recipe.status === "running") ??
   null;
+
+function ActiveStopAction({
+  running,
+  supported,
+  onStop,
+}: {
+  running: boolean;
+  supported: boolean;
+  onStop: () => Promise<void> | void;
+}) {
+  if (!running || !supported) return null;
+  return (
+    <ModelStopConfirm
+      onStop={onStop}
+      trigger={({ open, stopping }) => (
+        <ModelButton onClick={open} tone="danger" disabled={stopping}>
+          <Square className="h-3 w-3" />
+          {stopping ? "Unloading" : "Unload model"}
+        </ModelButton>
+      )}
+    />
+  );
+}
 
 const parallelismLabel = (recipe: RecipeWithStatus) =>
   `tp/pp ${recipe.tp || recipe.tensor_parallel_size || 1}/${recipe.pp || recipe.pipeline_parallel_size || 1}`;
@@ -50,7 +74,7 @@ const activeDetailsFor = (
   if (!recipe) {
     return [
       { label: "state", value: loading ? "syncing" : "idle" },
-      { label: "serves", value: recipeCount || "defaults" },
+      { label: "profiles", value: recipeCount || "defaults" },
     ];
   }
   const inputMode = visionModeOverrideLabel(recipe);
@@ -60,7 +84,6 @@ const activeDetailsFor = (
     { label: "context", value: contextLabel(recipe) },
     { label: "parallel", value: parallelismLabel(recipe) },
     ...(inputMode ? [{ label: "input", value: inputMode }] : []),
-    { label: "served", value: recipe.served_model_name ?? recipe.name },
   ];
 };
 
@@ -78,20 +101,25 @@ export function RecipesTab({
   onNewRecipe,
   table,
 }: Props) {
+  const { physicalModels } = useServedModels();
   const activeRecipe = activeRecipeFor(recipes, runningRecipeId);
-  const activeTitle = runningRecipeName ?? activeRecipe?.name ?? "No active Serve";
+  const activeTitle = activeRecipe
+    ? (displayNameForModel(physicalModels, activeRecipe.served_model_name) ??
+      "Model identity unavailable")
+    : "No model loaded";
   const activeSubtitle =
-    activeRecipe?.model_path ??
-    (loadError
-      ? "This backend did not answer the Serves request."
-      : "This controller is ready for a Serve.");
+    activeRecipe && runningRecipeName
+      ? "Active launch profile"
+      : loadError
+        ? "This backend did not answer the launch profiles request."
+        : "This controller is ready to launch a model.";
   const activeDetails = activeDetailsFor(activeRecipe, loading, sortedRecipes.length);
 
   return (
     <div className="space-y-6">
       <ModelSection
-        title="Serves"
-        description="Each Serve binds model weights, a real runtime, and launch configuration."
+        title="Launch profiles"
+        description="Each profile binds model weights, a runtime, and the settings used to launch it."
         actions={
           <ModelStatus
             tone={runningRecipeId ? "good" : loadError ? "danger" : loading ? "info" : "default"}
@@ -107,7 +135,7 @@ export function RecipesTab({
         }
       >
         <ModelRow
-          label="Search Serves"
+          label="Search launch profiles"
           description="Name, model path, runtime, or API model name."
           control={
             <div className="relative">
@@ -115,7 +143,7 @@ export function RecipesTab({
               <ModelInput
                 value={filter}
                 onChange={setFilter}
-                placeholder="Search Serves, weights, runtimes"
+                placeholder="Search profiles, weights, runtimes"
                 className="pl-7"
               />
             </div>
@@ -124,7 +152,7 @@ export function RecipesTab({
           actions={
             <ModelButton onClick={onNewRecipe} tone="primary">
               <Plus className="h-3 w-3" />
-              New Serve
+              New launch profile
             </ModelButton>
           }
         />
@@ -132,7 +160,9 @@ export function RecipesTab({
           title={activeTitle}
           subtitle={activeSubtitle}
           leading={
-            activeRecipe ? <ModelLogo modelId={modelIdFromPath(activeRecipe.model_path)} /> : null
+            activeRecipe ? (
+              <ModelLogo modelId={activeTitle} label={activeTitle} remoteAvatar={false} />
+            ) : null
           }
           status={
             <ModelStatus tone={runningRecipeId ? "good" : loading ? "info" : "default"}>
@@ -142,12 +172,11 @@ export function RecipesTab({
           details={activeDetails}
           progress={launchProgressMessage}
           actions={
-            runningRecipeId ? (
-              <ModelButton onClick={onEvictModel} tone="danger">
-                <Square className="h-3 w-3" />
-                Stop
-              </ModelButton>
-            ) : null
+            <ActiveStopAction
+              running={Boolean(runningRecipeId)}
+              supported={table.lifecycleSupported}
+              onStop={onEvictModel}
+            />
           }
         />
       </ModelSection>

@@ -4,20 +4,16 @@ import { useCallback, useRef, useState } from "react";
 import api from "@/lib/api/client";
 import { createApiClient } from "@/lib/api/create-api-client";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
+import { getStoredBackendUrl, resolveSettingsDefaultBackendUrl } from "@/lib/api/connection";
 import {
-  clearApiKey,
-  clearStoredBackendUrl,
-  getApiKey,
-  getStoredBackendUrl,
-  resolveSettingsDefaultBackendUrl,
-  setApiKey,
-  setStoredBackendUrl,
-} from "@/lib/api/connection";
-import { normalizeControllerUrl } from "@/lib/api/controllers";
-import { readPageCache, writePageCache } from "@/lib/page-data-cache";
-import { scheduleDurableUiPreferencesSave } from "@/lib/desktop-ui-preferences";
+  migrateLegacyControllerCredentials,
+  normalizeControllerUrl,
+  saveSavedControllers,
+} from "@/lib/api/controllers";
+import { readPageCache, scopedPageCacheKey, writePageCache } from "@/lib/page-data-cache";
 import type { CompatibilityReport, ConfigData } from "@/lib/types";
 import type { ApiConnectionSettings, ConnectionStatus } from "./types";
+import type { CapabilityState } from "@local-studio/contracts/capabilities";
 
 const FAST_STATUS_REQUEST = { timeout: 5_000, retries: 0 } as const;
 const CONNECTION_TEST_REQUEST = { timeout: 10_000, retries: 0 } as const;
@@ -30,27 +26,38 @@ const DEFAULT_API_SETTINGS: ApiConnectionSettings = {
   backendUrl: DEFAULT_BACKEND_URL,
   apiKey: "",
   hasApiKey: false,
+  controllers: [],
 };
 
 const mergeApiSettings = (server?: Partial<ApiConnectionSettings>): ApiConnectionSettings => {
   const localBackendUrl = getStoredBackendUrl();
-  const localApiKey = getApiKey();
-
   return {
     backendUrl: localBackendUrl || server?.backendUrl || DEFAULT_API_SETTINGS.backendUrl,
-    apiKey: localApiKey || server?.apiKey || "",
-    hasApiKey: Boolean(localApiKey) || Boolean(server?.hasApiKey),
+    apiKey: "",
+    hasApiKey: Boolean(server?.hasApiKey),
+    controllers: server?.controllers ?? [],
   };
 };
 
-export function useSettings() {
+function rejectionMessage(result: PromiseSettledResult<unknown>, fallback: string): string | null {
+  if (result.status !== "rejected") return null;
+  return result.reason instanceof Error ? result.reason.message : fallback;
+}
+
+export function useSettings(
+  controllerKey: string,
+  configCapability: CapabilityState,
+  compatibilityCapability: CapabilityState,
+) {
+  const configCacheKey = scopedPageCacheKey(controllerKey, "settings:config");
+  const compatibilityCacheKey = scopedPageCacheKey(controllerKey, "settings:compat");
   // Stale-while-revalidate: seed from the last-loaded config so navigating to
   // Settings paints instantly while the controller fetch refreshes it.
   const [data, setData] = useState<ConfigData | null>(() =>
-    readPageCache<ConfigData>("settings:config"),
+    readPageCache<ConfigData>(configCacheKey),
   );
   const [compatibilityReport, setCompatibilityReport] = useState<CompatibilityReport | null>(() =>
-    readPageCache<CompatibilityReport>("settings:compat"),
+    readPageCache<CompatibilityReport>(compatibilityCacheKey),
   );
   // Config/compat (the heavy /config + /compat controller round-trips) are only
   // consumed by the System section. They load lazily the first time System is
@@ -63,45 +70,57 @@ export function useSettings() {
 
   const [apiSettings, setApiSettings] = useState<ApiConnectionSettings>(DEFAULT_API_SETTINGS);
   const [apiSettingsLoading, setApiSettingsLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("unknown");
   const [statusMessage, setStatusMessage] = useState<string>("");
+  const activeRef = useRef(false);
+  const apiSettingsSequence = useRef(0);
+  const connectionSequence = useRef(0);
+  const healthSequence = useRef(0);
+  const configSequence = useRef(0);
+
+  useMountSubscription(() => {
+    activeRef.current = true;
+    return () => {
+      activeRef.current = false;
+      apiSettingsSequence.current += 1;
+      connectionSequence.current += 1;
+      healthSequence.current += 1;
+      configSequence.current += 1;
+    };
+  }, [controllerKey]);
 
   const loadApiSettings = useCallback(async () => {
+    const requestId = ++apiSettingsSequence.current;
     try {
       setApiSettingsLoading(true);
+      const migrationComplete = await migrateLegacyControllerCredentials();
+      if (!activeRef.current || requestId !== apiSettingsSequence.current) return;
       const res = await fetch("/api/settings");
+      if (!activeRef.current || requestId !== apiSettingsSequence.current) return;
       if (res.ok) {
         const settings = (await res.json()) as Partial<ApiConnectionSettings>;
+        if (!activeRef.current || requestId !== apiSettingsSequence.current) return;
+        if (migrationComplete && settings.controllers) saveSavedControllers(settings.controllers);
         setApiSettings(mergeApiSettings(settings));
         return;
       }
     } catch (e) {
-      console.error("Failed to load API settings:", e);
+      if (activeRef.current && requestId === apiSettingsSequence.current) {
+        console.error("Failed to load API settings:", e);
+      }
     } finally {
-      setApiSettingsLoading(false);
+      if (activeRef.current && requestId === apiSettingsSequence.current) {
+        setApiSettingsLoading(false);
+      }
     }
-    setApiSettings(mergeApiSettings(undefined));
+    if (activeRef.current && requestId === apiSettingsSequence.current) {
+      setApiSettings(mergeApiSettings(undefined));
+    }
   }, []);
 
-  const persistLocalApiSettings = useCallback(() => {
-    const backendUrl = normalizeControllerUrl(apiSettings.backendUrl ?? "");
-    if (backendUrl) {
-      setStoredBackendUrl(backendUrl);
-    } else {
-      clearStoredBackendUrl();
-    }
-    const apiKey = apiSettings.apiKey?.trim() || "";
-    if (apiKey && !apiKey.includes("••••")) {
-      setApiKey(apiKey);
-    } else if (!apiKey) {
-      clearApiKey();
-    }
-    scheduleDurableUiPreferencesSave();
-  }, [apiSettings]);
-
   const testConnection = useCallback(async () => {
+    const requestId = ++connectionSequence.current;
     try {
       setTesting(true);
       setConnectionStatus("unknown");
@@ -114,27 +133,31 @@ export function useSettings() {
         return;
       }
 
-      const apiKey = apiSettings.apiKey?.includes("••••") ? "" : apiSettings.apiKey;
       const probe = createApiClient({
         baseUrl: "/api/proxy",
         useProxy: true,
         backendUrlOverride: baseUrl,
-        apiKeyOverride: apiKey,
+        ...(apiSettings.apiKey ? { apiKeyOverride: apiSettings.apiKey } : {}),
       });
       await probe.getStatus(CONNECTION_TEST_REQUEST);
+      if (!activeRef.current || requestId !== connectionSequence.current) return;
       setConnectionStatus("connected");
       setStatusMessage("Connected");
     } catch (e) {
-      setConnectionStatus("error");
-      setStatusMessage((e as Error).message || "Connection failed");
+      if (activeRef.current && requestId === connectionSequence.current) {
+        setConnectionStatus("error");
+        setStatusMessage((e as Error).message || "Connection failed");
+      }
     } finally {
-      setTesting(false);
+      if (activeRef.current && requestId === connectionSequence.current) setTesting(false);
     }
   }, [apiSettings.apiKey, apiSettings.backendUrl]);
 
   const checkBackendHealth = useCallback(async () => {
+    const requestId = ++healthSequence.current;
     try {
       await api.getStatus(FAST_STATUS_REQUEST);
+      if (!activeRef.current || requestId !== healthSequence.current) return false;
       setBackendOnline(true);
       // A reachable controller means first-run setup is effectively done. This
       // flag used to be set by the config fetch, which now loads lazily.
@@ -143,87 +166,68 @@ export function useSettings() {
       }
       return true;
     } catch {
+      if (!activeRef.current || requestId !== healthSequence.current) return false;
       setBackendOnline(false);
       return false;
     }
   }, []);
 
   const loadConfig = useCallback(async () => {
+    const requestId = ++configSequence.current;
     try {
       setLoading(true);
       setError(null);
       const [configResult, compatibilityResult] = await Promise.allSettled([
-        api.getSystemConfig(FAST_CONFIG_REQUEST),
-        api.getCompatibility(FAST_COMPAT_REQUEST),
+        configCapability === "supported"
+          ? api.getSystemConfig(FAST_CONFIG_REQUEST)
+          : Promise.resolve(null),
+        compatibilityCapability === "supported"
+          ? api.getCompatibility(FAST_COMPAT_REQUEST)
+          : Promise.resolve(null),
       ]);
+      if (!activeRef.current || requestId !== configSequence.current) return;
 
-      if (configResult.status !== "fulfilled") {
-        throw configResult.reason;
-      }
-
-      const configData = configResult.value;
+      const configData = configResult.status === "fulfilled" ? configResult.value : null;
       const compatibility =
         compatibilityResult.status === "fulfilled" ? compatibilityResult.value : null;
-      writePageCache("settings:config", configData);
-      if (compatibility) writePageCache("settings:compat", compatibility);
-      setData(configData);
-      setCompatibilityReport(compatibility);
-      setBackendOnline(true);
-      if (typeof window !== "undefined" && !localStorage.getItem("local-studio-setup-complete")) {
-        localStorage.setItem("local-studio-setup-complete", "true");
+      const errors = [
+        rejectionMessage(configResult, "System configuration could not be loaded"),
+        rejectionMessage(compatibilityResult, "Compatibility could not be loaded"),
+      ].filter((message): message is string => Boolean(message));
+      if (configData) {
+        writePageCache(configCacheKey, configData);
+        setData(configData);
+      }
+      if (compatibility) {
+        writePageCache(compatibilityCacheKey, compatibility);
+        setCompatibilityReport(compatibility);
+      }
+      const receivedSystemData = Boolean(configData || compatibility);
+      setError(errors.length ? errors.join(" · ") : null);
+      if (receivedSystemData) {
+        healthSequence.current += 1;
+        setBackendOnline(true);
+        if (typeof window !== "undefined" && !localStorage.getItem("local-studio-setup-complete")) {
+          localStorage.setItem("local-studio-setup-complete", "true");
+        }
+      } else if (errors.length) {
+        await checkBackendHealth();
       }
     } catch (e) {
-      setError((e as Error).message);
-      await checkBackendHealth();
-    } finally {
-      setLoading(false);
-    }
-  }, [checkBackendHealth]);
-
-  const saveApiSettings = useCallback(async () => {
-    const backendUrl = normalizeControllerUrl(apiSettings.backendUrl ?? "");
-    persistLocalApiSettings();
-
-    let savedRemotely = false;
-    try {
-      setSaving(true);
-      setStatusMessage("");
-      const res = await fetch("/api/settings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          backendUrl,
-          apiKey: apiSettings.apiKey,
-        }),
-      });
-      if (res.ok) {
-        const updated = (await res.json()) as Partial<ApiConnectionSettings>;
-        setApiSettings(mergeApiSettings(updated));
-        savedRemotely = true;
-      } else {
-        const err = await res.json().catch(() => ({}));
-        setStatusMessage(err.error || "Saved locally");
+      if (activeRef.current && requestId === configSequence.current) {
+        setError((e as Error).message);
+        await checkBackendHealth();
       }
-    } catch {
-      setStatusMessage("Saved locally");
     } finally {
-      setSaving(false);
+      if (activeRef.current && requestId === configSequence.current) setLoading(false);
     }
-
-    if (savedRemotely) {
-      setStatusMessage("Settings saved");
-    }
-
-    // Always attempt to refresh config when a backend URL is present.
-    if (backendUrl) {
-      loadConfig();
-    }
-
-    // Avoid showing a hard error when only the server-side save failed.
-    if (!savedRemotely) {
-      setConnectionStatus("unknown");
-    }
-  }, [apiSettings, loadConfig, persistLocalApiSettings]);
+  }, [
+    checkBackendHealth,
+    compatibilityCacheKey,
+    compatibilityCapability,
+    configCacheKey,
+    configCapability,
+  ]);
 
   // Lazy trigger: called when the System section becomes active. Fires the
   // config/compat fetch exactly once (subsequent visits reuse the cached data);
@@ -232,6 +236,10 @@ export function useSettings() {
     if (configRequestedRef.current) return;
     configRequestedRef.current = true;
     void loadConfig();
+  }, [loadConfig]);
+
+  useMountSubscription(() => {
+    if (configRequestedRef.current) void loadConfig();
   }, [loadConfig]);
 
   useMountSubscription(() => {
@@ -248,17 +256,15 @@ export function useSettings() {
     error,
     apiSettings,
     apiSettingsLoading,
-    saving,
     testing,
     connectionStatus,
     statusMessage,
     setApiSettings,
     loadConfig,
     ensureConfigLoaded,
-    saveApiSettings,
     testConnection,
-    hasConfigData: Boolean(data),
-    isInitialLoading: loading && !data,
+    hasConfigData: Boolean(data || compatibilityReport),
+    isInitialLoading: loading && !data && !compatibilityReport,
     backendOnline,
   };
 }

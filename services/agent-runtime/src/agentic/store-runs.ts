@@ -19,6 +19,7 @@ export type CreateRunInput = {
   goal: string;
   modelId: string;
   physicalModelId: string;
+  modelDisplayName: string;
   behaviorProfile: string | null;
   contextWindow: number;
   usableLimit: number;
@@ -39,6 +40,7 @@ export type TaskSeed = {
 const RUN_COLUMNS: Record<string, string> = {
   status: "status",
   piSessionId: "pi_session_id",
+  currentForConversation: "current_for_conversation",
   planRevision: "plan_revision",
   activeTaskId: "active_task_id",
   compactionCount: "compaction_count",
@@ -46,10 +48,12 @@ const RUN_COLUMNS: Record<string, string> = {
   resultSummary: "result_summary",
   failureReason: "failure_reason",
   recoveryState: "recovery_state",
+  archivedAtMs: "archived_at_ms",
   contextWindow: "context_window",
   usableLimit: "usable_limit",
   modelId: "model_id",
   physicalModelId: "physical_model_id",
+  modelDisplayName: "model_display_name",
   behaviorProfile: "behavior_profile",
 };
 
@@ -96,16 +100,26 @@ export function createRunStore(context: AgenticStoreContext) {
       const id = `run_${randomUUID()}`;
       const at = ms();
       context.run(
-        `INSERT INTO agentic_runs(id, goal, status, model_id, physical_model_id, behavior_profile,
-           network_policy, context_window, usable_limit, session_id, pi_session_id, cwd,
+        `UPDATE agentic_runs SET current_for_conversation = 0, updated_at_ms = ?
+         WHERE current_for_conversation = 1
+           AND (session_id = ? OR (? IS NOT NULL AND pi_session_id = ?))`,
+        at,
+        input.sessionId,
+        input.piSessionId,
+        input.piSessionId,
+      );
+      context.run(
+        `INSERT INTO agentic_runs(id, goal, status, model_id, physical_model_id, model_display_name, behavior_profile,
+           network_policy, context_window, usable_limit, session_id, pi_session_id, current_for_conversation, cwd,
            created_at_ms, updated_at_ms)
-         VALUES (?,?,'CREATED',?,?,?,?,?,?,?,?,?,?,?)`,
+         VALUES (?,?,'CREATED',?,?,?,?,?,?,?,?,?,1,?,?,?)`,
         id,
         input.goal,
         input.modelId,
         input.physicalModelId,
+        input.modelDisplayName,
         input.behaviorProfile,
-        input.networkPolicy,
+        input.networkPolicy ?? "direct",
         input.contextWindow,
         input.usableLimit,
         input.sessionId,
@@ -117,6 +131,32 @@ export function createRunStore(context: AgenticStoreContext) {
       appendEvent({ runId: id, type: "RUN_CREATED", summary: input.goal });
       return requireRun(id);
     });
+
+  const currentRunForConversation = (input: {
+    sessionId: string | null;
+    piSessionId: string | null;
+  }): AgenticRun | null => {
+    const currentForSession = (): AgenticRun | null => {
+      if (!input.sessionId) return null;
+      const rows = all(
+        `SELECT * FROM agentic_runs
+         WHERE current_for_conversation = 1 AND archived_at_ms IS NULL AND session_id = ?`,
+        input.sessionId,
+      );
+      return rows.length === 1 && rows[0] ? toRun(rows[0]) : null;
+    };
+    if (input.piSessionId) {
+      const row = one(
+        `SELECT * FROM agentic_runs
+         WHERE current_for_conversation = 1 AND archived_at_ms IS NULL AND pi_session_id = ?`,
+        input.piSessionId,
+      );
+      const exact = row ? toRun(row) : null;
+      if (exact && (!input.sessionId || exact.sessionId === input.sessionId)) return exact;
+      return currentForSession();
+    }
+    return currentForSession();
+  };
 
   const updateRun = (id: string, patch: Partial<AgenticRun>): AgenticRun => {
     const { assignments, values } = buildPatch(RUN_COLUMNS, patch as Record<string, unknown>);
@@ -168,8 +208,12 @@ export function createRunStore(context: AgenticStoreContext) {
       const byTitle = new Map(listTasks(input.runId).map((task) => [task.title, task] as const));
 
       const carriedFor = (seed: TaskSeed) => (seed.id ? getTask(seed.id) : byTitle.get(seed.title));
-      const ids = input.tasks.map((seed) => carriedFor(seed)?.id ?? seed.id ?? `task_${randomUUID()}`);
-      const idByTitle = new Map(input.tasks.map((seed, index) => [seed.title, ids[index] as string]));
+      const ids = input.tasks.map(
+        (seed) => carriedFor(seed)?.id ?? seed.id ?? `task_${randomUUID()}`,
+      );
+      const idByTitle = new Map(
+        input.tasks.map((seed, index) => [seed.title, ids[index] as string]),
+      );
 
       input.tasks.forEach((seed, position) => {
         const carried = carriedFor(seed);
@@ -312,6 +356,7 @@ export function createRunStore(context: AgenticStoreContext) {
 
   return {
     createRun,
+    currentRunForConversation,
     getRun,
     requireRun,
     updateRun,

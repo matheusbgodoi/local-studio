@@ -1,6 +1,6 @@
-# Local Studio
+# CRIAs AI
 
-Local Studio is a local-first workstation for running, managing, and using
+CRIAs AI is a local-first workstation for running, managing, and using
 self-hosted LLM backends. One machine can launch models, watch GPU/runtime
 state, chat with OpenAI-compatible endpoints, and run agent sessions against
 local or remote controllers. Version 2.0 unifies day-to-day operation around
@@ -11,7 +11,7 @@ and server surfaces.
 
 > **This repository is a customised fork.** The link below is the **upstream**
 > build from `sybil-solutions/local-studio`. Installing it over a build made from
-> this fork replaces the customisations with stock Local Studio — see
+> this fork replaces CRIAs AI with stock Local Studio — see
 > [`docs/upstream-updates.md`](docs/upstream-updates.md). This fork publishes no
 > binary of its own; you build it locally with `npm run desktop:dist`.
 
@@ -167,17 +167,16 @@ It is built from two modules that share one controller API:
   Electron desktop shell. Hosts the Workbench (`/agent`), consolidated
   Configure surface, settings, usage, logs, and browser-facing API routes.
 
-## Mobile companion
+## Mobile access
 
-[KittyLitter](https://kittylitter.app) connects to Local Studio so the same
-agent sessions, streaming content, reasoning, tool calls, and tool results are
-available on iPhone, iPad, and Android. Pair from **Settings → Profile & phone →
-Connect your phone**. The QR code and copied connection JSON are private
-controller credentials; share them only with a device you trust.
+CRIAs AI can publish its web interface to devices on the owner's Tailscale
+network. The desktop footer exposes the tailnet URL and copies the masked
+pairing token without sending the secret to the renderer. Pair once in Safari,
+then add CRIAs AI to the iPhone home screen as a PWA.
 
-See the complete pairing, version, and security guide at
-[localstudio.ai/mobile](https://localstudio.ai/mobile). Mobile pairing requires
-Local Studio 2.9.0 or newer and KittyLitter 1.6.0 or newer.
+See [`docs/remote-access.md`](docs/remote-access.md) for setup, authentication,
+port recovery, and the boundary between tailnet-only access and public Funnel
+exposure.
 
 ## What is a controller?
 
@@ -393,7 +392,7 @@ and tags are never created by hand.
 
 ## Acknowledgements
 
-Local Studio is built with and inspired by exceptional open-source work:
+CRIAs AI is built with and inspired by exceptional open-source work:
 
 - [DuckDuckGo](https://duckduckgo.com) — this fork's `browser_search` reads
   DuckDuckGo's public no-JavaScript HTML frontends. They are web pages, not a
@@ -405,9 +404,9 @@ Local Studio is built with and inspired by exceptional open-source work:
 - [T3 Code](https://github.com/pingdotgg/t3code) — inspiration for a focused,
   developer-first coding workbench.
 - [SGLang](https://github.com/sgl-project/sglang) — a high-performance model
-  serving backend supported by Local Studio recipes.
+  serving backend supported by CRIAs AI recipes.
 - [vLLM](https://github.com/vllm-project/vllm) — a high-throughput inference
-  and serving backend supported throughout Local Studio.
+  and serving backend supported throughout CRIAs AI.
 - [Convex](https://github.com/get-convex/convex-backend) — inspiration for
   reactive, real-time application architecture.
 

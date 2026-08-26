@@ -10,7 +10,8 @@ import {
   listAutomations,
   patchAutomation,
 } from "../automations-store";
-import { runAutomationNow } from "../automation-scheduler";
+import { startAutomationRun } from "../automation-scheduler";
+import { withAutomationMutationLock } from "../automation-mutation-lock";
 import { clearGoal, readGoal, writeGoal, type GoalStatus } from "../goals-store";
 import { GOAL_STATUSES } from "../../../../shared/agent/session-goal";
 import { errorMessage, jsonError, readJsonBody } from "./helpers";
@@ -29,11 +30,26 @@ export async function handleAutomationCreate(request: Request): Promise<Response
   const prompt = typeof body?.prompt === "string" ? body.prompt : "";
   const modelId = typeof body?.modelId === "string" ? body.modelId : "";
   const cwd = typeof body?.cwd === "string" ? body.cwd : "";
+  const requiredConnectorIds = body?.requiredConnectorIds;
   if (!prompt.trim() || !modelId.trim()) {
     return jsonError("Body must include prompt and modelId.");
   }
+  if (
+    requiredConnectorIds !== undefined &&
+    (!Array.isArray(requiredConnectorIds) ||
+      requiredConnectorIds.some((entry) => typeof entry !== "string"))
+  ) {
+    return jsonError("requiredConnectorIds must be an array of connector ids.");
+  }
   try {
-    const automation = await createAutomation({ name, prompt, modelId, cwd, schedule: body?.schedule });
+    const automation = await createAutomation({
+      name,
+      prompt,
+      modelId,
+      cwd,
+      requiredConnectorIds: requiredConnectorIds ?? [],
+      schedule: body?.schedule,
+    });
     return Response.json({ automation });
   } catch (error) {
     return jsonError(errorMessage(error, "Failed to create automation."), 500);
@@ -43,18 +59,30 @@ export async function handleAutomationCreate(request: Request): Promise<Response
 export async function handleAutomationPatch(request: Request, id: string): Promise<Response> {
   const body = await readJsonBody(request);
   if (!body) return jsonError("Body must be a JSON object.");
+  if (
+    body.requiredConnectorIds !== undefined &&
+    (!Array.isArray(body.requiredConnectorIds) ||
+      body.requiredConnectorIds.some((entry) => typeof entry !== "string"))
+  ) {
+    return jsonError("requiredConnectorIds must be an array of connector ids.");
+  }
   try {
-    const automation = await patchAutomation(id, {
-      ...(typeof body.name === "string" ? { name: body.name } : {}),
-      ...(typeof body.prompt === "string" ? { prompt: body.prompt } : {}),
-      ...(typeof body.modelId === "string" ? { modelId: body.modelId } : {}),
-      ...(typeof body.cwd === "string" ? { cwd: body.cwd } : {}),
-      ...(body.status === "active" || body.status === "paused" ? { status: body.status } : {}),
-      ...(typeof body.unread === "boolean" ? { unread: body.unread } : {}),
-      ...(body.schedule !== undefined ? { schedule: body.schedule } : {}),
+    return await withAutomationMutationLock(id, async () => {
+      const automation = await patchAutomation(id, {
+        ...(typeof body.name === "string" ? { name: body.name } : {}),
+        ...(typeof body.prompt === "string" ? { prompt: body.prompt } : {}),
+        ...(typeof body.modelId === "string" ? { modelId: body.modelId } : {}),
+        ...(typeof body.cwd === "string" ? { cwd: body.cwd } : {}),
+        ...(Array.isArray(body.requiredConnectorIds)
+          ? { requiredConnectorIds: body.requiredConnectorIds }
+          : {}),
+        ...(body.status === "active" || body.status === "paused" ? { status: body.status } : {}),
+        ...(typeof body.unread === "boolean" ? { unread: body.unread } : {}),
+        ...(body.schedule !== undefined ? { schedule: body.schedule } : {}),
+      });
+      if (!automation) return jsonError(`Unknown automation '${id}'.`, 404);
+      return Response.json({ automation });
     });
-    if (!automation) return jsonError(`Unknown automation '${id}'.`, 404);
-    return Response.json({ automation });
   } catch (error) {
     return jsonError(errorMessage(error, "Failed to update automation."), 500);
   }
@@ -62,19 +90,28 @@ export async function handleAutomationPatch(request: Request, id: string): Promi
 
 export async function handleAutomationDelete(id: string): Promise<Response> {
   try {
-    const removed = await deleteAutomation(id);
-    if (!removed) return jsonError(`Unknown automation '${id}'.`, 404);
-    return Response.json({ ok: true });
+    return await withAutomationMutationLock(id, async () => {
+      const automation = await getAutomation(id);
+      if (!automation) return jsonError(`Unknown automation '${id}'.`, 404);
+      if (automation.activeRun) return jsonError("A running automation cannot be deleted.", 409);
+      const removed = await deleteAutomation(id);
+      if (!removed) return jsonError(`Unknown automation '${id}'.`, 404);
+      return Response.json({ ok: true });
+    });
   } catch (error) {
     return jsonError(errorMessage(error, "Failed to delete automation."), 500);
   }
 }
 
 export async function handleAutomationRun(id: string): Promise<Response> {
-  const automation = await getAutomation(id);
-  if (!automation) return jsonError(`Unknown automation '${id}'.`, 404);
-  const completed = await runAutomationNow(id);
-  return Response.json({ ok: true, started: completed !== null });
+  try {
+    const result = await startAutomationRun(id);
+    if (result === "missing") return jsonError(`Unknown automation '${id}'.`, 404);
+    if (result === "busy") return jsonError("This automation is already running.", 409);
+    return Response.json({ ok: true, started: true }, { status: 202 });
+  } catch (error) {
+    return jsonError(errorMessage(error, "Failed to start automation."), 500);
+  }
 }
 
 // ─── Goals ────────────────────────────────────────────────────────────────

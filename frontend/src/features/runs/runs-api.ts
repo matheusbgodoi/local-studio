@@ -1,5 +1,6 @@
 import { Effect, Schema } from "effect";
 import {
+  AgenticCurrentRunResponseSchema,
   AgenticRunResponseSchema,
   AgenticRunSnapshotSchema,
   AgenticRunsResponseSchema,
@@ -47,6 +48,28 @@ export function listRuns(): Effect.Effect<AgenticRun[], Error> {
   );
 }
 
+export function loadCurrentRun(
+  sessionId: string | null,
+  piSessionId: string | null,
+): Effect.Effect<AgenticRun | null, Error> {
+  const canonicalSessionId = sessionId?.split("#")[0] || null;
+  const params = new URLSearchParams();
+  if (canonicalSessionId) params.set("sessionId", canonicalSessionId);
+  if (piSessionId) params.set("piSessionId", piSessionId);
+  return Effect.map(
+    requestJson(
+      `/api/agent/runs/current?${params.toString()}`,
+      Schema.decodeUnknownSync(AgenticCurrentRunResponseSchema),
+    ),
+    ({ run }) => {
+      if (!run) return null;
+      if (canonicalSessionId && run.sessionId !== canonicalSessionId) return null;
+      if (piSessionId && run.piSessionId && run.piSessionId !== piSessionId) return null;
+      return run;
+    },
+  );
+}
+
 export function loadRunSnapshot(runId: string): Effect.Effect<AgenticRunSnapshot, Error> {
   return requestJson(
     `/api/agent/runs/${encodeURIComponent(runId)}`,
@@ -73,5 +96,32 @@ export function cancelRun(runId: string): Effect.Effect<AgenticRun, Error> {
       { method: "POST" },
     ),
     ({ run }) => run,
+  );
+}
+
+export function setRunArchived(runId: string, archived: boolean): Effect.Effect<AgenticRun, Error> {
+  return Effect.map(
+    requestJson(
+      `/api/agent/runs/${encodeURIComponent(runId)}`,
+      Schema.decodeUnknownSync(AgenticRunResponseSchema),
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ archived }),
+      },
+    ),
+    ({ run }) => run,
+  );
+}
+
+const DeleteRunResponseSchema = Schema.Struct({ ok: Schema.Literal(true) });
+
+export function deleteRun(runId: string): Effect.Effect<void, Error> {
+  return Effect.asVoid(
+    requestJson(
+      `/api/agent/runs/${encodeURIComponent(runId)}`,
+      Schema.decodeUnknownSync(DeleteRunResponseSchema),
+      { method: "DELETE" },
+    ),
   );
 }

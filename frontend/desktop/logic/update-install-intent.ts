@@ -1,6 +1,6 @@
 import type { DesktopUpdateSnapshot } from "../types";
 
-export type UpdateInstallAction = "check" | "wait" | "install";
+export type UpdateInstallAction = "check" | "download" | "wait" | "install";
 
 export class UpdateInstallIntent {
   private requested = false;
@@ -11,16 +11,15 @@ export class UpdateInstallIntent {
       this.requested = false;
       return "install";
     }
-    if (status === "checking" || status === "available" || status === "downloading") {
+    if (status === "available") return "download";
+    if (status === "checking" || status === "downloading") {
       return "wait";
     }
     return "check";
   }
 
-  downloadCompleted(): boolean {
-    if (!this.requested) return false;
-    this.requested = false;
-    return true;
+  shouldDownload(): boolean {
+    return this.requested;
   }
 
   clear(): void {

@@ -7,6 +7,7 @@ import { cx } from "@/ui/utils";
 import { StatusPill } from "@/ui";
 import type { AgenticRunSnapshot, AgenticTask } from "@shared/agent/agentic-run";
 import { isProtectedPolicy } from "@shared/agent/network-policy";
+import { ComposerColumn } from "./composer-column";
 import { RunNetworkBadge } from "./run-network-badge";
 import { eventLabel, formatTokens, humanStatus, runTone } from "./run-formatters";
 import { useSessionRun } from "./use-session-run";
@@ -79,6 +80,14 @@ function writeOpen(value: boolean): void {
   }
 }
 
+function RunContext({ context, limit }: { context: string; limit: string }) {
+  return (
+    <span>
+      Context <span className="font-mono">{`${context} / ${limit}`}</span>
+    </span>
+  );
+}
+
 //
 // What the strip says when it is closed. Everything the open view carries that
 // is worth a glance — what it is doing now, how much context it holds, how many
@@ -99,9 +108,7 @@ function RunInlineSummary({
   return (
     <p className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 pl-7 text-[length:var(--fs-xs)] text-(--ui-muted)">
       {activeTitle ? <span className="min-w-0 truncate">{activeTitle}</span> : null}
-      <span className="font-mono">
-        {context} / {limit}
-      </span>
+      <RunContext context={context} limit={limit} />
       <span>
         {compactions} compaction{compactions === 1 ? "" : "s"}
       </span>
@@ -139,7 +146,7 @@ function RunInlineDetails({
 }) {
   return (
     <>
-      <ul className="mt-1.5 space-y-0.5">
+      <ul className="mt-1.5 max-h-40 space-y-0.5 overflow-y-auto overscroll-contain">
         {tasks.map((task) => (
           <li key={task.id} className="flex items-baseline gap-2 text-[length:var(--fs-xs)]">
             <span className="w-3 shrink-0 text-(--ui-muted)">{taskMark(task)}</span>
@@ -178,9 +185,7 @@ function RunInlineDetails({
         ) : null}
         {protectedRun ? <RunNetworkBadge /> : null}
         <div className="grow" />
-        <span className="font-mono">
-          {context} / {limit}
-        </span>
+        <RunContext context={context} limit={limit} />
         <span>
           {compactions} compaction{compactions === 1 ? "" : "s"}
         </span>
@@ -189,26 +194,40 @@ function RunInlineDetails({
   );
 }
 
-function RunInlineBody({ snapshot }: { snapshot: AgenticRunSnapshot }) {
-  const [open, setOpen] = useState(readOpen);
-  const [expanded, setExpanded] = useState(false);
+function deriveRunInlineView(snapshot: AgenticRunSnapshot, expanded: boolean) {
   const { run, tasks, agents, events } = snapshot;
-  const done = tasks.filter((task) => task.status === "SUCCEEDED").length;
-  const agent = agents.find((entry) => entry.status === "WORKING") ?? agents[0];
-  const latest = events[events.length - 1];
   const active = tasks.find((task) => task.id === run.activeTaskId) ?? null;
-  //
-  // Collapsed, it keeps whatever is actually happening rather than the first N
-  // in plan order: the active task, the ones still to come, and enough finished
-  // ones to show where the run has got to.
-  //
+  const activeAgent = active?.agentId
+    ? agents.find((entry) => entry.id === active.agentId)
+    : undefined;
+  const agent =
+    activeAgent ??
+    agents.find((entry) => entry.status === "COMPACTING") ??
+    agents.find((entry) => entry.status === "WORKING") ??
+    agents[0];
   const activeIndex = Math.max(
     0,
     tasks.findIndex((task) => task.id === run.activeTaskId),
   );
   const window = Math.max(0, Math.min(activeIndex - 1, tasks.length - COLLAPSED_TASKS));
-  const visibleTasks = expanded ? tasks : tasks.slice(window, window + COLLAPSED_TASKS);
-  const hiddenCount = tasks.length - visibleTasks.length;
+  return {
+    run,
+    tasks,
+    agents,
+    active,
+    agent,
+    latest: events.at(-1),
+    done: tasks.filter((task) => task.status === "SUCCEEDED").length,
+    visibleTasks: expanded ? tasks : tasks.slice(window, window + COLLAPSED_TASKS),
+    hiddenCount: Math.max(0, tasks.length - COLLAPSED_TASKS),
+  };
+}
+
+function RunInlineBody({ snapshot }: { snapshot: AgenticRunSnapshot }) {
+  const [open, setOpen] = useState(readOpen);
+  const [expanded, setExpanded] = useState(false);
+  const { run, tasks, agents, active, agent, latest, done, visibleTasks, hiddenCount } =
+    deriveRunInlineView(snapshot, expanded);
 
   const toggle = (): void => {
     setOpen((value) => {
@@ -218,13 +237,7 @@ function RunInlineBody({ snapshot }: { snapshot: AgenticRunSnapshot }) {
   };
 
   return (
-    //
-    // The same width as the composer, and for the same reason it has one: this
-    // sits directly above it and any other measurement reads as a mistake. The
-    // composer is max-w-[calc(var(--composer-w)*0.9)] with sm:w-[90%]; using
-    // --composer-w raw made the strip wider than the box it belongs to.
-    //
-    <div className="mx-auto w-full max-w-[calc(var(--composer-w)*0.9)] pb-1 sm:w-[90%]">
+    <ComposerColumn className="pb-1">
       <div className="rounded-[var(--ui-radius)] border border-(--ui-separator) bg-(--ui-surface) px-3 py-2">
         <div className="flex flex-wrap items-center gap-2">
           <button
@@ -283,6 +296,6 @@ function RunInlineBody({ snapshot }: { snapshot: AgenticRunSnapshot }) {
           />
         ) : null}
       </div>
-    </div>
+    </ComposerColumn>
   );
 }

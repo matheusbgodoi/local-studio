@@ -39,7 +39,7 @@ export function MobileNavigationDrawer({
       >
         <div className="mobile-pwa-drawer-header flex shrink-0 items-center justify-between gap-3 px-4">
           <div className="min-w-0 truncate text-[19px] font-semibold tracking-[-0.01em] text-(--fg)">
-            Local Studio
+            CRIAs AI
           </div>
           <button
             type="button"

@@ -6,6 +6,7 @@ import type { GPU, HuggingFaceModel } from "@/lib/types";
 import type { ModelIndexModel } from "@/lib/api/studio";
 import { useHuggingFaceModelSearch } from "@/features/recipes/use-huggingface-model-search";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
+import { useControllerCapabilities } from "@/hooks/controller-capabilities-store";
 import {
   engagementTier,
   isDerivativeModel,
@@ -70,6 +71,8 @@ export function derivativeScore(model: HuggingFaceModel, search: string): number
 }
 
 export function useExplore() {
+  const { capabilities } = useControllerCapabilities();
+  const modelIndexSupported = capabilities.features.modelIndex === "supported";
   const [gpus, setGpus] = useState<GPU[]>([]);
   const [apiMaxVramGb, setApiMaxVramGb] = useState(0);
   const [search, setSearch] = useState("");
@@ -125,14 +128,14 @@ export function useExplore() {
 
   const loadCatalogAndGpus = useCallback(async () => {
     const [indexData, presetsData, gpuData] = await Promise.all([
-      api.getModelIndex().catch(() => null),
+      modelIndexSupported ? api.getModelIndex().catch(() => null) : Promise.resolve(null),
       api.getStarterPresets().catch(() => null),
       api.getGPUs().catch(() => ({ gpus: [] as GPU[] })),
     ]);
     setCatalogModels(indexData?.tiers?.flatMap((tier) => tier.models) ?? []);
     setApiMaxVramGb(typeof presetsData?.max_vram_gb === "number" ? presetsData.max_vram_gb : 0);
     setGpus(gpuData.gpus ?? []);
-  }, []);
+  }, [modelIndexSupported]);
 
   useMountSubscription(() => {
     void loadCatalogAndGpus();

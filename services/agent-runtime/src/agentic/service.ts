@@ -8,7 +8,11 @@
 // time, with no event listener able to advance a Run twice.
 //
 
-import { resolveAgenticCapability, withRuntimeContextWindow, type AgenticCapability } from "./capability";
+import {
+  resolveAgenticCapability,
+  withRuntimeContextWindow,
+  type AgenticCapability,
+} from "./capability";
 import {
   computeContextBudget,
   DEFAULT_CONTEXT_BUDGET_POLICY,
@@ -16,6 +20,11 @@ import {
 } from "./context-budget";
 import type { AgenticAgent, AgenticRun, AgenticRunSnapshot } from "./contract";
 import { createPiAgenticSession } from "./pi-session-adapter";
+import {
+  createInferenceActivityRegistry,
+  type InferenceActivityObserver,
+  type InferenceActivityRegistry,
+} from "./inference-activity";
 import { settleDriveFailure } from "./recovery";
 import { createAgenticRunService, type StartRunInput } from "./run-service";
 import { setAgenticControlHost } from "./control-host";
@@ -26,8 +35,16 @@ import { resolveDataDir } from "../data-dir";
 import { getGlobalSingleton } from "../instances";
 import { piRuntimeManager } from "../pi-runtime";
 import { refreshPiModels } from "../pi-runtime-models";
+import {
+  forgetSessionMetadataMany,
+  readSessionListMetadata,
+  setSessionInternal,
+} from "../session-metadata-store";
 import type { AgentModel } from "../../../../shared/agent/models";
 import { networkService } from "../network";
+import { randomUUID } from "node:crypto";
+import { existsSync, renameSync, rmSync } from "node:fs";
+import { findSessionFile } from "../sessions-store";
 
 export const AGENTIC_USABLE_CONTEXT_ENV = "LOCAL_STUDIO_AGENTIC_USABLE_CONTEXT";
 
@@ -53,8 +70,11 @@ type RuntimeState = {
   store: AgenticStore;
   service: ReturnType<typeof createAgenticRunService>;
   loops: Map<string, Promise<void>>;
+  cancellations: Map<string, Promise<void>>;
   cancelled: Set<string>;
   capabilities: Map<string, AgenticCapability>;
+  hiddenRollouts: Set<string>;
+  inferenceActivity: InferenceActivityRegistry;
 };
 
 //
@@ -72,18 +92,41 @@ const piSessionFor = (run: AgenticRun, agent: AgenticAgent | null) =>
     agent ? agent.piSessionId : run.piSessionId,
   ).session;
 
-const sessionFor = (run: AgenticRun, agent: AgenticAgent | null) =>
+const sessionFor = (
+  run: AgenticRun,
+  agent: AgenticAgent | null,
+  inferenceObserver?: InferenceActivityObserver,
+) =>
   createPiAgenticSession({
     session: piSessionFor(run, agent),
     modelId: run.modelId,
     cwd: run.cwd,
     piSessionId: agent ? agent.piSessionId : run.piSessionId,
     fallbackContextWindow: run.contextWindow,
+    inferenceObserver,
   });
+
+const ROLLOUT_TITLE_CHARS = 72;
+
+const hideExecutionRollout = (
+  run: AgenticRun,
+  agent: AgenticAgent,
+  piSessionId: string,
+): Promise<void> => {
+  const goal = run.goal.replace(/\s+/g, " ").trim();
+  const short = goal.length > ROLLOUT_TITLE_CHARS ? `${goal.slice(0, ROLLOUT_TITLE_CHARS)}…` : goal;
+  return setSessionInternal(piSessionId, {
+    cwd: run.cwd,
+    title: `Run: ${short} — ${agent.name}`,
+  });
+};
 
 function createRuntime(): RuntimeState {
   const store = createAgenticStore(resolveDataDir());
   const capabilities = new Map<string, AgenticCapability>();
+  const hiddenRollouts = new Set<string>();
+  const cancelled = new Set<string>();
+  const inferenceActivity = createInferenceActivityRegistry();
 
   const capabilityFor = (run: AgenticRun): AgenticCapability => {
     const cached = capabilities.get(run.id);
@@ -95,14 +138,39 @@ function createRuntime(): RuntimeState {
 
   const service = createAgenticRunService({
     store,
-    session: sessionFor,
+    session: (run, agent) =>
+      sessionFor(
+        run,
+        agent,
+        agent ? inferenceActivity.observer(run.id, agent.id) : undefined,
+      ),
     capabilityFor,
     budgetPolicy: agenticBudgetPolicy(),
+    isCancelled: (runId) => cancelled.has(runId),
   });
 
   service.recover();
 
-  return { store, service, loops: new Map(), cancelled: new Set(), capabilities };
+  for (const run of store.listRuns()) {
+    for (const agent of store.listAgents(run.id)) {
+      if (!agent.piSessionId) continue;
+      const piSessionId = agent.piSessionId;
+      void hideExecutionRollout(run, agent, piSessionId)
+        .then(() => hiddenRollouts.add(piSessionId))
+        .catch(() => {});
+    }
+  }
+
+  return {
+    store,
+    service,
+    loops: new Map(),
+    cancellations: new Map(),
+    cancelled,
+    capabilities,
+    hiddenRollouts,
+    inferenceActivity,
+  };
 }
 
 const NETWORK_RECOVERY = new WeakSet<object>();
@@ -139,6 +207,7 @@ export function capabilityFromRun(run: AgenticRun): AgenticCapability {
   return {
     modelId: run.modelId,
     physicalModelId: run.physicalModelId,
+    displayName: run.modelDisplayName ?? run.physicalModelId,
     behaviorProfile: run.behaviorProfile,
     behaviorProfileLabel: null,
     contextWindow: run.contextWindow,
@@ -149,8 +218,22 @@ export function capabilityFromRun(run: AgenticRun): AgenticCapability {
     contextWindowDeclared: true,
   };
 }
-const TERMINAL = new Set(["COMPLETED", "FAILED", "CANCELLED", "WAITING_USER"]);
+const FINAL_TERMINAL = new Set(["COMPLETED", "FAILED", "CANCELLED"]);
+const DRIVE_STOPPED = new Set([...FINAL_TERMINAL, "WAITING_USER"]);
 const MAX_LOOP_STEPS = 10_000;
+const CANCEL_CONFIRMATION_TIMEOUT_MS = 15_000;
+
+async function settlesWithin(task: Promise<void>, timeoutMs: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), timeoutMs);
+  });
+  try {
+    return await Promise.race([task.then(() => true as const), deadline]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 export function agenticRuntime() {
   const state = getGlobalSingleton("agenticRuntime", createRuntime);
@@ -171,7 +254,7 @@ export function agenticRuntime() {
     for (let step = 0; step < MAX_LOOP_STEPS; step += 1) {
       if (state.cancelled.has(runId)) return;
       const run = state.store.requireRun(runId);
-      if (TERMINAL.has(run.status)) return;
+      if (DRIVE_STOPPED.has(run.status)) return;
       //
       // THE GATE HAS TO BE HERE, because this is the loop that actually takes
       // turns. run-service exposes startRun/resumeRun, but nothing in
@@ -202,26 +285,19 @@ export function agenticRuntime() {
           usableLimit: computeContextBudget(observed, agenticBudgetPolicy()).usableLimit,
         });
       }
-      //
-      // The pi session id only exists once the runtime has started. Adopting
-      // it is what lets a restart find the same rollout instead of opening a
-      // second conversation for a Run already in flight.
-      //
-      //
-      // Each agent adopts the pi session id of its OWN runtime session, so a
-      // restart finds each working context again rather than collapsing them
-      // onto the Run's conversation.
-      //
       for (const agent of state.store.listAgents(runId)) {
         const own = piSessionFor(run, agent).status.piSessionId;
         if (own && own !== agent.piSessionId) {
           state.store.updateAgent(agent.id, { piSessionId: own });
         }
+        if (own && !state.hiddenRollouts.has(own)) {
+          try {
+            await hideExecutionRollout(run, agent, own);
+            state.hiddenRollouts.add(own);
+          } catch {}
+        }
       }
-      const adopted = piSessionFor(run, primaryAgent).status.piSessionId;
-      if (adopted && adopted !== run.piSessionId) {
-        state.store.updateRun(runId, { piSessionId: adopted });
-      }
+      if (state.cancelled.has(runId)) return;
       await state.service.scheduler.advance(runId, observed);
     }
   };
@@ -231,6 +307,7 @@ export function agenticRuntime() {
     state.cancelled.delete(runId);
     const loop = drive(runId)
       .catch((error: unknown) => {
+        if (state.cancelled.has(runId)) return;
         //
         // The backend going away is an accident of the moment, not a verdict
         // on the goal, so it takes the road a killed process takes rather than
@@ -247,7 +324,7 @@ export function agenticRuntime() {
         // had asked for any more.
         //
         const status = state.store.getRun(runId)?.status;
-        if (status && TERMINAL.has(status)) networkService().releaseRun(runId);
+        if (status && FINAL_TERMINAL.has(status)) networkService().releaseRun(runId);
       });
     state.loops.set(runId, loop);
   };
@@ -295,9 +372,21 @@ export function agenticRuntime() {
   //
   const chatSessionOf = (sessionId: string): string => sessionId.split("#")[0] ?? sessionId;
 
-  const activeRunForSession = (sessionId: string): AgenticRun | null => {
-    const chat = chatSessionOf(sessionId);
-    return state.store.listUnfinishedRuns().find((run) => run.sessionId === chat) ?? null;
+  const currentRunForConversation = (
+    sessionId: string,
+    piSessionId: string | null = null,
+  ): AgenticRun | null =>
+    state.store.currentRunForConversation({
+      sessionId: chatSessionOf(sessionId),
+      piSessionId,
+    });
+
+  const activeRunForSession = (
+    sessionId: string,
+    piSessionId: string | null = null,
+  ): AgenticRun | null => {
+    const run = currentRunForConversation(sessionId, piSessionId);
+    return run && !FINAL_TERMINAL.has(run.status) ? run : null;
   };
 
   //
@@ -353,8 +442,15 @@ export function agenticRuntime() {
     service: state.service,
     resolveCapability,
     activeRunForSession,
+    currentRunForConversation,
     listRuns: (): AgenticRun[] => state.store.listRuns(),
-    snapshot: (runId: string): AgenticRunSnapshot => state.service.snapshot(runId),
+    snapshot: (runId: string): AgenticRunSnapshot => {
+      const snapshot = state.service.snapshot(runId);
+      return {
+        ...snapshot,
+        inferenceActivity: state.inferenceActivity.snapshot(snapshot.run, snapshot.agents),
+      };
+    },
     startRun: async (input: Omit<StartRunInput, "capability"> & { modelId: string }) => {
       const capability = await resolveCapability(input.modelId);
       const run = state.service.createRun({ ...input, capability });
@@ -364,16 +460,121 @@ export function agenticRuntime() {
     },
     resumeRun: async (runId: string): Promise<AgenticRun> => {
       const run = state.store.requireRun(runId);
-      if (TERMINAL.has(run.status) && run.status !== "WAITING_USER") return run;
+      if (FINAL_TERMINAL.has(run.status)) return run;
+      if (state.cancellations.has(runId) || state.loops.has(runId)) {
+        throw new Error("This Run is still settling. Wait a moment before resuming it.");
+      }
+      state.cancelled.delete(runId);
       state.store.updateRun(runId, { status: "RUNNING" });
       startLoop(runId);
       return state.store.requireRun(runId);
     },
-    cancelRun: (runId: string): AgenticRun => {
+    cancelRun: async (
+      runId: string,
+    ): Promise<{ run: AgenticRun; cancellationPending: boolean }> => {
+      const initial = state.store.requireRun(runId);
+      if (FINAL_TERMINAL.has(initial.status)) {
+        return { run: initial, cancellationPending: false };
+      }
+      const existing = state.cancellations.get(runId);
+      if (existing) {
+        const settled = await settlesWithin(existing, CANCEL_CONFIRMATION_TIMEOUT_MS);
+        return { run: state.store.requireRun(runId), cancellationPending: !settled };
+      }
       state.cancelled.add(runId);
-      state.store.updateRun(runId, { status: "CANCELLED", activeTaskId: null });
-      state.store.appendEvent({ runId, type: "RUN_CANCELLED", summary: "cancelled by the owner" });
-      return state.store.requireRun(runId);
+      const settle = (async () => {
+        await state.service.scheduler.abortRun(runId);
+        await state.loops.get(runId)?.catch(() => undefined);
+        const current = state.store.requireRun(runId);
+        if (!FINAL_TERMINAL.has(current.status)) state.service.cancelRun(runId);
+      })()
+        .catch((error: unknown) => {
+          const current = state.store.getRun(runId);
+          if (current && !FINAL_TERMINAL.has(current.status)) {
+            state.store.transaction(() => {
+              state.store.updateRun(runId, { status: "PAUSED" });
+              state.store.appendEvent({
+                runId,
+                type: "RUN_CANCELLATION_PAUSED",
+                summary: "cancellation could not confirm that inference became idle; Run paused",
+              });
+            });
+          }
+          throw error;
+        })
+        .finally(() => state.cancellations.delete(runId));
+      state.cancellations.set(runId, settle);
+      const settled = await settlesWithin(settle, CANCEL_CONFIRMATION_TIMEOUT_MS);
+      return {
+        run: state.store.requireRun(runId),
+        cancellationPending: !settled,
+      };
+    },
+    archiveRun: (runId: string, archived: boolean): AgenticRun =>
+      state.store.archiveRun(runId, archived),
+    deleteRun: async (runId: string): Promise<void> => {
+      if (state.loops.has(runId) || state.cancellations.has(runId)) {
+        throw new Error("The Run is still settling and cannot be deleted yet.");
+      }
+      const run = state.store.requireRun(runId);
+      const taskIds = state.store.listTasks(runId).map((task) => task.id);
+      const rolloutIds = state.store
+        .listAgents(runId)
+        .map((agent) => agent.piSessionId)
+        .filter((id): id is string => Boolean(id));
+      const usedElsewhere = new Set(
+        state.store
+          .listRuns()
+          .filter((entry) => entry.id !== runId)
+          .flatMap((entry) => state.store.listAgents(entry.id))
+          .map((agent) => agent.piSessionId)
+          .filter((id): id is string => Boolean(id)),
+      );
+      const metadataFor = readSessionListMetadata();
+      const targets: Array<{ source: string; quarantine: string }> = [];
+      for (const id of rolloutIds) {
+        if (id === run.piSessionId || usedElsewhere.has(id)) {
+          throw new Error(
+            "A Run rollout is shared with another durable record and was not deleted.",
+          );
+        }
+        const source = findSessionFile(run.cwd, id);
+        if (!source) continue;
+        if (!metadataFor(id).internal) {
+          throw new Error("A Run rollout is not marked internal and was not deleted.");
+        }
+        targets.push({ source, quarantine: `${source}.run-delete-${randomUUID()}` });
+      }
+      const quarantined: Array<{ source: string; quarantine: string }> = [];
+      try {
+        for (const target of targets) {
+          renameSync(target.source, target.quarantine);
+          quarantined.push(target);
+        }
+        state.store.deleteRun(runId);
+        state.service.forgetRun(runId, taskIds);
+        state.inferenceActivity.clearRun(runId);
+      } catch (error) {
+        for (const item of quarantined.reverse()) {
+          if (existsSync(item.quarantine)) renameSync(item.quarantine, item.source);
+        }
+        throw error;
+      }
+      for (const item of quarantined) {
+        try {
+          rmSync(item.quarantine, { force: true });
+        } catch {
+          // A quarantined rollout no longer appears in session listings. It is
+          // safer to leave an orphaned file than persist an arbitrary session
+          // path in the recursive artifact-cleanup manifest.
+        }
+      }
+      await forgetSessionMetadataMany(rolloutIds).catch((error) => {
+        console.warn("[agentic] Run deleted but internal rollout metadata cleanup failed", error);
+      });
+      for (const id of rolloutIds) state.hiddenRollouts.delete(id);
+      state.capabilities.delete(runId);
+      state.cancelled.delete(runId);
     },
     readArtifact: (artifactId: string, offset: number, length: number): string | null =>
       state.store.readArtifactSlice(artifactId, offset, length),

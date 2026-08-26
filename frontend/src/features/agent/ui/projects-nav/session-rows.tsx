@@ -26,6 +26,7 @@ import {
   rememberAgentSessionNavTitle,
   setAgentSessionDragData,
   deleteSession,
+  moveSessionToProject,
   setSessionArchive,
   hrefWithOpenNonce,
 } from "./helpers";
@@ -401,6 +402,23 @@ export function ActiveSessionRow({
       // says that it cannot be undone. Keyed on the pi session id for the same
       // reason archive is: without a thread there is nothing on disk to remove.
       //
+      //
+      // Not offered while the turn is running. A move relocates the transcript
+      // on disk, and the agent has that file open for append — it would keep
+      // writing to the old path and the moved copy would silently stop growing.
+      //
+      onMoveToProject={
+        session.threadId && project && activity !== "running"
+          ? (target) => {
+              if (target.id === project.id) return;
+              void moveSessionToProject(session.threadId as string, project, target).catch(
+                (error) => {
+                  console.warn("[agent] failed to move session", error);
+                },
+              );
+            }
+          : undefined
+      }
       onDelete={
         session.threadId
           ? () => {

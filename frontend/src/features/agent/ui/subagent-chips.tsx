@@ -6,6 +6,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Spinner } from "@/ui";
+import { ComposerColumn } from "@/features/runs/composer-column";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 
 type SubagentRun = {
@@ -53,7 +54,7 @@ export function SubagentChips({ piSessionId }: { piSessionId: string }) {
   if (runs.length === 0) return null;
 
   return (
-    <div className="mx-auto mb-1.5 flex w-full max-w-[var(--composer-w)] flex-wrap items-center gap-1.5">
+    <ComposerColumn className="mb-1.5 flex flex-wrap items-center gap-1.5">
       {runs.map((run) => (
         <button
           key={run.id}
@@ -84,6 +85,6 @@ export function SubagentChips({ piSessionId }: { piSessionId: string }) {
           {run.status === "done" ? <span className="text-(--fg)/40">updated</span> : null}
         </button>
       ))}
-    </div>
+    </ComposerColumn>
   );
 }

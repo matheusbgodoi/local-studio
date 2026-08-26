@@ -30,9 +30,8 @@ function ProfileList({ card }: { card: LocalModelCard }) {
     <div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-[length:var(--fs-xs)] text-(--ui-muted)">
       {card.profiles.map((profile) => (
         <span key={profile.id} className="min-w-0">
-          <span className="text-(--ui-fg)">{profile.label}</span> {profile.id}
+          <span className="text-(--ui-fg)">{profile.label}</span>
           {profile.isDefault ? " · default" : ""}
-          {profile.resident ? " · resident" : ""}
         </span>
       ))}
     </div>
@@ -44,7 +43,9 @@ function LocalModelRow({ card }: { card: LocalModelCard }) {
   return (
     <ModelRow
       label={card.displayName}
-      description={card.aliases.join(" · ")}
+      description={
+        card.profiles.length > 1 ? `${card.profiles.length} behavior profiles` : undefined
+      }
       // NO REMOTE AVATAR. ModelLogo works the owner out by substring-matching the model string
       // against a keyword table (/qwen|qwq|qvq/i -> "Qwen", /llama/i -> "meta-llama",
       // /gemma/i -> "google", ...) and fetches that org's avatar from huggingface.co. Two
@@ -66,7 +67,13 @@ function LocalModelRow({ card }: { card: LocalModelCard }) {
 
 type ServedSummary = { tone: ModelStatusTone; label: string; empty: string };
 
-function servedSummary(loading: boolean, error: string | null, count: number): ServedSummary {
+function servedSummary(
+  loading: boolean,
+  stale: boolean,
+  error: string | null,
+  count: number,
+): ServedSummary {
+  if (stale && count > 0) return { tone: "warning", label: "cached", empty: "" };
   if (error) return { tone: "danger", label: "error", empty: error };
   if (loading) return { tone: "info", label: "loading", empty: "Waiting for the backend…" };
   if (count === 0) return { tone: "default", label: "empty", empty: "Nothing served" };
@@ -81,10 +88,13 @@ function connection(statusKnown: boolean, connected: boolean): ServedSummary {
 }
 
 export function LocalModelsTab() {
-  const { cards, loading, error, connected, statusKnown, residentAlias, pool, refresh } =
+  const { cards, loading, stale, error, connected, statusKnown, residentAlias, pool, refresh } =
     useLocalModels();
-  const served = servedSummary(loading, error, cards.length);
+  const served = servedSummary(loading, stale, error, cards.length);
   const link = connection(statusKnown, connected);
+  const residentDisplayName =
+    cards.find((card) => card.resident)?.displayName ??
+    (residentAlias ? "Model identity unavailable" : null);
 
   return (
     <div className="space-y-6">
@@ -106,8 +116,10 @@ export function LocalModelsTab() {
         ) : null}
         <ModelRow
           label="Resident model"
-          description="The alias currently loaded into the inference process."
-          value={residentAlias ? <ModelValue mono>{residentAlias}</ModelValue> : undefined}
+          description="The model currently held in VRAM."
+          value={
+            residentDisplayName ? <ModelValue mono>{residentDisplayName}</ModelValue> : undefined
+          }
           status={
             <ModelStatus tone={residentAlias ? "good" : "default"}>
               {residentAlias ? "loaded" : "idle"}
@@ -117,8 +129,8 @@ export function LocalModelsTab() {
       </ModelSection>
 
       <ModelSection
-        title="Served models"
-        description="Every alias this backend serves, grouped by the checkpoint behind it."
+        title="Available models"
+        description="The model identities available here, grouped by the checkpoint behind them."
         actions={
           <div className="flex items-center gap-2.5">
             <ModelStatus tone={served.tone}>{served.label}</ModelStatus>
@@ -132,7 +144,11 @@ export function LocalModelsTab() {
         {error ? (
           <ModelRow
             label="The served model list could not be read"
-            description="This is the one route the page depends on, so nothing below is current."
+            description={
+              stale
+                ? "The last list from this controller remains visible below."
+                : "No served model list is available for this controller."
+            }
             value={<ModelValue dim>{error}</ModelValue>}
             status={<ModelStatus tone="danger">error</ModelStatus>}
           />

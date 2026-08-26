@@ -6,7 +6,18 @@ import { POPOVER_MENU_CLASS } from "@/ui/popover";
 import { useRouter } from "next/navigation";
 import { useRef, useState, type DragEvent, type MouseEvent } from "react";
 import { useClickOutside } from "@/features/agent/hooks/use-click-outside";
-import { Archive, MoreIcon, PinIcon, PinOffIcon, SquarePen, Trash2, X } from "@/ui/icon-registry";
+import {
+  Archive,
+  Folder,
+  MoreIcon,
+  PinIcon,
+  PinOffIcon,
+  RotateCcw,
+  SquarePen,
+  Trash2,
+} from "@/ui/icon-registry";
+import { useProjects } from "@/features/agent/projects/context";
+import type { Project } from "@/features/agent/projects/types";
 import type { SessionPref } from "@/features/agent/messages/prefs";
 import { hrefWithOpenNonce, navigateToSessionHref, visibleSessionAge } from "./helpers";
 import { PinButton } from "./nav-chrome";
@@ -24,6 +35,7 @@ type SessionNavRowProps = {
   onPatchPref: (patch: SessionPref) => void;
   onArchive?: () => void;
   onDelete?: () => void;
+  onMoveToProject?: (target: Project) => void;
   onRenameCommit?: (title: string) => void;
   onRememberTitle?: () => void;
   onDragStart: (event: DragEvent) => void;
@@ -51,6 +63,7 @@ export function SessionNavRow({
   onPatchPref,
   onArchive,
   onDelete,
+  onMoveToProject,
   onRenameCommit,
   onRememberTitle,
   onDragStart,
@@ -164,6 +177,7 @@ export function SessionNavRow({
           <SessionOptionsMenu
             onArchive={onArchive}
             onDelete={onDelete}
+            onMoveToProject={onMoveToProject}
             onClear={() => onPatchPref({ title: undefined, pinned: undefined })}
             onClose={() => setMenuOpen(false)}
             onPin={() => onPatchPref({ pinned: !pref.pinned })}
@@ -355,6 +369,7 @@ function SessionRowContent({
 function SessionOptionsMenu({
   onArchive,
   onDelete,
+  onMoveToProject,
   onClear,
   onClose,
   onPin,
@@ -364,6 +379,7 @@ function SessionOptionsMenu({
 }: {
   onArchive?: () => void;
   onDelete?: () => void;
+  onMoveToProject?: (target: Project) => void;
   onClear: () => void;
   onClose: () => void;
   onPin: () => void;
@@ -371,11 +387,31 @@ function SessionOptionsMenu({
   pref: SessionPref;
   showClearAction: boolean;
 }) {
+  const { projects } = useProjects();
+  const [movePicker, setMovePicker] = useState(false);
   const showClear = showClearAction && (pref.title || pref.pinned);
   const run = (action: () => void) => () => {
     onClose();
     action();
   };
+
+  //
+  // The list is every project including Chats, minus the one it is already in.
+  // Chats is not filtered out or relabelled: moving there IS taking a
+  // conversation out of a project, and naming it anything else would invent a
+  // destination the rest of the sidebar does not have.
+  //
+  if (movePicker && onMoveToProject) {
+    return (
+      <div className={SESSION_MENU_CLASS} role="menu">
+        {projects.map((target) => (
+          <MenuItem key={target.id} Icon={Folder} onClick={run(() => onMoveToProject(target))}>
+            {target.name}
+          </MenuItem>
+        ))}
+      </div>
+    );
+  }
 
   return (
     <div className={SESSION_MENU_CLASS} role="menu">
@@ -385,6 +421,11 @@ function SessionOptionsMenu({
       <MenuItem Icon={SquarePen} onClick={run(onRename)}>
         Rename
       </MenuItem>
+      {onMoveToProject ? (
+        <MenuItem Icon={Folder} onClick={() => setMovePicker(true)}>
+          Move to project
+        </MenuItem>
+      ) : null}
       {onArchive ? (
         <MenuItem Icon={Archive} onClick={run(onArchive)}>
           Archive
@@ -393,8 +434,8 @@ function SessionOptionsMenu({
       {showClear ? (
         <>
           <div className="mx-1 my-1 h-px bg-(--border)" />
-          <MenuItem Icon={X} danger onClick={run(onClear)}>
-            Clear
+          <MenuItem Icon={RotateCcw} onClick={run(onClear)}>
+            Reset name &amp; pin
           </MenuItem>
         </>
       ) : null}

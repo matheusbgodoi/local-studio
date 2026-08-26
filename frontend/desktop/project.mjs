@@ -1073,7 +1073,7 @@ function notarizeApplication(app, archive, credentials, execute = run2) {
   ]);
 }
 async function refreshUpdateMetadata(output3, version) {
-  let { buildBlockMap } = require4(path9.join(frontend, "node_modules", "app-builder-lib", "out", "targets", "blockmap", "blockmap.js")), YAML = require4(path9.join(frontend, "node_modules", "yaml")), zipName = `Local Studio-${version}-arm64-mac.zip`, dmgName = `Local Studio-${version}-arm64.dmg`, zipInfo = await buildBlockMap(path9.join(output3, zipName), "gzip", path9.join(output3, `${zipName}.blockmap`)), dmgInfo = await buildBlockMap(path9.join(output3, dmgName), "gzip", path9.join(output3, `${dmgName}.blockmap`)), updatePath = path9.join(output3, "latest-mac.yml"), current = YAML.parse(readFileSync12(updatePath, "utf8"));
+  let { buildBlockMap } = require4(path9.join(frontend, "node_modules", "app-builder-lib", "out", "targets", "blockmap", "blockmap.js")), YAML = require4(path9.join(frontend, "node_modules", "yaml")), zipName = `CRIAs AI-${version}-arm64-mac.zip`, dmgName = `CRIAs AI-${version}-arm64.dmg`, zipInfo = await buildBlockMap(path9.join(output3, zipName), "gzip", path9.join(output3, `${zipName}.blockmap`)), dmgInfo = await buildBlockMap(path9.join(output3, dmgName), "gzip", path9.join(output3, `${dmgName}.blockmap`)), updatePath = path9.join(output3, "latest-mac.yml"), current = YAML.parse(readFileSync12(updatePath, "utf8"));
   writeFileSync6(updatePath, YAML.stringify({
     version,
     files: [
@@ -1101,7 +1101,7 @@ async function signDesktopRelease(args3 = process.argv.slice(2)) {
     throw Error("--commit must be a full Git commit SHA");
   if (!prepackaged || !existsSync10(prepackaged))
     throw Error("--prepackaged must point to an unsigned app bundle");
-  let certificate = requireValue("CSC_LINK"), certificatePassword = requireValue("CSC_KEY_PASSWORD"), temporary = path9.join(os3.tmpdir(), `local-studio-release-${process.pid}`), apiKeyPath = path9.join(temporary, "AuthKey_notary.p8"), notaryCredentials = resolveNotarytoolCredentials(process.env, apiKeyPath), certificatePath = path9.join(temporary, "developer-id.p12"), keychainPath = path9.join(temporary, "release-signing.keychain-db"), keychainPassword = randomBytes(32).toString("hex"), originalKeychains = keychainList(), output3 = path9.join(frontend, "dist-desktop"), dmg = path9.join(output3, `Local Studio-${version}-arm64.dmg`), resolvedApp = path9.resolve(prepackaged), appNotaryArchive = path9.join(temporary, "Local Studio.app.zip"), entitlements = path9.join(frontend, "desktop", "resources", "entitlements.mac.plist");
+  let certificate = requireValue("CSC_LINK"), certificatePassword = requireValue("CSC_KEY_PASSWORD"), temporary = path9.join(os3.tmpdir(), `crias-ai-release-${process.pid}`), apiKeyPath = path9.join(temporary, "AuthKey_notary.p8"), notaryCredentials = resolveNotarytoolCredentials(process.env, apiKeyPath), certificatePath = path9.join(temporary, "developer-id.p12"), keychainPath = path9.join(temporary, "release-signing.keychain-db"), keychainPassword = randomBytes(32).toString("hex"), originalKeychains = keychainList(), output3 = path9.join(frontend, "dist-desktop"), dmg = path9.join(output3, `CRIAs AI-${version}-arm64.dmg`), resolvedApp = path9.resolve(prepackaged), appNotaryArchive = path9.join(temporary, "CRIAs AI.app.zip"), entitlements = path9.join(frontend, "desktop", "resources", "entitlements.mac.plist");
   try {
     if (rmSync8(temporary, { recursive: !0, force: !0 }), mkdirSync5(temporary, { recursive: !0, mode: 448 }), notaryCredentials.kind === "api-key")
       writeFileSync6(apiKeyPath, Buffer.from(notaryCredentials.apiKey, "base64"), {
@@ -1183,8 +1183,8 @@ async function signDesktopRelease(args3 = process.argv.slice(2)) {
       "--verbose=4",
       dmg
     ]);
-    let packagedApp = path9.join(output3, "mac-arm64", "Local Studio.app");
-    mkdirSync5(path9.dirname(packagedApp), { recursive: !0 }), rmSync8(packagedApp, { recursive: !0, force: !0 }), symlinkSync3(resolvedApp, packagedApp, "dir"), console.log(`Signed and notarized Local Studio ${version} from ${commit}`);
+    let packagedApp = path9.join(output3, "mac-arm64", "CRIAs AI.app");
+    mkdirSync5(path9.dirname(packagedApp), { recursive: !0 }), rmSync8(packagedApp, { recursive: !0, force: !0 }), symlinkSync3(resolvedApp, packagedApp, "dir"), console.log(`Signed and notarized CRIAs AI ${version} from ${commit}`);
   } finally {
     if (originalKeychains.length > 0)
       run2("security", ["list-keychains", "-d", "user", "-s", ...originalKeychains]);
@@ -1226,7 +1226,7 @@ function valueAfter4(args3, name) {
   return index === -1 ? void 0 : args3[index + 1];
 }
 function releaseAssetNames(version) {
-  let base = `Local Studio-${version}-arm64`;
+  let base = `CRIAs AI-${version}-arm64`;
   return [
     `${base}.dmg`,
     `${base}.dmg.blockmap`,
@@ -1248,7 +1248,7 @@ function sha256(file2) {
   return createHash("sha256").update(readFileSync13(file2)).digest("hex");
 }
 function packagedMetadata() {
-  let archive = path10.join(output3, "mac-arm64", "Local Studio.app", "Contents", "Resources", "app.asar");
+  let archive = path10.join(output3, "mac-arm64", "CRIAs AI.app", "Contents", "Resources", "app.asar");
   if (!existsSync11(archive))
     throw Error(`Missing packaged app archive: ${archive}`);
   let asar = require5(path10.join(frontend2, "node_modules", "@electron", "asar"));
@@ -1272,10 +1272,10 @@ function stageDesktopRelease(args3 = process.argv.slice(2)) {
   rmSync9(staging, { recursive: !0, force: !0 }), mkdirSync6(staging, { recursive: !0 });
   for (let [source, destination] of assets)
     copyFileSync(source, destination);
-  copyFileSync(requireAsset(`Local Studio-${version}-arm64.dmg`), path10.join(staging, "Local-Studio-arm64.dmg"));
+  copyFileSync(requireAsset(`CRIAs AI-${version}-arm64.dmg`), path10.join(staging, "CRIAs-AI-arm64.dmg"));
   let stagedNames = [
     ...names.map(releaseAssetName),
-    "Local-Studio-arm64.dmg"
+    "CRIAs-AI-arm64.dmg"
   ], manifest = {
     schemaVersion: 1,
     version,
@@ -1285,8 +1285,8 @@ function stageDesktopRelease(args3 = process.argv.slice(2)) {
       { sha256: sha256(path10.join(staging, name)) }
     ]))
   };
-  return writeFileSync7(path10.join(staging, "Local-Studio-release.json"), `${JSON.stringify(manifest, null, 2)}
-`), console.log(`Staged ${stagedNames.length + 1} Local Studio ${version} assets in ${staging}`), manifest;
+  return writeFileSync7(path10.join(staging, "CRIAs-AI-release.json"), `${JSON.stringify(manifest, null, 2)}
+`), console.log(`Staged ${stagedNames.length + 1} CRIAs AI ${version} assets in ${staging}`), manifest;
 }
 var root2, frontend2, output3, staging, require5;
 var init_stage_desktop_release = __esm(() => {
@@ -1848,7 +1848,7 @@ async function remoteAccess(args3 = process.argv.slice(2)) {
   if (disable) {
     execFileSync(tailscale, ["serve", "reset"], { stdio: "inherit" });
     for (let file of [tokenFile, hostFile, userFile]) fs5.rmSync(file, { force: true });
-    console.log("Remote access is off. Restart Local Studio so it stops requiring the token.");
+    console.log("Remote access is off. Restart CRIAs AI so it stops requiring the token.");
     return;
   }
 
@@ -1862,7 +1862,7 @@ async function remoteAccess(args3 = process.argv.slice(2)) {
     try {
       port = fs5.readFileSync(path5.join(userData, "embedded-frontend.port"), "utf8").trim();
     } catch {
-      throw Error("Local Studio has not run yet; start it once, or pass --port");
+      throw Error("CRIAs AI has not run yet; start it once, or pass --port");
     }
   }
 
@@ -1887,7 +1887,7 @@ async function remoteAccess(args3 = process.argv.slice(2)) {
 
   console.log("");
   console.log("Remote access is on, for devices on this tailnet only.");
-  console.log("Restart Local Studio so its server starts requiring the token, then open this ONCE");
+  console.log("Restart CRIAs AI so its server starts requiring the token, then open this ONCE");
   console.log("on the phone to pair it (the token moves into a cookie and drops out of the URL):");
   console.log("");
   console.log("  https://" + dns + "/agent?token=" + token);

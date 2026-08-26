@@ -1,11 +1,4 @@
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import lockfile from "proper-lockfile";
 import { resolveDataDir } from "./data-dir";
@@ -22,6 +15,7 @@ export type SessionArchiveState = {
 };
 
 type StoredSessionMetadata = {
+  internal?: boolean;
   archived?: boolean;
   archivedAt?: string | null;
   updatedAt?: string;
@@ -71,6 +65,7 @@ function normalizeStore(value: unknown): SessionMetadataStore {
   for (const [id, metadata] of Object.entries(value.sessions)) {
     if (!id.trim() || !isRecord(metadata)) continue;
     sessions[id] = {
+      internal: metadata.internal === true,
       archived: metadata.archived === true,
       archivedAt: typeof metadata.archivedAt === "string" ? metadata.archivedAt : null,
       updatedAt: typeof metadata.updatedAt === "string" ? metadata.updatedAt : undefined,
@@ -173,6 +168,7 @@ export type SessionSubagentLink = {
 };
 
 export type SessionListMetadata = SessionArchiveState & {
+  internal: boolean;
   parentSessionId: string | null;
   subagentName: string | null;
 };
@@ -182,12 +178,35 @@ export function readSessionListMetadata(): (sessionId: string) => SessionListMet
   return (sessionId) => {
     const metadata = sessions[sessionId];
     return {
+      internal: metadata?.internal === true,
       archived: metadata?.archived === true,
       archivedAt: metadata?.archived === true ? (metadata.archivedAt ?? null) : null,
       parentSessionId: metadata?.parentSessionId ?? null,
       subagentName: metadata?.subagentName ?? null,
     };
   };
+}
+
+export async function setSessionInternal(
+  sessionId: string,
+  metadata?: SessionArchiveMetadataInput,
+): Promise<void> {
+  const id = sessionId.trim();
+  if (!id) return;
+  await withStoreLock(() => {
+    const store = readStore();
+    store.sessions[id] = applyMetadataInput(
+      {
+        ...(store.sessions[id] ?? {}),
+        internal: true,
+        archived: false,
+        archivedAt: null,
+        updatedAt: new Date().toISOString(),
+      },
+      metadata,
+    );
+    writeStore(store);
+  });
 }
 
 export function sessionSubagentLink(sessionId: string): SessionSubagentLink | null {
@@ -222,7 +241,7 @@ export async function setSubagentLink(
 
 export function listArchivedSessionMetadata(): ArchivedSessionMetadata[] {
   return Object.entries(readStore().sessions)
-    .filter(([, metadata]) => metadata.archived === true)
+    .filter(([, metadata]) => metadata.archived === true && metadata.internal !== true)
     .map(([id, metadata]) => ({
       id,
       archived: true,
@@ -258,6 +277,21 @@ export async function forgetSessionMetadata(sessionId: string): Promise<void> {
     if (!store.sessions[id]) return;
     delete store.sessions[id];
     writeStore(store);
+  });
+}
+
+export async function forgetSessionMetadataMany(sessionIds: readonly string[]): Promise<void> {
+  const ids = new Set(sessionIds.map((id) => id.trim()).filter(Boolean));
+  if (ids.size === 0) return;
+  await withStoreLock(() => {
+    const store = readStore();
+    let changed = false;
+    for (const id of ids) {
+      if (!store.sessions[id]) continue;
+      delete store.sessions[id];
+      changed = true;
+    }
+    if (changed) writeStore(store);
   });
 }
 
