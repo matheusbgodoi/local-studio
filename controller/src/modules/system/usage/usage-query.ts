@@ -7,7 +7,7 @@ import {
 import { Effect } from "effect";
 import { badRequest } from "../../../core/errors";
 
-export interface UsageQuery {
+export interface ParsedUsageQuery {
   period: UsagePeriod;
   model: string;
   timezone: string;
@@ -29,7 +29,7 @@ export const parseUsageQuery = (raw: {
   period: string | undefined;
   model: string | undefined;
   tz: string | undefined;
-}): Effect.Effect<UsageQuery, ReturnType<typeof badRequest>> => {
+}): Effect.Effect<ParsedUsageQuery, ReturnType<typeof badRequest>> => {
   const period = raw.period ?? "all";
   const model = raw.model?.trim() || "all";
   const timezone = raw.tz?.trim() || "UTC";
@@ -38,7 +38,7 @@ export const parseUsageQuery = (raw: {
   return Effect.succeed({ period, model, timezone });
 };
 
-const filtersFor = (body: UsageStats, query: UsageQuery): UsageFilters => ({
+const filtersFor = (body: UsageStats, query: ParsedUsageQuery): UsageFilters => ({
   period: query.period,
   model: query.model,
   supported_periods: [...USAGE_PERIODS],
@@ -50,7 +50,7 @@ const filtersFor = (body: UsageStats, query: UsageQuery): UsageFilters => ({
   energy_sample_interval_s: null,
 });
 
-export const withUsageQuery = (body: UsageStats, query: UsageQuery): UsageStats => ({
+export const withUsageQuery = (body: UsageStats, query: ParsedUsageQuery): UsageStats => ({
   ...body,
   timezone: query.timezone,
   filters: filtersFor(body, query),
