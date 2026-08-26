@@ -7,6 +7,7 @@ import {
 } from "./settings-ui";
 import type { ApiConnectionSettings } from "./types";
 import type { CompatibilityCheck, CompatibilityReport, ConfigData, ServiceInfo } from "@/lib/types";
+import { useRealtimeStatusStore } from "@/hooks/realtime-status-store";
 
 export function ServicesSettings({
   data,
@@ -63,11 +64,25 @@ export function SystemOverview({
   loading: boolean;
   error: string | null;
 }) {
+  const realtime = useRealtimeStatusStore();
   const runtime = data?.runtime;
   const checks = compatibilityReport?.checks ?? [];
   const actionableChecks = checks.filter((check) => check.severity !== "info");
-  const controllerState = data ? "Synced" : loading ? "Checking" : "Unavailable";
-  const controllerTone: StatusTone = data ? "good" : error ? "warning" : "info";
+  const controllerState = realtime.connected
+    ? "Online"
+    : data
+      ? "Synced"
+      : loading
+        ? "Checking"
+        : "Unavailable";
+  const controllerTone: StatusTone =
+    realtime.connected || data ? "good" : error ? "warning" : "info";
+  const platform =
+    runtime?.platform.kind ??
+    realtime.runtimeSummary?.platform.kind ??
+    realtime.platformKind ??
+    platformFromGpus(realtime.gpus.map((gpu) => gpu.name));
+  const gpuCount = runtime?.gpus.count ?? realtime.gpus.length;
   const compatibilityState = !compatibilityReport
     ? loading
       ? "Checking"
@@ -91,8 +106,8 @@ export function SystemOverview({
       </div>
       <dl className="grid grid-cols-2 border-y border-(--ui-separator) py-4 sm:grid-cols-4">
         <Stat label="Controller" value={controllerState} />
-        <Stat label="Platform" value={runtime?.platform.kind ?? "Not reported"} />
-        <Stat label="GPUs" value={runtime?.gpus.count ?? "—"} />
+        <Stat label="Platform" value={platform ?? "Not reported"} />
+        <Stat label="GPUs" value={gpuCount || "—"} />
         <Stat label="Compatibility" value={compatibilityState} />
       </dl>
       {error ? (
@@ -109,6 +124,7 @@ export function SystemDetails({
   data: ConfigData | null;
   compatibilityReport: CompatibilityReport | null;
 }) {
+  const realtime = useRealtimeStatusStore();
   return (
     <div>
       <SettingsGroup
@@ -117,7 +133,7 @@ export function SystemDetails({
         collapsible
         defaultOpen={false}
       >
-        <SettingsFactRows rows={machineFactRows(data)} />
+        <SettingsFactRows rows={machineFactRows(data, realtime)} />
       </SettingsGroup>
       <CompatibilitySettings
         checks={compatibilityReport?.checks ?? []}
@@ -193,8 +209,11 @@ function endpointFactRows(
   ];
 }
 
-function machineFactRows(data: ConfigData | null): SettingsFactRow[] {
-  return [...networkFactRows(data), ...storageFactRows(data), ...runtimeFactRows(data)];
+function machineFactRows(
+  data: ConfigData | null,
+  realtime: ReturnType<typeof useRealtimeStatusStore>,
+): SettingsFactRow[] {
+  return [...networkFactRows(data), ...storageFactRows(data), ...runtimeFactRows(data, realtime)];
 }
 
 function networkFactRows(data: ConfigData | null): SettingsFactRow[] {
@@ -232,15 +251,28 @@ function storageFactRows(data: ConfigData | null): SettingsFactRow[] {
   ];
 }
 
-function runtimeFactRows(data: ConfigData | null): SettingsFactRow[] {
+function runtimeFactRows(
+  data: ConfigData | null,
+  realtime: ReturnType<typeof useRealtimeStatusStore>,
+): SettingsFactRow[] {
   const runtime = data?.runtime;
-  const gpuCount = runtime?.gpus.count;
+  const gpuCount = runtime?.gpus.count ?? realtime.gpus.length;
+  const gpuNames = [...new Set(realtime.gpus.map((gpu) => gpu.name).filter(Boolean))];
+  const platform =
+    runtime?.platform.kind ??
+    realtime.runtimeSummary?.platform.kind ??
+    realtime.platformKind ??
+    platformFromGpus(gpuNames);
 
   return [
-    { label: "Platform", value: runtime?.platform.kind ?? "Not reported" },
+    { label: "Platform", value: platform ?? "Not reported" },
     {
       label: "GPU types",
-      value: runtime?.gpus.types.length ? runtime.gpus.types.join(", ") : "Not reported",
+      value: runtime?.gpus.types.length
+        ? runtime.gpus.types.join(", ")
+        : gpuNames.length
+          ? gpuNames.join(", ")
+          : "Not reported",
       truncate: true,
     },
     {
@@ -260,6 +292,14 @@ function runtimeFactRows(data: ConfigData | null): SettingsFactRow[] {
     { label: "CUDA runtime", value: runtime?.cuda.cuda_version ?? "Not reported", mono: true },
     { label: "ROCm", value: runtime?.platform.rocm?.rocm_version ?? "Not reported", mono: true },
   ];
+}
+
+function platformFromGpus(names: readonly string[]): string | null {
+  const joined = names.join(" ").toLowerCase();
+  if (joined.includes("nvidia")) return "cuda";
+  if (joined.includes("amd") || joined.includes("radeon")) return "rocm";
+  if (joined.includes("apple")) return "metal";
+  return null;
 }
 
 function serviceFactRow(service: ServiceInfo): SettingsFactRow {

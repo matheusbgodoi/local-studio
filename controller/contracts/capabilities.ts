@@ -16,6 +16,7 @@ export const ControllerFeaturesSchema = Schema.Struct({
   openapi: CapabilityStateSchema,
   metrics: CapabilityStateSchema,
   metricsHistory: CapabilityStateSchema,
+  runtimeManagement: CapabilityStateSchema,
   usage: CapabilityStateSchema,
 });
 

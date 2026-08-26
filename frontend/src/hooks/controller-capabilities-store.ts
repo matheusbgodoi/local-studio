@@ -32,6 +32,7 @@ const unknownFeatures = (): ControllerFeatures => ({
   openapi: "unknown",
   metrics: "unknown",
   metricsHistory: "unknown",
+  runtimeManagement: "unknown",
   usage: "unknown",
 });
 
@@ -54,6 +55,7 @@ const endpoints: Record<Exclude<keyof ControllerFeatures, "lifecycle">, string> 
   openapi: "/api/spec",
   metrics: "/v1/metrics/vllm",
   metricsHistory: "/metrics/history",
+  runtimeManagement: "/runtime/targets",
   usage: "/usage",
 };
 

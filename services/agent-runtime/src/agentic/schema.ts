@@ -41,7 +41,7 @@ export const loadSqlDatabase = (): new (filepath: string) => SqlDatabase => {
 };
 
 export const AGENTIC_STORE_FILENAME = "agentic-runtime.sqlite";
-export const AGENTIC_STORE_VERSION = 7;
+export const AGENTIC_STORE_VERSION = 8;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS agentic_metadata (
@@ -290,6 +290,7 @@ export function openAgenticDatabase(dataDir: string): { database: SqlDatabase; f
   } else {
     installCurrentConversationIndexes(database);
   }
+  if (storedVersion < 8) repairTerminalAgentStates(database);
   if (storedVersion < AGENTIC_STORE_VERSION) {
     database
       .prepare("UPDATE agentic_metadata SET value = ? WHERE key = 'version'")
@@ -304,6 +305,21 @@ export function openAgenticDatabase(dataDir: string): { database: SqlDatabase; f
     }
   }
   return { database, filepath: target };
+}
+
+function repairTerminalAgentStates(database: SqlDatabase): void {
+  database.exec(`
+    UPDATE agentic_agents
+    SET status = CASE
+          WHEN run_id IN (SELECT id FROM agentic_runs WHERE status = 'COMPLETED') THEN 'FINISHED'
+          ELSE 'INTERRUPTED'
+        END,
+        current_task_id = NULL
+    WHERE status IN ('IDLE','WORKING','COMPACTING','WAITING')
+      AND run_id IN (
+        SELECT id FROM agentic_runs WHERE status IN ('COMPLETED','FAILED','CANCELLED')
+      );
+  `);
 }
 
 function installCurrentConversationIndexes(database: SqlDatabase): void {

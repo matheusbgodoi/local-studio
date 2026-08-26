@@ -37,6 +37,7 @@ interface SettingsViewProps {
   onApiSettingsChange: (nextSettings: ApiConnectionSettings) => void;
   onTestConnection: () => void;
   onSystemSectionActive: () => void;
+  runtimeManagementCapability: "supported" | "unsupported" | "unknown";
 }
 const sectionIcon = (Icon: LucideIcon) => <Icon className="h-3.5 w-3.5" />;
 const SECTIONS: SettingsSectionDef[] = [
@@ -77,6 +78,7 @@ export function SettingsView({
   onApiSettingsChange,
   onTestConnection,
   onSystemSectionActive,
+  runtimeManagementCapability,
 }: SettingsViewProps) {
   const [activeSection, setActiveSection] = useState<SettingsSectionId>("connection");
   const visibleSection = SECTIONS.some((section) => section.id === activeSection)
@@ -138,7 +140,10 @@ export function SettingsView({
             loading={loading}
             error={error}
           />
-          <EnginesSection runtime={data?.runtime ?? null} />
+          <EnginesSection
+            runtime={data?.runtime ?? null}
+            capability={runtimeManagementCapability}
+          />
           <ServicesSettings data={data} apiSettings={apiSettings} loading={loading} error={error} />
           <SystemDetails data={data} compatibilityReport={compatibilityReport} />
         </div>

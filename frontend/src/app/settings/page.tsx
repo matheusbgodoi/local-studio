@@ -23,6 +23,7 @@ export default function SettingsPage() {
       controllerKey={controllerKey}
       configCapability={capabilities.features.config}
       compatibilityCapability={capabilities.features.compatibility}
+      runtimeManagementCapability={capabilities.features.runtimeManagement}
     />
   );
 }
@@ -31,10 +32,12 @@ function SettingsPageForController({
   controllerKey,
   configCapability,
   compatibilityCapability,
+  runtimeManagementCapability,
 }: {
   controllerKey: string;
   configCapability: "supported" | "unsupported" | "unknown";
   compatibilityCapability: "supported" | "unsupported" | "unknown";
+  runtimeManagementCapability: "supported" | "unsupported" | "unknown";
 }) {
   const router = useRouter();
   const configs = useSettings(controllerKey, configCapability, compatibilityCapability);
@@ -77,6 +80,7 @@ function SettingsPageForController({
       onApiSettingsChange={configs.setApiSettings}
       onTestConnection={configs.testConnection}
       onSystemSectionActive={configs.ensureConfigLoaded}
+      runtimeManagementCapability={runtimeManagementCapability}
     />
   );
 }

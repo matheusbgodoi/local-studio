@@ -26,9 +26,11 @@ const STAT = [
 export function RunOverview({
   snapshot,
   asOfMs,
+  modelDisplayName,
 }: {
   snapshot: AgenticRunSnapshot;
   asOfMs: number;
+  modelDisplayName: string;
 }) {
   const { run, tasks, agents } = snapshot;
   const done = tasks.filter((task) => task.status === "SUCCEEDED").length;
@@ -69,11 +71,7 @@ export function RunOverview({
         />
         <Stat className={STAT} label="Session" value={`${formatTokens(cumulative)} cumulative`} />
         <Stat className={STAT} label="Compactions" value={String(run.compactionCount)} />
-        <Stat
-          className={STAT}
-          label="Model"
-          value={run.modelDisplayName ?? "Model identity unavailable"}
-        />
+        <Stat className={STAT} label="Model" value={modelDisplayName} />
         <Stat className={STAT} label="Window" value={formatTokens(run.contextWindow)} />
         {isProtectedPolicy(run.networkPolicy) ? <RunNetworkStat /> : null}
       </div>

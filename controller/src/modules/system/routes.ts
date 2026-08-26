@@ -102,6 +102,7 @@ export const registerSystemRoutes = defineRoutes((app, context) => {
           openapi: "supported" as const,
           metrics: "supported" as const,
           metricsHistory: "unsupported" as const,
+          runtimeManagement: "supported" as const,
           usage: "supported" as const,
         },
       }),

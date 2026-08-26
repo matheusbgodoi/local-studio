@@ -9,7 +9,17 @@ import { agentTone, formatTokens, humanStatus } from "./run-formatters";
 // checkpoint through five independent sessions, so each row names the physical
 // model and the behaviour profile rather than implying a second card.
 //
-export function RunAgents({ snapshot }: { snapshot: AgenticRunSnapshot }) {
+export function RunAgents({
+  snapshot,
+  displayName,
+}: {
+  snapshot: AgenticRunSnapshot;
+  displayName: (
+    modelDisplayName: string | null,
+    physicalModelId: string,
+    modelId: string,
+  ) => string;
+}) {
   const titleById = new Map(snapshot.tasks.map((task) => [task.id, task.title] as const));
   const inferenceByAgent = new Map(
     snapshot.inferenceActivity.map((activity) => [activity.agentId, activity] as const),
@@ -52,7 +62,7 @@ export function RunAgents({ snapshot }: { snapshot: AgenticRunSnapshot }) {
                 { label: "Role", value: agent.role },
                 {
                   label: "Model",
-                  value: agent.modelDisplayName ?? "Model identity unavailable",
+                  value: displayName(agent.modelDisplayName, agent.physicalModelId, agent.modelId),
                 },
                 {
                   label: "Context",
