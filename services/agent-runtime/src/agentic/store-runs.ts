@@ -119,7 +119,7 @@ export function createRunStore(context: AgenticStoreContext) {
         input.physicalModelId,
         input.modelDisplayName,
         input.behaviorProfile,
-        input.networkPolicy,
+        input.networkPolicy ?? "direct",
         input.contextWindow,
         input.usableLimit,
         input.sessionId,
