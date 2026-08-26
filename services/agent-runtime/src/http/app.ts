@@ -74,6 +74,14 @@ import {
   handleNetworkProvider,
   handleNetworkStatus,
 } from "./network-handlers";
+import {
+  handlePersonalMemoryCreate,
+  handlePersonalMemoryDelete,
+  handlePersonalMemoryDeleteOne,
+  handlePersonalMemoryGet,
+  handlePersonalMemorySettings,
+  handlePersonalMemoryUpdate,
+} from "./personal-memory-handlers";
 
 export function createAgentRuntimeApp() {
   const app = new Hono();
@@ -128,6 +136,14 @@ export function createAgentRuntimeApp() {
   app.post("/api/agent/pr/merge", (c) => handlePrMerge(c.req.raw));
   app.get("/api/agent/connectors/session", (c) => handleConnectorSessionGet(c.req.raw));
   app.post("/api/agent/connectors/session", (c) => handleConnectorSessionPut(c.req.raw));
+  app.get("/api/agent/memory", () => handlePersonalMemoryGet());
+  app.post("/api/agent/memory", (c) => handlePersonalMemoryCreate(c.req.raw));
+  app.put("/api/agent/memory/settings", (c) => handlePersonalMemorySettings(c.req.raw));
+  app.post("/api/agent/memory/delete", (c) => handlePersonalMemoryDelete(c.req.raw));
+  app.patch("/api/agent/memory/:id", (c) =>
+    handlePersonalMemoryUpdate(c.req.raw, c.req.param("id")),
+  );
+  app.delete("/api/agent/memory/:id", (c) => handlePersonalMemoryDeleteOne(c.req.param("id")));
   app.get("/api/agent/subagents", (c) => handleSubagentsList(c.req.raw));
   app.post("/api/agent/subagents", (c) => handleSubagentRun(c.req.raw));
   app.get("/api/agent/goal", (c) => handleGoalGet(c.req.raw));
