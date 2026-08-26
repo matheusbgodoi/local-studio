@@ -30,6 +30,9 @@ export function QueuedMessageStack({
   const [editingText, setEditingText] = useState("");
 
   if (items.length === 0) return null;
+  const attachedItems = items.filter((item) => item.attachments?.length);
+  const attachmentMutationOwnerId = attachedItems.length === 1 ? attachedItems[0]?.id : null;
+  const queueHasAttachments = attachedItems.length > 0;
 
   const cancelEdit = () => {
     setEditingId(null);
@@ -52,6 +55,10 @@ export function QueuedMessageStack({
           running={running}
           editing={editingId === item.id}
           editingText={editingText}
+          mutationLocked={
+            queueHasAttachments &&
+            (attachedItems.length > 1 || item.id !== attachmentMutationOwnerId)
+          }
           onEditingTextChange={setEditingText}
           onStartEditing={() => {
             if (item.attachments?.length) return;
@@ -73,6 +80,7 @@ function QueuedMessageRow({
   running,
   editing,
   editingText,
+  mutationLocked,
   onEditingTextChange,
   onStartEditing,
   onCommitEdit,
@@ -84,6 +92,7 @@ function QueuedMessageRow({
   running: boolean;
   editing: boolean;
   editingText: string;
+  mutationLocked: boolean;
   onEditingTextChange: (value: string) => void;
   onStartEditing: () => void;
   onCommitEdit: () => void;
@@ -124,9 +133,14 @@ function QueuedMessageRow({
           <button
             type="button"
             onClick={onStartEditing}
+            disabled={mutationLocked || Boolean(item.attachments?.length)}
             className="min-w-0 flex-1 truncate text-left text-(--fg)/72 hover:text-(--fg)"
             title={
-              item.attachments?.length ? "Attachments are preserved as queued" : "Click to edit"
+              mutationLocked
+                ? "Other queued attachments must be delivered before editing this message"
+                : item.attachments?.length
+                  ? "Attachments are preserved as queued"
+                  : "Click to edit"
             }
           >
             {item.text}
@@ -139,7 +153,7 @@ function QueuedMessageRow({
           ) : null}
         </>
       )}
-      {running && !steering ? (
+      {running && !steering && !mutationLocked ? (
         <button
           type="button"
           onClick={onSteer}
@@ -154,9 +168,12 @@ function QueuedMessageRow({
       <button
         type="button"
         onClick={onRemove}
+        disabled={mutationLocked}
         className="shrink-0 rounded-md p-1 text-(--fg)/40 transition-colors hover:bg-(--fg)/[0.06] hover:text-(--fg)"
         aria-label="Remove queued message"
-        title="Remove from queue"
+        title={
+          mutationLocked ? "Other queued attachments must be delivered first" : "Remove from queue"
+        }
       >
         <Trash2 className="h-3 w-3" />
       </button>
