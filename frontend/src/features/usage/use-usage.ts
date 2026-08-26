@@ -16,13 +16,29 @@ export interface UsageQuery {
 const cacheKey = (query: UsageQuery): string =>
   `usage:stats:provider:${query.period}:${query.model}:${query.timezone}`;
 
+interface UsageState {
+  key: string;
+  stats: UsageStats | null;
+  loading: boolean;
+  error: string | null;
+}
+
+function responseMatchesQuery(stats: UsageStats, query: UsageQuery): boolean {
+  return (
+    stats.filters?.period === query.period &&
+    stats.filters.model === query.model &&
+    stats.timezone === query.timezone
+  );
+}
+
 export function useUsage(query: UsageQuery, controllerKey: string) {
   const statsCacheKey = scopedPageCacheKey(controllerKey, cacheKey(query));
-  const [stats, setStats] = useState<UsageStats | null>(() =>
-    readPageCache<UsageStats>(statsCacheKey),
-  );
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [state, setState] = useState<UsageState>(() => ({
+    key: statsCacheKey,
+    stats: readPageCache<UsageStats>(statsCacheKey),
+    loading: true,
+    error: null,
+  }));
   const requestSequence = useRef(0);
   const activeRef = useRef(false);
 
@@ -37,8 +53,12 @@ export function useUsage(query: UsageQuery, controllerKey: string) {
   const loadStats = useCallback(async () => {
     const requestId = ++requestSequence.current;
     try {
-      setLoading(true);
-      setError(null);
+      setState((current) => ({
+        key: statsCacheKey,
+        stats: current.key === statsCacheKey ? current.stats : null,
+        loading: true,
+        error: null,
+      }));
       const normalized = normalizeUsageStats(
         await api.getUsageStats({
           period: query.period,
@@ -46,22 +66,39 @@ export function useUsage(query: UsageQuery, controllerKey: string) {
           tz: query.timezone,
         }),
       );
+      if (!responseMatchesQuery(normalized, query)) {
+        throw new Error("Usage response does not match the requested filters");
+      }
       if (!activeRef.current || requestId !== requestSequence.current) return;
       writePageCache(statsCacheKey, normalized);
-      setStats(normalized);
+      setState({ key: statsCacheKey, stats: normalized, loading: false, error: null });
     } catch (cause) {
       if (activeRef.current && requestId === requestSequence.current) {
-        setError((cause as Error).message);
+        setState((current) => ({
+          key: statsCacheKey,
+          stats: current.key === statsCacheKey ? current.stats : null,
+          loading: false,
+          error: (cause as Error).message,
+        }));
       }
-    } finally {
-      if (activeRef.current && requestId === requestSequence.current) setLoading(false);
     }
   }, [query, statsCacheKey]);
 
   useMountSubscription(() => {
-    setStats(readPageCache<UsageStats>(statsCacheKey));
+    setState({
+      key: statsCacheKey,
+      stats: readPageCache<UsageStats>(statsCacheKey),
+      loading: true,
+      error: null,
+    });
     void loadStats();
   }, [loadStats, statsCacheKey]);
 
-  return { stats, loading, error, loadStats };
+  const current = state.key === statsCacheKey ? state : null;
+  return {
+    stats: current?.stats ?? null,
+    loading: current?.loading ?? true,
+    error: current?.error ?? null,
+    loadStats,
+  };
 }

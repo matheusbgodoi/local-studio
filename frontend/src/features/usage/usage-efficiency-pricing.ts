@@ -11,7 +11,13 @@ import {
   percent,
   perKwh,
 } from "@/features/usage/usage-formatters";
-import type { UsageEfficiency, UsageEnergyRate, UsageFilters, UsageTokens } from "@/lib/types";
+import type {
+  UsageEfficiency,
+  UsageEfficiencyRatios,
+  UsageEnergyRate,
+  UsageFilters,
+  UsageTokens,
+} from "@/lib/types";
 
 export type EfficiencyTotals = UsageEfficiency["totals"];
 
@@ -93,6 +99,27 @@ export interface PricedTraffic {
   unpriced: string[];
 }
 
+export function effectiveRatios(
+  ratios: UsageEfficiencyRatios,
+  grossEnergy: boolean,
+): {
+  energyKwh: number | null;
+  tokensPerKwh: number | null;
+  kwhPerMillion: number | null;
+} {
+  return grossEnergy
+    ? {
+        energyKwh: ratios.energy_kwh,
+        tokensPerKwh: ratios.tokens_per_kwh,
+        kwhPerMillion: ratios.kwh_per_million_processed,
+      }
+    : {
+        energyKwh: ratios.inference_kwh,
+        tokensPerKwh: ratios.tokens_per_kwh_inference,
+        kwhPerMillion: ratios.kwh_per_million_processed_inference,
+      };
+}
+
 /**
  * The tokens one bench rate is allowed to price, and the aliases it is not.
  *
@@ -137,6 +164,9 @@ export function stripMetrics(
   preferences: EnergyPreferences,
 ): Metric[] {
   const { currency, pricePerKwh: price } = preferences;
+  const selected = effectiveEnergy(totals, preferences.grossEnergy);
+  const energyLabel = selected.attributed ? "Inference energy" : "GPU energy";
+  const costLabel = selected.attributed ? "Inference cost" : "Board cost";
   const processed = { label: "Processed", value: compactTokens(totals.processed_tokens) };
   const coverage = { label: "Coverage", value: percent(totals.coverage_pct) };
 
@@ -148,7 +178,7 @@ export function stripMetrics(
         { label: "Input energy", value: decimals(inputWh, 1, " Wh") },
         { label: "Output energy", value: decimals(outputWh, 1, " Wh") },
         { label: "Request energy", value: decimals(inputWh + outputWh, 1, " Wh") },
-        { label: "Board energy", value: kilowattHours(totals.energy_kwh) },
+        { label: energyLabel, value: kilowattHours(selected.energyKwh) },
         processed,
         coverage,
       ];
@@ -157,7 +187,7 @@ export function stripMetrics(
       { label: "Input cost", value: money((inputWh / 1000) * price, currency, 4) },
       { label: "Output cost", value: money((outputWh / 1000) * price, currency, 4) },
       { label: "Request cost", value: money(((inputWh + outputWh) / 1000) * price, currency, 4) },
-      { label: "Board cost", value: money(product(totals.energy_kwh, price), currency) },
+      { label: costLabel, value: money(product(selected.energyKwh, price), currency) },
       processed,
       coverage,
     ];
@@ -165,43 +195,66 @@ export function stripMetrics(
 
   return [
     processed,
-    { label: "GPU energy", value: kilowattHours(totals.energy_kwh) },
+    { label: energyLabel, value: kilowattHours(selected.energyKwh) },
     price === null
-      ? { label: "Tokens / kWh", value: perKwh(totals.tokens_per_kwh) }
-      : { label: "Board cost", value: money(product(totals.energy_kwh, price), currency) },
-    { label: "Per 1M", value: decimals(totals.kwh_per_million_processed, 3, " kWh") },
+      ? { label: "Tokens / kWh", value: perKwh(selected.tokensPerKwh) }
+      : { label: costLabel, value: money(product(selected.energyKwh, price), currency) },
+    { label: "Per 1M", value: decimals(selected.kwhPerMillion, 3, " kWh") },
     price === null
-      ? { label: "Denominator", value: totals.partial ? "partial" : "complete" }
+      ? { label: "Denominator", value: selected.partial ? "partial" : "complete" }
       : {
           label: "Cost / 1M",
-          value: money(product(totals.kwh_per_million_processed, price), currency, 4),
+          value: money(product(selected.kwhPerMillion, price), currency, 4),
         },
     coverage,
   ];
+}
+
+function selectedFigureLabel(attributed: boolean, priced: boolean): string {
+  if (attributed) return priced ? "Inference cost" : "Inference energy";
+  return priced ? "Board cost" : "Board energy";
+}
+
+function selectedRatiosUnavailable(selected: ReturnType<typeof effectiveEnergy>): boolean {
+  return (
+    selected.energyKwh === null || selected.tokensPerKwh === null || selected.kwhPerMillion === null
+  );
 }
 
 export function stripFootnote(
   totals: EfficiencyTotals,
   rate: UsageEnergyRate | null,
   priced: PricedTraffic | null,
-  price: number | null,
+  preferences: EnergyPreferences,
 ): string {
-  const board = price === null ? "Board energy" : "Board cost";
+  const { pricePerKwh: price } = preferences;
+  const selected = effectiveEnergy(totals, preferences.grossEnergy);
+  const scope = selected.attributed ? "inference energy" : "board energy";
+  const selectedFigure = selectedFigureLabel(selected.attributed, price !== null);
+  if (selected.attributed && selectedRatiosUnavailable(selected)) {
+    const modelled =
+      rate !== null && priced !== null
+        ? " The input, output, and request figures are modelled from the separate bench rate."
+        : "";
+    return `Inference-only telemetry is unavailable for this period. Dynamic energy and efficiency tiles show an em dash rather than falling back to GPU board totals.${modelled}`;
+  }
   // Under partial coverage `energy_kwh` is the sampled seconds only, so the board figure is
   // a floor — and the per-side figures beside it can exceed it for that reason alone.
-  const floor = totals.partial
-    ? `${board} covers only the sampled part of this period${
+  const floor = selected.partial
+    ? `${selectedFigure} covers only the sampled part of this period${
         totals.coverage_pct === null ? "" : ` (${percent(totals.coverage_pct)})`
       }, so it is a floor rather than the period's bill`
-    : `${board} is what the card actually drew, idle included`;
+    : selected.attributed
+      ? `${selectedFigure} is the measured slice caused by inference, idle excluded`
+      : `${selectedFigure} is what the card actually drew, idle included`;
   if (rate === null || priced === null) {
-    const denominator = totals.partial
+    const denominator = selected.partial
       ? " The token counts span the whole period, so tokens per kWh reads high and the per-1M figures read low."
       : "";
-    return `Every tile here is this period's telemetry: measured board energy over all processed tokens, idle included. ${floor}.${denominator}`;
+    return `Every tile here is this period's telemetry: measured ${scope} over all processed tokens${selected.attributed ? ", idle excluded" : ", idle included"}. ${floor}.${denominator}`;
   }
   const measured = `${floor}${
-    totals.partial ? ", and can read lower than the three figures beside it" : ""
+    selected.partial ? ", and can read lower than the three figures beside it" : ""
   }.`;
   const scoped =
     priced.unpriced.length === 0
@@ -210,8 +263,8 @@ export function stripFootnote(
   // "Marginal" is a claim only `scope: "marginal"` backs; without it the bench rate may
   // already carry idle and the reader must not be told the two figures are disjoint.
   const relation = excludedByRates([rate]).includes("idle draw")
-    ? "marginal, so they do not add up to the board figure"
-    : "a different measurement from the board figure, so the two do not add up";
+    ? `marginal, so they do not add up to the ${selectedFigure.toLowerCase()}`
+    : `a different measurement from the ${selectedFigure.toLowerCase()}, so the two do not add up`;
   return `The first three are your token counts ${
     price === null ? "at" : "priced at"
   } the bench rate below, ${relation}.${scoped} ${measured}`;
@@ -222,22 +275,23 @@ export function dailyCells(
   preferences: EnergyPreferences,
 ): ActivityCell[] {
   const { currency, pricePerKwh: price } = preferences;
-  return (efficiency?.daily ?? []).map(
-    (day): ActivityCell => ({
+  return (efficiency?.daily ?? []).map((day): ActivityCell => {
+    const selected = effectiveRatios(day, preferences.grossEnergy);
+    return {
       date: day.date,
-      value: day.tokens_per_kwh,
+      value: selected.tokensPerKwh,
       summary: [
-        `${perKwh(day.tokens_per_kwh)} tokens/kWh`,
-        `${decimals(day.kwh_per_million_processed, 3)} kWh per 1M`,
+        `${perKwh(selected.tokensPerKwh)} tokens/kWh`,
+        `${decimals(selected.kwhPerMillion, 3)} kWh per 1M`,
         price === null
           ? "rate not set"
-          : `${money(product(day.kwh_per_million_processed, price), currency, 4)} per 1M`,
+          : `${money(product(selected.kwhPerMillion, price), currency, 4)} per 1M`,
         `${compactTokens(day.processed_tokens)} processed`,
-        kilowattHours(day.energy_kwh),
+        kilowattHours(selected.energyKwh),
         `coverage ${percent(day.coverage_pct)}`,
       ].join(" · "),
-    }),
-  );
+    };
+  });
 }
 
 /**
@@ -270,20 +324,17 @@ export function effectiveEnergy(
   /** True when a resident model had no measured idle floor, so inference is a floor itself. */
   lowerBound: boolean;
 } {
+  const selected = effectiveRatios(totals, grossEnergy);
   if (grossEnergy) {
     return {
-      energyKwh: totals.energy_kwh,
-      tokensPerKwh: totals.tokens_per_kwh,
-      kwhPerMillion: totals.kwh_per_million_processed,
+      ...selected,
       partial: totals.partial,
       attributed: false,
       lowerBound: false,
     };
   }
   return {
-    energyKwh: totals.inference_kwh,
-    tokensPerKwh: totals.tokens_per_kwh_inference,
-    kwhPerMillion: totals.kwh_per_million_processed_inference,
+    ...selected,
     partial: totals.partial_inference,
     attributed: true,
     lowerBound: totals.inference_is_lower_bound,

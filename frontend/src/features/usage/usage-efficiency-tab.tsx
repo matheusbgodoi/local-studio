@@ -3,7 +3,13 @@
 import { useState } from "react";
 import { EfficiencyCards } from "@/features/usage/usage-efficiency-cards";
 import { EfficiencyHero, EfficiencyStrip } from "@/features/usage/usage-efficiency-hero";
-import { dailyCells, pricedTraffic, product } from "@/features/usage/usage-efficiency-pricing";
+import {
+  dailyCells,
+  effectiveEnergy,
+  effectiveRatios,
+  pricedTraffic,
+  product,
+} from "@/features/usage/usage-efficiency-pricing";
 import { ActivityHeatmap, type ActivityCell } from "@/features/usage/activity-heatmap";
 import type { EnergyPreferences } from "@/features/usage/energy-preferences";
 import { EnergySettings } from "@/features/usage/energy-settings";
@@ -77,7 +83,8 @@ function ByModelBlock({
   const hasRates = measured.length > 0;
   const excluded = excludedByRates(measured);
 
-  const columns = ["Model", "Processed", "Energy", "Tokens / kWh", "kWh / 1M"];
+  const energyLabel = preferences.grossEnergy ? "GPU energy" : "Inference energy";
+  const columns = ["Model", "Processed", energyLabel, "Tokens / kWh", "kWh / 1M"];
   if (price !== null || !hasRates) columns.push("Cost / 1M");
   if (hasRates) {
     columns.push(
@@ -101,15 +108,16 @@ function ByModelBlock({
           // No match means no price. A rate is not transferable between models, and the
           // combined figure cannot be divided into one.
           const bench = physicalToRate.get(model.model);
+          const selected = effectiveRatios(model, preferences.grossEnergy);
           const cells = [
             usageModelLabel(model.model, filters),
             compactTokens(model.processed_tokens),
-            kilowattHours(model.energy_kwh),
-            perKwh(model.tokens_per_kwh),
-            decimals(model.kwh_per_million_processed, 3),
+            kilowattHours(selected.energyKwh),
+            perKwh(selected.tokensPerKwh),
+            decimals(selected.kwhPerMillion, 3),
           ];
           if (price !== null || !hasRates) {
-            cells.push(money(product(model.kwh_per_million_processed, price), currency, 4));
+            cells.push(money(product(selected.kwhPerMillion, price), currency, 4));
           }
           if (hasRates) {
             cells.push(side(bench?.wh_per_1m_input), side(bench?.wh_per_1m_output));
@@ -216,7 +224,11 @@ function EfficiencyHistory({
         ) : (
           <ActivityHeatmap
             cells={cells}
-            metricLabel="processed tokens per kWh"
+            metricLabel={
+              preferences.grossEnergy
+                ? "processed tokens per GPU board kWh"
+                : "processed tokens per inference kWh"
+            }
             timezone={preferences.timezone}
             rangeStart={filters?.range.first_day ?? null}
             rangeEnd={filters?.range.last_day ?? null}
@@ -254,7 +266,8 @@ export function UsageEfficiencyTab({
   useMountSubscription(() => setNowMs(Date.now()), []);
 
   const totals = efficiency?.totals ?? null;
-  const ratio = totals !== null && totals.tokens_per_kwh !== null;
+  const ratio =
+    totals !== null && effectiveEnergy(totals, preferences.grossEnergy).tokensPerKwh !== null;
   const measuredRates = rates?.measured ? rates.by_physical_model : [];
   const { rate, reason } = pickRate(rates, filters);
   const priced = rate === null ? null : pricedTraffic(tokens, rate, filters);
@@ -282,7 +295,7 @@ export function UsageEfficiencyTab({
         </div>
       ) : null}
 
-      {totals !== null && ratio ? (
+      {totals !== null ? (
         <EfficiencyStrip totals={totals} rate={rate} priced={priced} preferences={preferences} />
       ) : null}
 
@@ -315,7 +328,7 @@ export function UsageEfficiencyTab({
 
       <BenchNotes rates={rates} measuredCount={measuredRates.length} filters={filters} />
 
-      {efficiency !== undefined && ratio ? (
+      {efficiency !== undefined ? (
         <EfficiencyHistory
           efficiency={efficiency}
           cells={dailyCells(efficiency, preferences)}

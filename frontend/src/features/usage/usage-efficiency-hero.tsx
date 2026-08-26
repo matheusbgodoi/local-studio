@@ -180,7 +180,7 @@ export function EfficiencyStrip({
     <>
       <MetricStrip metrics={stripMetrics(totals, rate, priced, preferences)} />
       <p className="mx-auto mt-2 max-w-[55rem] text-[length:var(--fs-2xs)] leading-relaxed text-(--ui-muted)/80">
-        {stripFootnote(totals, rate, priced, preferences.pricePerKwh)}
+        {stripFootnote(totals, rate, priced, preferences)}
       </p>
     </>
   );
