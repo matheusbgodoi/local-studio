@@ -13,6 +13,7 @@ export function loadAggregatedSessions(): Promise<AggregatedSession[]> {
         try: () => fetch("/api/agent/sessions/all?since=30d", { cache: "no-store" }),
         catch: (error) => error,
       });
+      if (!response.ok) return yield* Effect.fail(new Error(`HTTP ${response.status}`));
       const payload = yield* Effect.tryPromise({
         try: () => safeJson<{ sessions?: AggregatedSession[] }>(response),
         catch: (error) => error,
