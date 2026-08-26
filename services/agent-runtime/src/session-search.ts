@@ -4,18 +4,6 @@ import type { SessionSearchResult } from "../../../shared/agent/session-search";
 import type { ProjectEntry } from "./projects-store";
 import { listSessionSearchCandidates } from "./sessions-store";
 
-type Segment = { text: string; normalized: string };
-type IndexedTranscript = {
-  mtimeMs: number;
-  size: number;
-  chars: number;
-  segments: Segment[];
-};
-
-const index = new Map<string, IndexedTranscript>();
-const MAX_INDEX_CHARS = 64 * 1024 * 1024;
-let indexedChars = 0;
-
 function normalize(value: string): string {
   return value.toLocaleLowerCase();
 }
@@ -43,50 +31,31 @@ function messageText(event: Record<string, unknown>): string | null {
   return text || null;
 }
 
-function remember(filepath: string, entry: IndexedTranscript): IndexedTranscript {
-  const previous = index.get(filepath);
-  if (previous) indexedChars -= previous.chars;
-  index.delete(filepath);
-  index.set(filepath, entry);
-  indexedChars += entry.chars;
-  while (indexedChars > MAX_INDEX_CHARS && index.size > 1) {
-    const oldest = index.entries().next().value as [string, IndexedTranscript] | undefined;
-    if (!oldest) break;
-    index.delete(oldest[0]);
-    indexedChars -= oldest[1].chars;
-  }
-  return entry;
-}
-
-async function transcriptIndex(
+async function transcriptMatch(
   filepath: string,
-  mtimeMs: number,
-  size: number,
-): Promise<IndexedTranscript> {
-  const cached = index.get(filepath);
-  if (cached?.mtimeMs === mtimeMs && cached.size === size) {
-    index.delete(filepath);
-    index.set(filepath, cached);
-    return cached;
-  }
-  const segments: Segment[] = [];
+  queryPattern: RegExp,
+  normalizedQuery: string,
+  queryLength: number,
+): Promise<string | null> {
   const stream = createReadStream(filepath, { encoding: "utf8" });
   const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
   try {
     for await (const line of lines) {
-      if (!line.trim()) continue;
+      if (!queryPattern.test(line)) continue;
       try {
         const text = messageText(JSON.parse(line) as Record<string, unknown>);
-        if (text) segments.push({ text, normalized: normalize(text) });
+        if (!text) continue;
+        const matchAt = normalize(text).indexOf(normalizedQuery);
+        if (matchAt >= 0) return contextualSnippet(text, matchAt, queryLength);
       } catch {
         continue;
       }
     }
   } finally {
+    lines.close();
     stream.destroy();
   }
-  const chars = segments.reduce((total, segment) => total + segment.text.length * 2, 0);
-  return remember(filepath, { mtimeMs, size, chars, segments });
+  return null;
 }
 
 function contextualSnippet(text: string, matchAt: number, queryLength: number): string {
@@ -104,30 +73,37 @@ export async function searchProjectSessions(
   project: ProjectEntry,
   cwd: string,
   query: string,
+  limit: number,
 ): Promise<SessionSearchResult[]> {
   const normalizedQuery = normalize(query);
+  const queryPattern = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "iu");
   const results: SessionSearchResult[] = [];
-  for (const candidate of await listSessionSearchCandidates(cwd)) {
-    let transcript: IndexedTranscript;
+  const candidates = (await listSessionSearchCandidates(cwd)).sort(
+    (a, b) => Date.parse(b.summary.updatedAt) - Date.parse(a.summary.updatedAt),
+  );
+  for (const candidate of candidates) {
+    let snippet: string | null;
     try {
-      transcript = await transcriptIndex(candidate.filepath, candidate.mtimeMs, candidate.size);
+      snippet = await transcriptMatch(
+        candidate.filepath,
+        queryPattern,
+        normalizedQuery,
+        query.length,
+      );
     } catch {
       continue;
     }
-    for (const segment of transcript.segments) {
-      const matchAt = segment.normalized.indexOf(normalizedQuery);
-      if (matchAt < 0) continue;
-      results.push({
-        sessionId: candidate.summary.id,
-        projectId: project.id,
-        projectName: project.name,
-        title: candidate.summary.firstUserMessage,
-        snippet: contextualSnippet(segment.text, matchAt, query.length),
-        archived: candidate.summary.archived,
-        updatedAt: candidate.summary.updatedAt,
-      });
-      break;
-    }
+    if (!snippet) continue;
+    results.push({
+      sessionId: candidate.summary.id,
+      projectId: project.id,
+      projectName: project.name,
+      title: candidate.summary.firstUserMessage,
+      snippet,
+      archived: candidate.summary.archived,
+      updatedAt: candidate.summary.updatedAt,
+    });
+    if (results.length >= limit) break;
   }
   return results;
 }

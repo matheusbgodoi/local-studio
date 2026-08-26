@@ -153,7 +153,7 @@ export async function handleSessionSearch(request: Request): Promise<Response> {
   const searches = await Promise.allSettled(
     projects.map(async (project) => {
       const cwd = resolveAllowedWorkspace(project.path);
-      return searchProjectSessions(project, cwd, query);
+      return searchProjectSessions(project, cwd, query, limit);
     }),
   );
   const successful = searches.flatMap((search) =>
