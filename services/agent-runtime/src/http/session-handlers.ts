@@ -15,6 +15,7 @@ import {
 } from "../sessions-store";
 import { errorMessage, jsonError } from "./helpers";
 import { networkService } from "../network";
+import { searchProjectSessions } from "../session-search";
 
 function parseRelativeSince(value: string | null): Date | null {
   if (!value) return null;
@@ -139,6 +140,27 @@ export async function handleAllSessions(request: Request): Promise<Response> {
   aggregated.sort((a, b) =>
     new Date(b.startedAt || b.updatedAt).getTime() - new Date(a.startedAt || a.updatedAt).getTime());
   return Response.json({ sessions: aggregated });
+}
+
+export async function handleSessionSearch(request: Request): Promise<Response> {
+  const searchParams = new URL(request.url).searchParams;
+  const query = searchParams.get("q")?.trim() ?? "";
+  if (query.length < 2) return jsonError("q must contain at least 2 characters");
+  if (query.length > 200) return jsonError("q must contain at most 200 characters");
+  const requestedLimit = positiveInteger(searchParams.get("limit"));
+  const limit = Math.min(requestedLimit ?? 40, 50);
+  const results = (
+    await Promise.all(
+      listProjectsFromStore().map(async (project) => {
+        const cwd = resolveAllowedWorkspace(project.path);
+        return searchProjectSessions(project, cwd, query);
+      }),
+    )
+  )
+    .flat()
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+    .slice(0, limit);
+  return Response.json({ results });
 }
 
 function validSessionId(value: string): boolean {

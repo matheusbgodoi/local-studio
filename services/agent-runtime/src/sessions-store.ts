@@ -380,6 +380,41 @@ export async function listSessions(
   return options.limit && options.limit > 0 ? summaries.slice(0, options.limit) : summaries;
 }
 
+export type SessionSearchCandidate = {
+  filepath: string;
+  mtimeMs: number;
+  size: number;
+  summary: SessionSummary;
+};
+
+export async function listSessionSearchCandidates(cwd: string): Promise<SessionSearchCandidate[]> {
+  const metadataFor = readSessionListMetadata();
+  const options = normalizeListOptions({ includeArchived: true });
+  const candidates = new Map<string, SessionSearchCandidate>();
+  for (const candidate of listCandidateFiles(cwd)) {
+    const summary = await readListCandidate(
+      cwd,
+      candidate.dir,
+      candidate.filename,
+      options,
+      metadataFor,
+    );
+    if (!summary) continue;
+    const filepath = path.join(candidate.dir, candidate.filename);
+    const stats = statSync(filepath);
+    const existing = candidates.get(summary.id);
+    if (!existing || summary.updatedAt > existing.summary.updatedAt) {
+      candidates.set(summary.id, {
+        filepath,
+        mtimeMs: stats.mtimeMs,
+        size: stats.size,
+        summary,
+      });
+    }
+  }
+  return [...candidates.values()];
+}
+
 const PI_SESSION_ID_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 const PI_SESSION_HEADER_BYTE_CAP = 64 * 1024;
 

@@ -67,6 +67,7 @@ import {
   handleSessionMove,
   handleSessionsDelete,
   handleSessionsList,
+  handleSessionSearch,
 } from "./session-handlers";
 import {
   handleNetworkPolicy,
@@ -95,6 +96,7 @@ export function createAgentRuntimeApp() {
   app.get("/api/agent/sessions", (c) => handleSessionsList(c.req.raw));
   app.delete("/api/agent/sessions", () => handleSessionsDelete());
   app.get("/api/agent/sessions/all", (c) => handleAllSessions(c.req.raw));
+  app.get("/api/agent/sessions/search", (c) => handleSessionSearch(c.req.raw));
   app.get("/api/agent/sessions/:id", (c) => handleSessionGet(c.req.raw, c.req.param("id")));
   app.patch("/api/agent/sessions/:id", (c) => handleSessionPatch(c.req.raw, c.req.param("id")));
   app.delete("/api/agent/sessions/:id", (c) => handleSessionDelete(c.req.raw, c.req.param("id")));
