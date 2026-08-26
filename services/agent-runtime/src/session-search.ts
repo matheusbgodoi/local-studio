@@ -1,5 +1,7 @@
-import { createReadStream } from "node:fs";
+import { closeSync, createReadStream, openSync, readSync } from "node:fs";
+import path from "node:path";
 import readline from "node:readline";
+import { StringDecoder } from "node:string_decoder";
 import type { SessionSearchResult } from "../../../shared/agent/session-search";
 import type { ProjectEntry } from "./projects-store";
 import { listSessionSearchCandidates } from "./sessions-store";
@@ -69,6 +71,39 @@ function contextualSnippet(text: string, matchAt: number, queryLength: number): 
   return `${start > 0 ? "…" : ""}${compact.slice(start, end)}${end < compact.length ? "…" : ""}`;
 }
 
+function fileContainsQuery(filepath: string, normalizedQuery: string): boolean {
+  const buffer = Buffer.allocUnsafe(512 * 1024);
+  const decoder = new StringDecoder("utf8");
+  let carry = "";
+  let fd: number | null = null;
+  try {
+    fd = openSync(filepath, "r");
+    while (true) {
+      const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      const text = carry + decoder.write(buffer.subarray(0, bytesRead));
+      if (normalize(text).includes(normalizedQuery)) return true;
+      carry = text.slice(-Math.max(normalizedQuery.length + 8, 64));
+    }
+    return normalize(carry + decoder.end()).includes(normalizedQuery);
+  } catch {
+    return false;
+  } finally {
+    if (fd !== null) closeSync(fd);
+  }
+}
+
+function matchingFiles(
+  candidates: Awaited<ReturnType<typeof listSessionSearchCandidates>>,
+  normalizedQuery: string,
+): Set<string> {
+  return new Set(
+    candidates
+      .filter((candidate) => fileContainsQuery(candidate.filepath, normalizedQuery))
+      .map((candidate) => path.resolve(candidate.filepath)),
+  );
+}
+
 export async function searchProjectSessions(
   project: ProjectEntry,
   cwd: string,
@@ -81,7 +116,9 @@ export async function searchProjectSessions(
   const candidates = (await listSessionSearchCandidates(cwd)).sort(
     (a, b) => Date.parse(b.summary.updatedAt) - Date.parse(a.summary.updatedAt),
   );
+  const matches = matchingFiles(candidates, normalizedQuery);
   for (const candidate of candidates) {
+    if (!matches.has(path.resolve(candidate.filepath))) continue;
     let snippet: string | null;
     try {
       snippet = await transcriptMatch(
