@@ -7,6 +7,7 @@ import { ChevronDownIcon } from "@/ui/icons";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 import { effectTimeout, type EffectTimer } from "@/lib/effect-timers";
 import { patchSessionView, readSessionView } from "@/features/agent/workspace/session-view-state";
+import type { GeneratedImageDecisionHandler } from "@/features/agent/ui/timeline/generated-image-block";
 
 // A turn that has streamed nothing yet renders as a bare "Thinking", which is
 // the same picture whether the model is a second away or several minutes away.
@@ -56,6 +57,7 @@ type TimelineProps = {
   messages: ChatMessage[];
   running: boolean;
   onForkSession?: () => void;
+  onGeneratedImageDecision?: GeneratedImageDecisionHandler;
   emptyPrompt?: boolean;
   stickToBottom?: boolean;
   onStickToBottomChange?: (value: boolean) => void;
@@ -72,27 +74,37 @@ const MemoMessage = memo(
     live,
     running,
     onForkSession,
+    onGeneratedImageDecision,
   }: {
     message: ChatMessage;
     live: boolean;
     running: boolean;
     onForkSession?: () => void;
+    onGeneratedImageDecision?: GeneratedImageDecisionHandler;
   }) {
     return (
-      <MessageView message={message} live={live} running={running} onForkSession={onForkSession} />
+      <MessageView
+        message={message}
+        live={live}
+        running={running}
+        onForkSession={onForkSession}
+        onGeneratedImageDecision={onGeneratedImageDecision}
+      />
     );
   },
   (prev, next) =>
     prev.message === next.message &&
     prev.live === next.live &&
     prev.running === next.running &&
-    prev.onForkSession === next.onForkSession,
+    prev.onForkSession === next.onForkSession &&
+    prev.onGeneratedImageDecision === next.onGeneratedImageDecision,
 );
 
 export function Timeline({
   messages,
   running,
   onForkSession,
+  onGeneratedImageDecision,
   emptyPrompt = false,
   stickToBottom = true,
   onStickToBottomChange,
@@ -162,6 +174,7 @@ export function Timeline({
                     live={isLast && running}
                     running={running}
                     onForkSession={onForkSession}
+                    onGeneratedImageDecision={onGeneratedImageDecision}
                   />
                 </div>
               );
@@ -697,11 +710,13 @@ function MessageView({
   live = false,
   running = false,
   onForkSession,
+  onGeneratedImageDecision,
 }: {
   message: ChatMessage;
   live?: boolean;
   running?: boolean;
   onForkSession?: () => void;
+  onGeneratedImageDecision?: GeneratedImageDecisionHandler;
 }) {
   return (
     <SessionPaneBlockRouter
@@ -709,6 +724,7 @@ function MessageView({
       live={live}
       running={running}
       onForkSession={onForkSession}
+      onGeneratedImageDecision={onGeneratedImageDecision}
     />
   );
 }

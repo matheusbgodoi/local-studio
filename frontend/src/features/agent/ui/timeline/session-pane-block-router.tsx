@@ -4,6 +4,10 @@ import { traceAgentReasoning } from "@/features/agent/trace-reasoning";
 import { AssistantMarkdown } from "@/features/agent/ui/assistant-markdown";
 import { AssistantActivityGroup } from "@/features/agent/ui/timeline/assistant-activity-group";
 import { AssistantMessageActions } from "@/features/agent/ui/timeline/assistant-message-actions";
+import {
+  GeneratedImageBlock,
+  type GeneratedImageDecisionHandler,
+} from "@/features/agent/ui/timeline/generated-image-block";
 import { UserMessage } from "@/features/agent/ui/timeline/user-message-block";
 import {
   assistantContentCopyText,
@@ -43,11 +47,13 @@ const AssistantBlocks = memo(function AssistantBlocks({
   live,
   running,
   onForkSession,
+  onGeneratedImageDecision,
 }: {
   blocks: AssistantBlock[];
   live: boolean;
   running: boolean;
   onForkSession?: () => void;
+  onGeneratedImageDecision?: GeneratedImageDecisionHandler;
 }) {
   const routedBlocks = useMemo(() => groupAssistantBlocks(blocks), [blocks]);
   traceAgentReasoning("render.blocks", { blocks, routedBlocks });
@@ -88,6 +94,16 @@ const AssistantBlocks = memo(function AssistantBlocks({
       );
       return;
     }
+    if (item.kind === "image-tool") {
+      nodes.push(
+        <GeneratedImageBlock
+          key={item.block.id}
+          block={item.block}
+          onDecision={onGeneratedImageDecision}
+        />,
+      );
+      return;
+    }
     nodes.push(<MemoEventBlock key={item.block.id} block={item.block} />);
   });
   return (
@@ -102,11 +118,13 @@ function SessionPaneBlockRouterInner({
   live,
   running,
   onForkSession,
+  onGeneratedImageDecision,
 }: {
   message: ChatMessage;
   live: boolean;
   running: boolean;
   onForkSession?: () => void;
+  onGeneratedImageDecision?: GeneratedImageDecisionHandler;
 }) {
   if (message.role === "user") {
     return <UserMessage message={message} />;
@@ -118,6 +136,7 @@ function SessionPaneBlockRouterInner({
       live={live}
       running={running}
       onForkSession={onForkSession}
+      onGeneratedImageDecision={onGeneratedImageDecision}
     />
   );
 }

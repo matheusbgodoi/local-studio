@@ -343,6 +343,53 @@ export function useChatPaneSendFlow({
     ],
   );
 
+  const sendTextMessage = useCallback(
+    (rawText: string) => {
+      if (!activeTab || !modelId) return Promise.resolve();
+      const text = rawText.trim();
+      if (!text) return Promise.resolve();
+      const runtime = activeTab.id;
+      return Effect.runPromise(
+        Effect.gen(function* () {
+          const acceptsControl = yield* Effect.tryPromise({
+            try: () => engine.acceptsControl(activeTab, runtime),
+            catch: () => running,
+          });
+          if (acceptsControl) {
+            yield* Effect.tryPromise({
+              try: () =>
+                runGuardedSubmit(controlSubmitInFlightRef.current, activeTab.id, () =>
+                  queueAndSendControl(
+                    "follow_up",
+                    { attachments: [], images: [], runtimeText: text, text },
+                    activeTab,
+                    runtime,
+                    cwd,
+                  ),
+                ),
+              catch: (error) => error,
+            });
+            return;
+          }
+          yield* Effect.tryPromise({
+            try: () =>
+              runGuardedSubmit(composerSubmitInFlightRef.current, activeTab.id, () =>
+                engine.submitPrompt({
+                  text,
+                  prompt: text,
+                  displayText: text,
+                  userText: text,
+                  targetSessionId: activeTab.id,
+                }),
+              ),
+            catch: (error) => error,
+          });
+        }),
+      );
+    },
+    [activeTab, cwd, engine, modelId, queueAndSendControl, runGuardedSubmit, running],
+  );
+
   const queueMessage = useCallback(() => {
     if (!activeTab) return Promise.resolve();
     const text = activeTab.input.trim();
@@ -550,5 +597,14 @@ export function useChatPaneSendFlow({
     });
   }, [activeTab, modelId, runGuardedSubmit, submitPrompt, updateTab]);
 
-  return { sendMessage, queueMessage, removeQueued, editQueued, steerQueued, abortTurn, retryLast };
+  return {
+    sendMessage,
+    sendTextMessage,
+    queueMessage,
+    removeQueued,
+    editQueued,
+    steerQueued,
+    abortTurn,
+    retryLast,
+  };
 }

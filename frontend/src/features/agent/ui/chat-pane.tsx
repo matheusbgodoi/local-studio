@@ -122,6 +122,10 @@ import { useChatPaneComposerActions } from "@/features/agent/ui/use-chat-pane-co
 import { useComposerCommandHandlers } from "@/features/agent/ui/use-composer-command-handlers";
 import { useChatPaneSendFlow } from "@/features/agent/ui/chat-pane-send-flow";
 import { ChatPaneHandle, newId, nowLabel, SessionTab } from "@/features/agent/messages";
+import type {
+  GeneratedImageDecision,
+  GeneratedImageDecisionHandler,
+} from "@/features/agent/ui/timeline/generated-image-block";
 import { useSessionEngine } from "@/features/agent/runtime/engine";
 import type { UpdateSession } from "@/features/agent/runtime/types";
 import { useTools } from "@/features/agent/tools/context";
@@ -195,6 +199,25 @@ function chatPaneClassName(composerOnly: boolean): string {
   );
 }
 
+function generatedImageDecisionPrompt(
+  decision: GeneratedImageDecision,
+  toolCallId: string,
+  resultText: string | undefined,
+  note: string | undefined,
+): string {
+  const artifact = resultText?.trim() ? `\nTool result: ${resultText.trim()}` : "";
+  if (decision === "approve") {
+    return `Approve the generated image from tool call ${toolCallId}.${artifact}\nUse that exact artifact. Apply the configured approval step: upscale and save or finalize it. Do not regenerate it.`;
+  }
+  if (decision === "reject") {
+    return `Reject the generated image from tool call ${toolCallId}.${artifact}\nDo not upscale, publish, or finalize it. Confirm that it was rejected.`;
+  }
+  const change = note?.trim()
+    ? `Apply this requested change: ${note.trim()}`
+    : "Use a new random seed and otherwise preserve the request.";
+  return `Regenerate the image from tool call ${toolCallId}.${artifact}\n${change}\nShow the new result for approval.`;
+}
+
 function ChatTranscript({
   composerOnly,
   terminalView,
@@ -204,6 +227,7 @@ function ChatTranscript({
   setStickToBottom,
   running,
   onForkSession,
+  onGeneratedImageDecision,
   loadEarlierHistory,
 }: {
   composerOnly: boolean;
@@ -214,6 +238,7 @@ function ChatTranscript({
   setStickToBottom: (value: boolean) => void;
   running: boolean;
   onForkSession?: () => void;
+  onGeneratedImageDecision?: GeneratedImageDecisionHandler;
   loadEarlierHistory: () => Promise<void>;
 }) {
   const viewKey = activeTab?.piSessionId ?? activeTab?.id ?? null;
@@ -233,6 +258,7 @@ function ChatTranscript({
           viewKey={viewKey}
           viewAlias={viewAlias}
           onForkSession={onForkSession}
+          onGeneratedImageDecision={onGeneratedImageDecision}
           hasEarlier={activeTab?.historyCursor != null}
           onLoadEarlier={loadEarlierHistory}
         />
@@ -692,24 +718,40 @@ export function ChatPane({
     updateTab,
     selectMentionRow,
   });
-  const { sendMessage, queueMessage, removeQueued, editQueued, steerQueued, abortTurn } =
-    useChatPaneSendFlow({
-      activeTab,
-      attachments,
-      clearAttachments,
-      consumeAttachments,
-      cwd,
-      engine,
-      modelId,
-      modelSupportsVision,
-      readingAttachments,
-      resetComposerHeight,
-      running: Boolean(running),
-      setMention,
-      setStickToBottom,
-      tools,
-      updateTab,
-    });
+  const {
+    sendMessage,
+    sendTextMessage,
+    queueMessage,
+    removeQueued,
+    editQueued,
+    steerQueued,
+    abortTurn,
+  } = useChatPaneSendFlow({
+    activeTab,
+    attachments,
+    clearAttachments,
+    consumeAttachments,
+    cwd,
+    engine,
+    modelId,
+    modelSupportsVision,
+    readingAttachments,
+    resetComposerHeight,
+    running: Boolean(running),
+    setMention,
+    setStickToBottom,
+    tools,
+    updateTab,
+  });
+  const handleGeneratedImageDecision = useCallback<GeneratedImageDecisionHandler>(
+    (decision, block, note) => {
+      setStickToBottom(true);
+      return sendTextMessage(
+        generatedImageDecisionPrompt(decision, block.id, block.resultText, note),
+      );
+    },
+    [sendTextMessage],
+  );
   const { handleComposerPaste, handleComposerChange, handleComposerKeyDown } =
     useComposerTextareaBehavior({
       activeTab,
@@ -809,6 +851,7 @@ export function ChatPane({
         setStickToBottom={setStickToBottom}
         running={Boolean(running)}
         onForkSession={onForkSession}
+        onGeneratedImageDecision={handleGeneratedImageDecision}
         loadEarlierHistory={loadEarlierHistory}
       />
       <div className={terminalView ? "hidden" : "contents"}>
