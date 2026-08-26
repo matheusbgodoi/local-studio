@@ -12,7 +12,7 @@ function requestUpdate(update: AppUpdate, canRetry: boolean): void {
   }
   const version = update.latestVersion ? ` v${update.latestVersion}` : "";
   const ready = update.phase === "ready";
-  const action = ready ? "restart Local Studio and install" : "download";
+  const action = ready ? "restart CRIAs AI and install" : "download";
   const prompt = ready
     ? `Ready to ${action}${version} from the configured owner update feed? Installing will close and restart the app.`
     : `Ready to ${action}${version} from the configured owner update feed? Downloading does not restart the app; installation remains a separate confirmed step.`;

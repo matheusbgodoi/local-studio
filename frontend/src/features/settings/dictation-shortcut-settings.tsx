@@ -109,7 +109,7 @@ export function DictationShortcutSettings() {
       {available === false ? (
         <div className="px-3 py-2">
           <SettingsNotice tone="default">
-            Global dictation is available in the Local Studio desktop app on macOS.
+            Global dictation is available in the CRIAs AI desktop app on macOS.
           </SettingsNotice>
         </div>
       ) : (
@@ -174,7 +174,7 @@ export function DictationShortcutSettings() {
           {state?.platform === "darwin" ? (
             <SettingsRow
               label="macOS permissions"
-              description="Hold-to-talk listens only for this combination. Enable Local Studio under System Settings → Privacy & Security → Input Monitoring or Accessibility, then reopen the app."
+              description="Hold-to-talk listens only for this combination. Enable CRIAs AI under System Settings → Privacy & Security → Input Monitoring or Accessibility, then reopen the app."
               value={
                 <span className="text-[length:var(--fs-sm)] text-(--ui-muted)">
                   Input Monitoring {state.inputMonitoring ? "on" : "off"} · Accessibility{" "}

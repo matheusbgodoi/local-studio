@@ -131,7 +131,7 @@ export function ApiConnectionSection({
       <AppVersionSection />
       <SettingsGroup
         title="Active controller"
-        description="The controller Local Studio is using now."
+        description="The controller CRIAs AI is using now."
         actions={<ApiUrlCensorToggle />}
       >
         <SettingsRow

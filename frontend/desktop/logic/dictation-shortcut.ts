@@ -74,7 +74,7 @@ function decodeProbe(message: Record<string, unknown>): HoldProbe {
       ? {
           reason:
             rawReason === "permission_required"
-              ? "Enable Input Monitoring or Accessibility for Local Studio, then reopen the app."
+              ? "Enable Input Monitoring or Accessibility for CRIAs AI, then reopen the app."
               : rawReason,
         }
       : {}),

@@ -67,7 +67,7 @@ const CATALOG: CatalogEntry[] = [
   {
     id: "computer",
     name: "Remote computer",
-    company: "Local Studio",
+    company: "CRIAs AI",
     description: "Run commands and work with files over SSH on another machine.",
     transport: "stdio",
     command: "node",
@@ -441,7 +441,7 @@ function ConnectorRow({
   const remove = async () => {
     if (
       !window.confirm(
-        `Remove “${connector.name}”? Its saved configuration and credentials will be deleted from Local Studio.`,
+        `Remove “${connector.name}”? Its saved configuration and credentials will be deleted from CRIAs AI.`,
       )
     ) {
       return;

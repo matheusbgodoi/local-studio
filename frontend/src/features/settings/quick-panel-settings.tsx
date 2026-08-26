@@ -194,8 +194,8 @@ export function QuickPanelSettings() {
       {bridgeAvailable === false ? (
         <div className="px-3 py-2">
           <SettingsNotice tone="default">
-            The quick panel is part of the Local Studio desktop app. Open Settings there to
-            configure its hotkey.
+            The quick panel is part of the CRIAs AI desktop app. Open Settings there to configure
+            its hotkey.
           </SettingsNotice>
         </div>
       ) : (

@@ -107,14 +107,14 @@ function RemoteAccessButton() {
             <div className="space-y-5">
               <div className="text-center">
                 <p className="text-[length:var(--fs-sm)] text-(--dim)">
-                  Scan with your iPhone camera. Local Studio opens, pairs this device, and removes
-                  the one-time code from the address bar.
+                  Scan with your iPhone camera. CRIAs AI opens, pairs this device, and removes the
+                  one-time code from the address bar.
                 </p>
                 <div className="mx-auto mt-4 flex h-60 w-60 items-center justify-center overflow-hidden rounded-2xl border border-black/10 bg-white p-3 shadow-sm">
                   {pairing?.ok ? (
                     <Image
                       src={pairing.dataUrl}
-                      alt="QR code to pair this phone with Local Studio"
+                      alt="QR code to pair this phone with CRIAs AI"
                       width={216}
                       height={216}
                       unoptimized

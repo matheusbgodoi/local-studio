@@ -41,7 +41,7 @@ interface SettingsViewProps {
 }
 const sectionIcon = (Icon: LucideIcon) => <Icon className="h-3.5 w-3.5" />;
 const SECTIONS: SettingsSectionDef[] = [
-  ["profile", "Profile", "Your identity in Local Studio.", UserRound],
+  ["profile", "Profile", "Your identity in CRIAs AI.", UserRound],
   ["connection", "General", "Controller connections and API access.", Cable],
   ["system", "System", "Engines, services, storage, and hardware.", Cpu],
   ["appearance", "Appearance", "Theme, typography, and interface scale.", Paintbrush],

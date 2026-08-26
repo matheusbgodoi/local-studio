@@ -21,7 +21,7 @@ export function mobilePageTitle(pathname: string): string {
   if (pathname.startsWith("/agent")) return "Tasks";
   if (pathname.startsWith("/logs")) return "Logs";
   const tab = tabs.find((entry) => isRouteActive(pathname, entry.href));
-  return tab?.label ?? "Local Studio";
+  return tab?.label ?? "CRIAs AI";
 }
 
 export function isRouteActive(pathname: string, href: string): boolean {
