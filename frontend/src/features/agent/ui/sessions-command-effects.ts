@@ -1,6 +1,10 @@
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { safeJson } from "@/features/agent/safe-json";
 import type { AggregatedSession } from "@shared/agent/session-summary";
+import {
+  SessionSearchResponseSchema,
+  type SessionSearchResult,
+} from "@shared/agent/session-search";
 
 export function loadAggregatedSessions(): Promise<AggregatedSession[]> {
   return Effect.runPromise(
@@ -14,6 +18,29 @@ export function loadAggregatedSessions(): Promise<AggregatedSession[]> {
         catch: (error) => error,
       });
       return payload.sessions ?? [];
-    }).pipe(Effect.catch(() => Effect.succeed([]))),
+    }),
+  );
+}
+
+export function searchConversationTranscripts(
+  query: string,
+  signal: AbortSignal,
+): Promise<SessionSearchResult[]> {
+  return Effect.runPromise(
+    Effect.tryPromise({
+      try: async () => {
+        const response = await fetch(
+          `/api/agent/sessions/search?q=${encodeURIComponent(query)}&limit=40`,
+          { cache: "no-store", signal },
+        );
+        if (!response.ok)
+          throw new Error(`Conversation search failed with HTTP ${response.status}`);
+        return [
+          ...Schema.decodeUnknownSync(SessionSearchResponseSchema)(await safeJson(response))
+            .results,
+        ];
+      },
+      catch: (error) => (error instanceof Error ? error : new Error("Conversation search failed")),
+    }),
   );
 }
