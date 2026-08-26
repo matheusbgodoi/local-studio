@@ -3,12 +3,13 @@
 import { useMemo, useState } from "react";
 import { Select } from "@/ui";
 import { effectInterval } from "@/lib/effect-timers";
-import { getStoredBackendUrl } from "@/lib/api/connection";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 import type { MetricSampleInput } from "./status-section-view";
 
 type MetricSample = {
   at: number;
+  gpuAt: number | null;
+  metricsAt: number | null;
   performanceAt: number | null;
   generation: number | null;
   prefill: number | null;
@@ -28,8 +29,10 @@ type MetricPeak = {
   ttft: number | null;
 };
 
-type MetricKey = Exclude<keyof MetricSample, "at" | "performanceAt">;
+type MetricKey = Exclude<keyof MetricSample, "at" | "gpuAt" | "metricsAt" | "performanceAt">;
 type RangeKey = "5m" | "30m" | "session";
+type MetricObservations = { gpus: number; metrics: number };
+type TrendPreference = { metric: MetricKey; range: RangeKey };
 
 const METRICS: Record<
   MetricKey,
@@ -72,13 +75,19 @@ const RANGE_MS: Record<RangeKey, number> = {
 
 const samplesByKey = new Map<string, MetricSample[]>();
 const MAX_SAMPLE_SERIES = 12;
+const DEFAULT_PREFERENCE: TrendPreference = { metric: "gpuUtilization", range: "5m" };
 
-function scopedSampleKey(key: string): string {
-  return `${getStoredBackendUrl() || "default"}::${key}`;
+function scopedSampleKey(controllerKey: string, key: string): string {
+  return `${controllerKey || "default"}::${key}`;
 }
 
-export function useMetricSamples(input: MetricSampleInput, observedAt: number) {
-  const scopedKey = scopedSampleKey(input.key);
+export function useMetricSamples(
+  input: MetricSampleInput,
+  observations: MetricObservations,
+  controllerKey: string,
+) {
+  const scopedKey = scopedSampleKey(controllerKey, input.key);
+  const observedAt = Math.max(observations.gpus, observations.metrics);
   const [sampleState, setSampleState] = useState(() => ({
     key: scopedKey,
     samples: samplesByKey.get(scopedKey) ?? [],
@@ -98,6 +107,8 @@ export function useMetricSamples(input: MetricSampleInput, observedAt: number) {
     }
     const next: MetricSample = {
       at: observedAt,
+      gpuAt: observations.gpus > 0 ? observations.gpus : null,
+      metricsAt: observations.metrics > 0 ? observations.metrics : null,
       performanceAt: input.performanceObservedAt > 0 ? input.performanceObservedAt : null,
       generation: measured(input.generation),
       prefill: measured(input.prefill),
@@ -113,6 +124,8 @@ export function useMetricSamples(input: MetricSampleInput, observedAt: number) {
     if (
       !previous ||
       next.at - previous.at >= 4_000 ||
+      next.gpuAt !== previous.gpuAt ||
+      next.metricsAt !== previous.metricsAt ||
       next.performanceAt !== previous.performanceAt
     ) {
       const nextSamples = [...current, next].slice(-21_600);
@@ -131,6 +144,8 @@ export function useMetricSamples(input: MetricSampleInput, observedAt: number) {
     scopedKey,
     input.active,
     observedAt,
+    observations.gpus,
+    observations.metrics,
     input.generation,
     input.prefill,
     input.requests,
@@ -149,9 +164,17 @@ export function useMetricSamples(input: MetricSampleInput, observedAt: number) {
   };
 }
 
-export function MetricTrends({ samples, peaks }: { samples: MetricSample[]; peaks: MetricPeak }) {
-  const [metric, setMetric] = useState<MetricKey>("generation");
-  const [range, setRange] = useState<RangeKey>("5m");
+export function MetricTrends({
+  controllerKey,
+  samples,
+  peaks,
+}: {
+  controllerKey: string;
+  samples: MetricSample[];
+  peaks: MetricPeak;
+}) {
+  const [preference, setPreference] = useState(() => readTrendPreference(controllerKey));
+  const { metric, range } = preference;
   const [now, setNow] = useState(Date.now);
   useMountSubscription(() => effectInterval(() => setNow(Date.now()), 5_000).cancel, []);
   const metricSamples = samplesForMetric(samples, metric);
@@ -163,15 +186,29 @@ export function MetricTrends({ samples, peaks }: { samples: MetricSample[]; peak
   const peak = definition.peak ? peaks[definition.peak] : null;
   const lastSampleAt = metricSamples.at(-1)?.at ?? 0;
   const stale = lastSampleAt > 0 && now - lastSampleAt > 15_000;
+  const performanceMetric = isPerformanceMetric(metric);
+  const status = performanceMetric
+    ? lastSampleAt > 0
+      ? `last completed ${formatAge(lastSampleAt, now)}`
+      : "no completed request"
+    : stale
+      ? "Telemetry paused"
+      : `${availableCount} samples`;
+
+  const updatePreference = (next: Partial<TrendPreference>) => {
+    const updated = { ...preference, ...next };
+    setPreference(updated);
+    writeTrendPreference(controllerKey, updated);
+  };
 
   return (
     <div className="mt-4 border-t border-(--separator) pt-3 sm:mt-6">
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <Select
           value={metric}
-          onChange={(event) => setMetric(event.target.value as MetricKey)}
+          onChange={(event) => updatePreference({ metric: event.target.value as MetricKey })}
           options={Object.entries(METRICS).map(([value, item]) => ({ value, label: item.label }))}
-          aria-label="Telemetry metric"
+          aria-label="Default telemetry graph for this controller"
           className="h-7 w-auto text-[length:var(--fs-xs)]"
         />
         <div className="flex rounded-lg border border-(--separator) p-0.5">
@@ -179,7 +216,7 @@ export function MetricTrends({ samples, peaks }: { samples: MetricSample[]; peak
             <button
               key={value}
               type="button"
-              onClick={() => setRange(value)}
+              onClick={() => updatePreference({ range: value })}
               className={`rounded-md px-2 py-1 text-[length:var(--fs-xs)] ${range === value ? "bg-(--active) text-(--fg)" : "text-(--dim) hover:text-(--fg)"}`}
             >
               {value === "session" ? "Session" : value}
@@ -187,13 +224,17 @@ export function MetricTrends({ samples, peaks }: { samples: MetricSample[]; peak
           ))}
         </div>
         <span className="ml-auto text-[length:var(--fs-xs)] text-(--dim)">
-          {stale ? "Telemetry paused" : `${availableCount} samples`} · this app session
+          {status} · this app session
         </span>
       </div>
 
       {availableCount < 2 ? (
         <div className="flex h-24 items-center justify-center rounded-lg border border-(--separator) text-[length:var(--fs-sm)] text-(--dim)">
-          This source is not reporting {definition.label.toLowerCase()} yet.
+          {performanceMetric
+            ? availableCount === 1
+              ? "One completed request is available; another will draw the trend."
+              : "No completed request measurement is available yet."
+            : `This source is not reporting ${definition.label.toLowerCase()} yet.`}
         </div>
       ) : (
         <div className="rounded-lg border border-(--separator) px-3 py-2.5">
@@ -235,13 +276,71 @@ export function MetricTrends({ samples, peaks }: { samples: MetricSample[]; peak
 }
 
 function samplesForMetric(samples: MetricSample[], metric: MetricKey): MetricSample[] {
-  if (metric !== "generation" && metric !== "prefill" && metric !== "ttft") return samples;
+  const observedAt = isPerformanceMetric(metric)
+    ? "performanceAt"
+    : isGpuMetric(metric)
+      ? "gpuAt"
+      : "metricsAt";
   const byObservation = new Map<number, MetricSample>();
   for (const sample of samples) {
-    if (sample.performanceAt === null) continue;
-    byObservation.set(sample.performanceAt, { ...sample, at: sample.performanceAt });
+    const at = sample[observedAt];
+    if (at === null) continue;
+    byObservation.set(at, { ...sample, at });
   }
   return [...byObservation.values()];
+}
+
+function isPerformanceMetric(metric: MetricKey): boolean {
+  return metric === "generation" || metric === "prefill" || metric === "ttft";
+}
+
+function isGpuMetric(metric: MetricKey): boolean {
+  return (
+    metric === "gpuUtilization" ||
+    metric === "vramPercent" ||
+    metric === "powerWatts" ||
+    metric === "temperatureC"
+  );
+}
+
+function preferenceKey(controllerKey: string): string {
+  return `local-studio-status-trend:${controllerKey || "default"}`;
+}
+
+function readTrendPreference(controllerKey: string): TrendPreference {
+  if (typeof window === "undefined") return DEFAULT_PREFERENCE;
+  try {
+    const value = JSON.parse(
+      localStorage.getItem(preferenceKey(controllerKey)) ?? "null",
+    ) as unknown;
+    if (!value || typeof value !== "object") return DEFAULT_PREFERENCE;
+    const metric = (value as { metric?: unknown }).metric;
+    const range = (value as { range?: unknown }).range;
+    return {
+      metric:
+        typeof metric === "string" && metric in METRICS ? (metric as MetricKey) : "gpuUtilization",
+      range: range === "30m" || range === "session" ? range : "5m",
+    };
+  } catch {
+    return DEFAULT_PREFERENCE;
+  }
+}
+
+function writeTrendPreference(controllerKey: string, preference: TrendPreference): void {
+  try {
+    localStorage.setItem(preferenceKey(controllerKey), JSON.stringify(preference));
+  } catch {}
+}
+
+function formatAge(at: number, now: number): string {
+  const seconds = Math.max(0, Math.floor((now - at) / 1000));
+  if (seconds < 5) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
 }
 
 function Sparkline({

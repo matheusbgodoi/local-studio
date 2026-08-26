@@ -28,6 +28,7 @@ export function ControlPanel(props: DashboardLayoutProps) {
         currentRecipe={currentRecipe}
         metrics={metrics}
         metricsObservedAt={props.metricsObservedAt}
+        gpusObservedAt={props.gpusObservedAt}
         gpus={gpus}
         isConnected={props.isConnected}
         isStatusLoading={props.isStatusLoading}

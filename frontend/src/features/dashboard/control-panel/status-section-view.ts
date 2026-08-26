@@ -36,8 +36,6 @@ export type CompactMetricView = {
 type PeakKind = "generation" | "prefill" | "ttft";
 type PeakTier = "session" | "bestSession" | "all";
 
-const PERFORMANCE_FRESHNESS_MS = 15_000;
-
 const PEAK_FIELDS: Record<PeakKind, Record<PeakTier, readonly (keyof Metrics)[]>> = {
   generation: {
     session: [
@@ -96,7 +94,6 @@ export function resolveStatusSectionView({
     currentProcess?.started_at,
     performanceObservedAt,
   );
-  const performanceFresh = isFreshPerformance(performanceObservedAt, performanceIdentityMatches);
   const performanceSample = resolvePerformanceSample(metrics, perf, performanceIdentityMatches);
   return {
     backend: currentProcess?.backend,
@@ -104,7 +101,11 @@ export function resolveStatusSectionView({
     displayPlatformKind: platformKind ?? null,
     displayPort: inferencePort || currentProcess?.port || undefined,
     isRunning,
-    metricColumns: metricColumnViews(metrics, perf, performanceFresh),
+    metricColumns: metricColumnViews(
+      metrics,
+      perf,
+      performanceIdentityMatches ? performanceObservedAt : 0,
+    ),
     modelName: resolveModelName(currentProcess, currentRecipe, modelDisplayName),
     sampleInput: {
       key: resolveProcessSampleKey(currentProcess, currentRecipe, physicalModelId),
@@ -139,10 +140,6 @@ function matchesPerformanceEpoch(
     metrics.performance_model_id === physicalModelId &&
     observedAt >= startedAt
   );
-}
-
-function isFreshPerformance(observedAt: number, identityMatches: boolean) {
-  return identityMatches && observedAt > 0 && Date.now() - observedAt <= PERFORMANCE_FRESHNESS_MS;
 }
 
 function resolvePerformanceSample(
@@ -239,29 +236,48 @@ function resolveGpuTotals(gpus: GPU[]) {
 function metricColumnViews(
   metrics: Metrics | null,
   perf: ReturnType<typeof resolvePerformanceMetrics>,
-  performanceFresh: boolean,
+  performanceObservedAt: number,
 ): MetricColumnView[] {
-  const peak = (kind: PeakKind) => (performanceFresh ? peakDetailFor(metrics, kind) : {});
+  const age = completedRequestAge(performanceObservedAt);
+  const detail = (kind: PeakKind) => {
+    const peak = peakDetailFor(metrics, kind);
+    return {
+      detail: age,
+      detailTitle: [age, peak.detailTitle].filter(Boolean).join(" | ") || undefined,
+    };
+  };
   return [
     {
       label: "Decode",
-      value: metricValue(performanceFresh ? perf.genTps : null, 1),
+      value: metricValue(performanceObservedAt > 0 ? perf.genTps : null, 1),
       unit: "tok/s",
-      ...peak("generation"),
+      ...detail("generation"),
     },
     {
       label: "TTFT",
-      value: metricValue(performanceFresh ? perf.ttftMs : null, 0),
+      value: metricValue(performanceObservedAt > 0 ? perf.ttftMs : null, 0),
       unit: "ms",
-      ...peak("ttft"),
+      ...detail("ttft"),
     },
     {
       label: "Prefill",
-      value: metricValue(performanceFresh ? perf.prefillTps : null, 1),
+      value: metricValue(performanceObservedAt > 0 ? perf.prefillTps : null, 1),
       unit: "t/s",
-      ...peak("prefill"),
+      ...detail("prefill"),
     },
   ];
+}
+
+function completedRequestAge(observedAt: number): string | undefined {
+  if (observedAt <= 0) return undefined;
+  const seconds = Math.max(0, Math.floor((Date.now() - observedAt) / 1000));
+  if (seconds < 5) return "last completed just now";
+  if (seconds < 60) return `last completed ${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `last completed ${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `last completed ${hours}h ago`;
+  return `last completed ${Math.floor(hours / 24)}d ago`;
 }
 
 function compactMetricViews(

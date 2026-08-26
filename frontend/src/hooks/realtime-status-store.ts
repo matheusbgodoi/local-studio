@@ -50,10 +50,12 @@ type ControllerEventDetail = ControllerIdentity & {
 };
 type PolledStatus = Awaited<ReturnType<typeof api.getStatus>>;
 type PolledCompatibility = Awaited<ReturnType<typeof api.getCompatibility>>;
+type PolledGpus = { gpus: GPU[]; observedAt: number };
 type PolledMetrics = { metrics: Metrics | null; observedAt: number };
 type PollResults = {
   compatibility: PolledCompatibility | null;
   gpus: GPU[];
+  gpusObservedAt: number;
   metrics: Metrics | null;
   metricsObservedAt: number;
   status: PolledStatus | null;
@@ -87,6 +89,7 @@ const initialSnapshot: RealtimeStatusSnapshot = {
   runtimeSummary: null,
   services: [],
   lease: null,
+  gpusObservedAt: 0,
   metricsObservedAt: 0,
   lastEventAt: 0,
 };
@@ -177,6 +180,7 @@ function emitIfChanged(next: RealtimeStatusSnapshot) {
     !areRuntimeSummariesEqual(snapshot.runtimeSummary, next.runtimeSummary) ||
     !areServicesEqual(snapshot.services, next.services) ||
     !areLeasesEqual(snapshot.lease, next.lease) ||
+    snapshot.gpusObservedAt !== next.gpusObservedAt ||
     snapshot.metricsObservedAt !== next.metricsObservedAt;
 
   snapshot = changed ? next : { ...snapshot, lastEventAt: next.lastEventAt };
@@ -227,7 +231,12 @@ function fetchPollResultsEffect(): Effect.Effect<PollResults> {
     const [statusResult, compatibilityResult, gpuResult, metricsResult] = yield* Effect.all([
       Effect.result(requestEffect(() => api.getStatus(FAST_STATUS_REQUEST))),
       Effect.result(requestEffect(() => api.getCompatibility(FAST_COMPAT_REQUEST))),
-      Effect.result(requestEffect(() => api.getGPUs(FAST_GPU_REQUEST))),
+      Effect.result(
+        requestEffect(async () => {
+          const payload = await api.getGPUs(FAST_GPU_REQUEST);
+          return { gpus: payload.gpus ?? [], observedAt: Date.now() } satisfies PolledGpus;
+        }),
+      ),
       Effect.result(
         requestEffect(async () => {
           const metrics = await api.getMetrics();
@@ -237,9 +246,13 @@ function fetchPollResultsEffect(): Effect.Effect<PollResults> {
     ] as const);
     const status = Result.isSuccess(statusResult) ? statusResult.success : null;
     const polledMetrics = pollMetrics(metricsResult, status);
+    const polledGpus = Result.isSuccess(gpuResult)
+      ? gpuResult.success
+      : { gpus: snapshot.gpus, observedAt: snapshot.gpusObservedAt };
     return {
       compatibility: Result.isSuccess(compatibilityResult) ? compatibilityResult.success : null,
-      gpus: Result.isSuccess(gpuResult) ? (gpuResult.success.gpus ?? snapshot.gpus) : snapshot.gpus,
+      gpus: polledGpus.gpus,
+      gpusObservedAt: polledGpus.observedAt,
       metrics: polledMetrics.metrics,
       metricsObservedAt: polledMetrics.observedAt,
       status,
@@ -285,7 +298,7 @@ function runtimeSummaryFromCompatibility(
   };
 }
 
-function emitNoPolledStatus() {
+function emitNoPolledStatus(gpus: GPU[], gpusObservedAt: number) {
   // Keep a warm cache through transient navigation/SSE handoff failures. The
   // next poll failure marks the controller offline, but a single missed fast
   // request should not blank the status page or flash "offline".
@@ -296,6 +309,8 @@ function emitNoPolledStatus() {
     ...snapshot,
     statusLoading: false,
     connected: hasCachedStatus && pollFailureStreak <= 3 ? snapshot.connected : false,
+    gpus,
+    gpusObservedAt,
     lastEventAt: Date.now(),
   });
 }
@@ -303,11 +318,12 @@ function emitNoPolledStatus() {
 function emitPolledStatus({
   compatibility,
   gpus,
+  gpusObservedAt,
   metrics,
   metricsObservedAt,
   status,
 }: PollResults) {
-  if (!status) return emitNoPolledStatus();
+  if (!status) return emitNoPolledStatus(gpus, gpusObservedAt);
   const { running, process, inference_port } = status;
   const launching = status.launching ?? null;
   emitIfChanged({
@@ -324,6 +340,7 @@ function emitPolledStatus({
     runtimeSummary: runtimeSummaryFromCompatibility(snapshot.runtimeSummary, compatibility),
     services: snapshot.services,
     lease: snapshot.lease,
+    gpusObservedAt,
     metricsObservedAt,
     lastEventAt: Date.now(),
   });
@@ -371,6 +388,7 @@ function handleGpuEvent(data: Record<string, unknown>, now: number) {
   emitIfChanged({
     ...snapshot,
     gpus: normalizeGpuAliases(data["gpus"]),
+    gpusObservedAt: now,
     lastEventAt: now,
   });
 }
@@ -449,6 +467,7 @@ function handleRuntimeSummaryEvent(data: Record<string, unknown>, now: number) {
         : snapshot.runtimeSummary,
     services: Array.isArray(rawServices) ? rawServices : snapshot.services,
     lease: rawLease ?? snapshot.lease,
+    gpusObservedAt: snapshot.gpusObservedAt,
     metricsObservedAt: snapshot.metricsObservedAt,
     lastEventAt: now,
   });
