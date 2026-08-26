@@ -14,6 +14,7 @@ import {
   type AssistantBlock,
   type ChatMessage,
   messageText,
+  toolImagesFromContent,
   newId,
   nowLabel,
   reconcileQueueWithPiEvent,
@@ -292,6 +293,9 @@ function reduceToolResultMessageEvent(
   const owner = assistantWithTool(session.messages, toolCallId);
   const target = owner ? { session, targetId: owner } : resolveAssistantTarget(session, ctx);
   const resultText = messageText(msg.content as string | Record<string, unknown>[] | undefined);
+  const resultImages = toolImagesFromContent(
+    msg.content as string | Record<string, unknown>[] | undefined,
+  );
   const isError = Boolean(msg.isError);
   return patchAssistantMessage(target.session, target.targetId, (current) => ({
     ...current,
@@ -302,12 +306,16 @@ function reduceToolResultMessageEvent(
         ...existing,
         status: isError ? "error" : "done",
         text: resultText || existing.text,
+        resultText: resultText || existing.resultText,
+        resultImages: resultImages.length > 0 ? resultImages : existing.resultImages,
       }),
       () => ({
         kind: "tool",
         id: toolCallId,
         name: (typeof msg.toolName === "string" && msg.toolName) || "tool",
         status: isError ? "error" : "done",
+        resultText,
+        resultImages,
         text: resultText,
       }),
     ),

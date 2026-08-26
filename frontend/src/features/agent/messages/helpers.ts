@@ -68,6 +68,38 @@ export function extractToolText(value: unknown): string {
     .join("\n");
 }
 
+export function extractToolImages(value: unknown): Array<{ data: string; mimeType: string }> {
+  if (!value || typeof value !== "object") return [];
+  const result = value as {
+    content?: Array<{ type?: string; data?: string; mimeType?: string }>;
+  };
+  if (!Array.isArray(result.content)) return [];
+  return result.content.flatMap((item) =>
+    item?.type === "image" &&
+    typeof item.data === "string" &&
+    item.data.length > 0 &&
+    typeof item.mimeType === "string" &&
+    item.mimeType.startsWith("image/")
+      ? [{ data: item.data, mimeType: item.mimeType }]
+      : [],
+  );
+}
+
+export function toolImagesFromContent(
+  content: string | Array<Record<string, unknown>> | undefined,
+): Array<{ data: string; mimeType: string }> {
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((item) =>
+    item?.type === "image" &&
+    typeof item.data === "string" &&
+    item.data.length > 0 &&
+    typeof item.mimeType === "string" &&
+    item.mimeType.startsWith("image/")
+      ? [{ data: item.data, mimeType: item.mimeType }]
+      : [],
+  );
+}
+
 export function piSessionIdFromEvent(event: Record<string, unknown>): string | null {
   if (event.type !== "session") return null;
   for (const key of ["id", "sessionId", "session_id"]) {
