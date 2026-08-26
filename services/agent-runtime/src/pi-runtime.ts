@@ -566,7 +566,7 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
                               },
                               {
                                 name: "local-studio-personal-memory",
-                                factory: createPersonalMemoryExtension(),
+                                factory: createPersonalMemoryExtension(selectedModel.controllerUrl),
                               },
                               // Registers NO tools at load: a fresh session must
                               // carry zero personal MCP schemas and must not

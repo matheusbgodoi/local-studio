@@ -146,7 +146,7 @@ export function PersonalMemorySettings() {
 
       <SettingsGroup
         title="What CRIAs AI knows about you"
-        description={`${document.entries.length} of 60 memory items. Disabled items stay stored but do not enter the prompt.`}
+        description={`${document.entries.length} of 60 memory items. Disabled items stay stored but do not enter the prompt. Local-only items are excluded from cloud models.`}
         actions={
           <div className="flex flex-wrap gap-2">
             {selected.size > 0 ? (
@@ -330,7 +330,7 @@ function MemoryForm({
           }
           options={[
             { value: "standard", label: "Standard" },
-            { value: "local_only", label: "Local only" },
+            { value: "local_only", label: "Local/self-hosted models only" },
           ]}
         />
       </div>

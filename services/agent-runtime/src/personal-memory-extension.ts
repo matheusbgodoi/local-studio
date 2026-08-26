@@ -12,13 +12,35 @@ function schema<T>(value: T): T & { "~unsafe": null } {
   return { ...value, "~unsafe": null };
 }
 
-function memorySection(): string | null {
+export function canUseLocalOnlyMemory(controllerUrl: string | undefined): boolean {
+  if (!controllerUrl) return false;
+  try {
+    const hostname = new URL(controllerUrl).hostname.toLowerCase();
+    if (
+      hostname === "localhost" ||
+      hostname === "::1" ||
+      hostname.endsWith(".local") ||
+      hostname.endsWith(".ts.net") ||
+      /^127\./.test(hostname) ||
+      /^10\./.test(hostname) ||
+      /^192\.168\./.test(hostname) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(hostname)
+    )
+      return true;
+    const octets = hostname.split(".").map(Number);
+    return octets.length === 4 && octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127;
+  } catch {
+    return false;
+  }
+}
+
+export function personalMemorySection(allowLocalOnly: boolean): string | null {
   const document = readPersonalMemorySync();
   if (document.mode !== "automatic") return null;
   const lines: string[] = [];
   let used = 0;
   for (const entry of document.entries) {
-    if (!entry.enabled) continue;
+    if (!entry.enabled || (entry.sensitivity === "local_only" && !allowLocalOnly)) continue;
     const line = `- [${entry.category}] ${entry.text}`;
     if (used + line.length > PERSONAL_MEMORY_PROMPT_CHARACTERS) break;
     lines.push(line);
@@ -44,10 +66,11 @@ function result(text: string) {
   return { content: [{ type: "text" as const, text }], details: {} };
 }
 
-export function createPersonalMemoryExtension() {
+export function createPersonalMemoryExtension(controllerUrl?: string) {
+  const allowLocalOnly = canUseLocalOnlyMemory(controllerUrl);
   return (pi: ExtensionAPI): void => {
     pi.on("before_agent_start", (event) => {
-      const section = memorySection();
+      const section = personalMemorySection(allowLocalOnly);
       if (!section || event.systemPrompt.includes(MARKER)) return {};
       return { systemPrompt: `${event.systemPrompt.trimEnd()}\n\n${section}` };
     });
