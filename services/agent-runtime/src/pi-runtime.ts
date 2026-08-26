@@ -27,6 +27,8 @@ import { refreshPiModels, resolvePiModelSelection } from "./pi-runtime-models";
 import { getProviderHub } from "./provider-hub";
 import { attachGoalDriver } from "./goal-driver";
 import { createGoalPromptExtension } from "./goal-prompt";
+import { createPersonalMemoryExtension } from "./personal-memory-extension";
+import { readPersonalMemorySync } from "./personal-memory-store";
 import { createAgenticControlExtension } from "./agentic/control-tools";
 import { networkService } from "./network";
 import { applyAgentShell } from "./network/agent-shell";
@@ -332,6 +334,7 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
   private connectorApi: ExtensionAPI | null = null;
   private desiredConnectors: string[] = [];
   private registeredConnectorTools = new Map<string, string[]>();
+  private connectorSelectionInitialized = false;
 
   ensureStarted(
     modelId: string,
@@ -346,16 +349,24 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     );
     return Effect.runPromise(
       this.ensureStartedEffect(modelId, cwd, piSessionId, effectiveOptions),
-    ).then(() =>
-      // Re-apply the session's connector selection after every start: a runtime
-      // rebuild (model, cwd, thinking level) drops the registrations, and the
-      // user's `/mcp` choice must survive it. A connector that cannot be
-      // reached must never fail the turn.
-      this.syncConnectorTools().then(
-        () => undefined,
-        () => undefined,
-      ),
-    );
+    ).then(() => {
+      if (!this.connectorSelectionInitialized) {
+        this.connectorSelectionInitialized = true;
+        if (readPersonalMemorySync().knowledgeMode !== "off") {
+          this.desiredConnectors = ["personal-knowledge-mcp"];
+        }
+      }
+      return (
+        // Re-apply the session's connector selection after every start: a runtime
+        // rebuild (model, cwd, thinking level) drops the registrations, and the
+        // user's `/mcp` choice must survive it. A connector that cannot be
+        // reached must never fail the turn.
+        this.syncConnectorTools().then(
+          () => undefined,
+          () => undefined,
+        )
+      );
+    });
   }
 
   /**
@@ -368,6 +379,7 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
    * from.
    */
   setConnectorSelection(connectorIds: string[]): Promise<ConnectorSelectionResult> {
+    this.connectorSelectionInitialized = true;
     this.desiredConnectors = normalizePersonalConnectorIds(connectorIds);
     return this.syncConnectorTools();
   }
@@ -551,6 +563,10 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
                                 factory: createGoalPromptExtension(() =>
                                   sessionManager.getSessionId(),
                                 ),
+                              },
+                              {
+                                name: "local-studio-personal-memory",
+                                factory: createPersonalMemoryExtension(selectedModel.controllerUrl),
                               },
                               // Registers NO tools at load: a fresh session must
                               // carry zero personal MCP schemas and must not

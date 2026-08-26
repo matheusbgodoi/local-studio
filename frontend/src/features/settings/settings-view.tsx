@@ -2,6 +2,7 @@
 import { useMemo, useState } from "react";
 import {
   Archive,
+  Brain,
   Cable,
   Cpu,
   Keyboard,
@@ -22,6 +23,7 @@ import { ServicesSettings, SystemDetails, SystemOverview } from "./system-settin
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 import { ProfileSettings } from "./profile-settings";
 import type { CapabilityState } from "@local-studio/contracts/capabilities";
+import { PersonalMemorySettings } from "./personal-memory-settings";
 interface SettingsViewProps {
   data: ConfigData | null;
   compatibilityReport: CompatibilityReport | null;
@@ -45,6 +47,7 @@ interface SettingsViewProps {
 const sectionIcon = (Icon: LucideIcon) => <Icon className="h-3.5 w-3.5" />;
 const SECTIONS: SettingsSectionDef[] = [
   ["profile", "Profile", "Your identity in CRIAs AI.", UserRound],
+  ["memory", "Memory", "Preferences, personal knowledge, and privacy.", Brain],
   ["connection", "General", "Controller connections and API access.", Cable],
   ["system", "System", "Engines, services, storage, and hardware.", Cpu],
   ["appearance", "Appearance", "Theme, typography, and interface scale.", Paintbrush],
@@ -137,6 +140,7 @@ export function SettingsView({
         />
       ) : null}
       {visibleSection === "profile" ? <ProfileSettings /> : null}
+      {visibleSection === "memory" ? <PersonalMemorySettings /> : null}
       {visibleSection === "system" ? (
         <div className="space-y-10">
           <SystemOverview
