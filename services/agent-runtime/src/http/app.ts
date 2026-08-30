@@ -75,6 +75,11 @@ import {
   handleNetworkStatus,
 } from "./network-handlers";
 import {
+  handleComputeHostStatus,
+  handleComputeHostWake,
+  handleComputeHostsList,
+} from "./compute-host-handlers";
+import {
   handlePersonalMemoryCreate,
   handlePersonalMemoryDelete,
   handlePersonalMemoryDeleteOne,
@@ -118,6 +123,9 @@ export function createAgentRuntimeApp() {
   );
   app.delete("/api/agent/automations/:id", (c) => handleAutomationDelete(c.req.param("id")));
   app.post("/api/agent/automations/:id/run", (c) => handleAutomationRun(c.req.param("id")));
+  app.get("/api/agent/compute-hosts", () => handleComputeHostsList());
+  app.get("/api/agent/compute-hosts/:id", (c) => handleComputeHostStatus(c.req.param("id")));
+  app.post("/api/agent/compute-hosts/:id/wake", (c) => handleComputeHostWake(c.req.param("id")));
   app.get("/api/agent/network/status", () => handleNetworkStatus());
   app.post("/api/agent/network/policy", (c) => handleNetworkPolicy(c.req.raw));
   app.get("/api/agent/network/provider", (c) => handleNetworkProvider(c.req.raw));
