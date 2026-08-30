@@ -107,6 +107,8 @@ export interface PiAgentSession {
     customInstructions?: string,
     inferenceObserver?: InferenceActivityObserver,
   ): Promise<unknown>;
+  /** Where this session's context is going, decomposed by source. */
+  contextBudget(): import("./context-budget").ContextBudgetReport | null;
   /** Activate/deactivate personal MCP connectors for this session only. Never
    *  restarts the runtime and never writes connectors.json. */
   setConnectorSelection(connectorIds: string[]): Promise<ConnectorSelectionResult>;

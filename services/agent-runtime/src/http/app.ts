@@ -7,6 +7,7 @@ import {
   handleExtensionUiResponse,
   handleRuntimeEvents,
   handleRuntimeSessions,
+  handleRuntimeContextBudget,
   handleRuntimeStatus,
   handleSetupChecks,
 } from "./handlers";
@@ -103,6 +104,7 @@ export function createAgentRuntimeApp() {
   app.get("/api/agent/runtime/sessions", () => handleRuntimeSessions());
   app.get("/api/agent/runtime/status", (c) => handleRuntimeStatus(c.req.raw));
   app.get("/api/agent/runtime/events", (c) => handleRuntimeEvents(c.req.raw));
+  app.get("/api/agent/runtime/context-budget", (c) => handleRuntimeContextBudget(c.req.raw));
   app.get("/api/agent/setup-checks", () => handleSetupChecks());
   app.get("/api/agent/models", () => handleAgentModels());
   app.post("/api/agent/models", (c) => handleAgentModels(c.req.raw));

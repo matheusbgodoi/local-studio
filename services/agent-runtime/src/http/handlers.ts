@@ -435,6 +435,26 @@ export function handleRuntimeStatus(request: Request): Response {
   });
 }
 
+// ─── GET /api/agent/runtime/context-budget ────────────────────────────────
+
+export function handleRuntimeContextBudget(request: Request): Response {
+  const searchParams = new URL(request.url).searchParams;
+  const sessionId = searchParams.get("sessionId")?.trim() || "default";
+  const piSessionId = searchParams.get("piSessionId")?.trim() || null;
+  const resolved = piRuntimeManager.findSessionForLookup(sessionId, piSessionId);
+  if (!resolved) {
+    return Response.json(
+      { error: "No live runtime for that session; open a chat first." },
+      { status: 404 },
+    );
+  }
+  const budget = resolved.session.contextBudget();
+  if (!budget) {
+    return Response.json({ error: "The runtime is not started." }, { status: 409 });
+  }
+  return Response.json(budget);
+}
+
 // ─── GET /api/agent/runtime/events (SSE) ──────────────────────────────────
 
 function parseSeq(value: string | null): number {

@@ -25,6 +25,7 @@ import {
 } from "./pi-runtime-helpers";
 import { refreshPiModels, resolvePiModelSelection } from "./pi-runtime-models";
 import { applyContextHeadroomSettings } from "./pi-agent-settings";
+import { describeContextBudget, type ContextBudgetReport } from "./context-budget";
 import { shouldRecoverByCompaction } from "../../../shared/agent/context-headroom";
 import { getProviderHub } from "./provider-hub";
 import { attachGoalDriver } from "./goal-driver";
@@ -1051,6 +1052,12 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
       eventLog: this.eventLog,
       contextUsage: this.computeContextUsage(),
     });
+  }
+
+  contextBudget(): ContextBudgetReport | null {
+    const session = this.runtime?.session;
+    if (!session) return null;
+    return describeContextBudget(session);
   }
 
   private computeContextUsage() {
