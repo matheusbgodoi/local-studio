@@ -137,7 +137,7 @@ export function ComputeHostsSection() {
               }
             />
             <SettingsRow
-              label="Wake automatically for agents"
+              label="Auto wake"
               description="Let a delegated task bring the host up on its own."
               control={
                 <Checkbox
