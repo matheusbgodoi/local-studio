@@ -53,6 +53,8 @@ export function ComputeHostsSection() {
   const message = store.notice;
   const [wakeUrlDraft, setWakeUrlDraft] = useState("");
   const [savingWakeUrl, setSavingWakeUrl] = useState(false);
+  const [macDraft, setMacDraft] = useState("");
+  const [savingMac, setSavingMac] = useState(false);
 
   const load = () => void refreshComputeHosts();
   const patchHost = patchComputeHost;
@@ -121,11 +123,52 @@ export function ComputeHostsSection() {
               value={<SettingsValue dim>{relative(host.lastSeenAt)}</SettingsValue>}
             />
             <SettingsRow
+              label="Wake method"
+              description="A LAN magic packet needs no secret but only works from this network. The HTTP bridge is the way in from outside."
+              value={
+                <SettingsValue dim>
+                  {host.wakeMethods.length === 0
+                    ? "none configured"
+                    : host.wakeMethods
+                        .map((method) =>
+                          method === "lan-magic-packet" ? "LAN magic packet" : "HTTP bridge",
+                        )
+                        .join(" · ")}
+                </SettingsValue>
+              }
+            />
+            <SettingsRow
+              label="MAC address"
+              description="The target's wired NIC. With this set, CRIAs sends the magic packet itself whenever it shares the network."
+              control={
+                <div className="flex w-full items-center gap-2">
+                  <SettingsInput
+                    value={macDraft}
+                    onChange={setMacDraft}
+                    placeholder="08-BF-B8-A6-B0-29"
+                    aria-label="Wake-on-LAN MAC address"
+                    className="min-w-0 flex-1"
+                  />
+                  <SettingsButton
+                    disabled={savingMac || macDraft.trim().length === 0}
+                    onClick={() => {
+                      setSavingMac(true);
+                      void patchHost(host.id, { wakeMac: macDraft.trim() })
+                        .then(() => setMacDraft(""))
+                        .finally(() => setSavingMac(false));
+                    }}
+                  >
+                    Save
+                  </SettingsButton>
+                </div>
+              }
+            />
+            <SettingsRow
               label="Wake on demand"
               description={
                 host.wakeConfigured
                   ? "A wake request is sent when the host is not reachable."
-                  : "Paste the wake URL below to enable this."
+                  : "Set a MAC address or a wake URL below to enable this."
               }
               control={
                 <Checkbox

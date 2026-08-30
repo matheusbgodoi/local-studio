@@ -1,13 +1,17 @@
+import { createSocket } from "node:dgram";
 import { readFile, writeFile, rename, chmod } from "node:fs/promises";
 import path from "node:path";
 import {
   DEFAULT_WAKE_READY_TIMEOUT_MS,
   WAKE_COOLDOWN_MS,
+  DEFAULT_WAKE_BROADCAST,
   isComputeHostOnline,
+  magicPacket,
   redactWakeUrl,
   type ComputeHostConfig,
   type ComputeHostPowerState,
   type ComputeHostStatus,
+  type ComputeHostWakeMethod,
   type ComputeHostWakeResult,
 } from "../../../shared/agent/compute-host";
 import { resolveDataDir } from "./data-dir";
@@ -118,12 +122,13 @@ function stateFromPayload(payload: ControlStatusPayload): ComputeHostPowerState 
   return "unknown";
 }
 
-async function probeControl(config: ComputeHostConfig): Promise<ControlStatusPayload | null> {
-  const base = config.controlUrl.trim().replace(/\/+$/, "");
-  if (!base || !config.controlToken.trim()) return null;
+async function probeOne(
+  base: string,
+  token: string,
+): Promise<ControlStatusPayload | null> {
   try {
     const response = await fetch(`${base}/gpu/status`, {
-      headers: { "X-Auth-Token": config.controlToken },
+      headers: { "X-Auth-Token": token },
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
     if (!response.ok) return null;
@@ -131,6 +136,27 @@ async function probeControl(config: ComputeHostConfig): Promise<ControlStatusPay
   } catch {
     return null;
   }
+}
+
+//
+// The tailnet address is the one that works from anywhere, so it is always
+// tried first. The LAN address exists for the evening the internet is down and
+// the power is not: this Mac is still home, the host is still on, and there is
+// no reason for the panel to go dark. It is tried exactly once after the
+// tailnet address fails, never in a loop — a host that is genuinely asleep
+// should be reported as unreachable quickly rather than retried into a stall.
+//
+async function probeControl(config: ComputeHostConfig): Promise<ControlStatusPayload | null> {
+  const token = config.controlToken.trim();
+  if (!token) return null;
+  const primary = config.controlUrl.trim().replace(/\/+$/, "");
+  const fallback = config.controlUrlFallback.trim().replace(/\/+$/, "");
+  if (primary) {
+    const payload = await probeOne(primary, token);
+    if (payload) return payload;
+  }
+  if (fallback && fallback !== primary) return probeOne(fallback, token);
+  return null;
 }
 
 function buildStatus(
@@ -162,7 +188,8 @@ function buildStatus(
     gatewayUp: typeof details.gateway === "boolean" ? details.gateway : null,
     lastSeenAt: stored.lastSeenAt,
     checkedAt: now.toISOString(),
-    wakeConfigured: config.wakeUrl.trim().length > 0,
+    wakeConfigured: wakeMethodsFor(config).length > 0,
+    wakeMethods: wakeMethodsFor(config),
     wakeEnabled: config.wakeEnabled,
     autoWake: config.autoWake,
     wakeInFlight: state.inFlight.has(config.id),
@@ -194,15 +221,76 @@ function invalidate(id: string): void {
   runtime().cache.delete(id);
 }
 
-async function sendWakeRequest(config: ComputeHostConfig): Promise<boolean> {
-  try {
-    const response = await fetch(config.wakeUrl, {
-      signal: AbortSignal.timeout(WAKE_REQUEST_TIMEOUT_MS),
+function wakeMethodsFor(config: ComputeHostConfig): ComputeHostWakeMethod[] {
+  const methods: ComputeHostWakeMethod[] = [];
+  if (config.wakeUrl.trim().length > 0) methods.push("http-bridge");
+  if (magicPacket(config.wakeMac) !== null) methods.push("lan-magic-packet");
+  return methods;
+}
+
+function sendMagicPacket(config: ComputeHostConfig): Promise<boolean> {
+  const packet = magicPacket(config.wakeMac);
+  if (packet === null) return Promise.resolve(false);
+  const target = config.wakeBroadcast.trim() || DEFAULT_WAKE_BROADCAST;
+  return new Promise((resolve) => {
+    const socket = createSocket("udp4");
+    let settled = false;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      try {
+        socket.close();
+      } catch {
+        // The socket is already closing; the result is what matters.
+      }
+      resolve(ok);
+    };
+    socket.once("error", () => finish(false));
+    socket.bind(() => {
+      try {
+        socket.setBroadcast(true);
+      } catch {
+        finish(false);
+        return;
+      }
+      // Port 9 is the conventional discard port for Wake-on-LAN. 7 is also
+      // used; a NIC listening for the pattern does not care which it arrives
+      // on, so sending to both costs nothing and covers more firmware.
+      let pending = 2;
+      const done = (error: Error | null) => {
+        if (error) finish(false);
+        pending -= 1;
+        if (pending === 0) finish(true);
+      };
+      socket.send(packet, 9, target, done);
+      socket.send(packet, 7, target, done);
     });
-    return response.ok;
-  } catch {
-    return false;
+    setTimeout(() => finish(false), 5_000);
+  });
+}
+
+async function sendWakeRequest(
+  config: ComputeHostConfig,
+): Promise<{ ok: boolean; method: ComputeHostWakeMethod | null }> {
+  // The bridge goes first because it answers from anywhere. Each method is
+  // tried once: neither returns an acknowledgement from the host, so a success
+  // here means "the request left", not "the host woke", and repeating it would
+  // only hammer a public endpoint. Readiness is decided by polling.
+  if (config.wakeUrl.trim()) {
+    try {
+      const response = await fetch(config.wakeUrl, {
+        signal: AbortSignal.timeout(WAKE_REQUEST_TIMEOUT_MS),
+      });
+      if (response.ok) return { ok: true, method: "http-bridge" };
+    } catch {
+      // Falls through to the LAN packet, which is what being home is for.
+    }
   }
+  if (magicPacket(config.wakeMac) !== null) {
+    const sent = await sendMagicPacket(config);
+    if (sent) return { ok: true, method: "lan-magic-packet" };
+  }
+  return { ok: false, method: config.wakeUrl.trim() ? "http-bridge" : null };
 }
 
 async function waitForReady(config: ComputeHostConfig): Promise<"ready" | "timeout"> {
@@ -222,14 +310,15 @@ export async function wakeComputeHost(
   await loadPersisted();
   const state = runtime();
 
-  if (!config.wakeUrl.trim()) {
+  if (wakeMethodsFor(config).length === 0) {
     const status = await computeHostStatus(config);
     return {
       id: config.id,
       accepted: false,
+      method: null,
       reason: "not-configured",
       state: status.state,
-      message: "No wake URL is configured for this host.",
+      message: "No wake method is configured for this host.",
     };
   }
   if (!config.wakeEnabled) {
@@ -237,6 +326,7 @@ export async function wakeComputeHost(
     return {
       id: config.id,
       accepted: false,
+      method: null,
       reason: "disabled",
       state: status.state,
       message: "Wake on demand is turned off for this host.",
@@ -249,6 +339,7 @@ export async function wakeComputeHost(
     return {
       id: config.id,
       accepted: false,
+      method: null,
       reason: "in-flight",
       state: status.state,
       message: "A wake attempt for this host is already running.",
@@ -260,6 +351,7 @@ export async function wakeComputeHost(
     return {
       id: config.id,
       accepted: false,
+      method: null,
       reason: "already-online",
       state: current.state,
       message: "The host is already reachable.",
@@ -272,6 +364,7 @@ export async function wakeComputeHost(
     return {
       id: config.id,
       accepted: false,
+      method: null,
       reason: "cooling-down",
       state: current.state,
       message: `A wake was sent ${Math.round(since / 1000)}s ago; waiting for the host to come up.`,
@@ -284,7 +377,7 @@ export async function wakeComputeHost(
     await savePersisted();
     invalidate(config.id);
 
-    const sent = await sendWakeRequest(config);
+    const { ok: sent, method } = await sendWakeRequest(config);
     if (!sent) {
       stored.lastWakeOutcome = "failed";
       await savePersisted();
@@ -294,14 +387,15 @@ export async function wakeComputeHost(
       return {
         id: config.id,
         accepted: false,
+        method,
         reason: "failed",
         state: "unreachable",
-        message: "The wake provider did not accept the request.",
+        message: "No wake method could deliver the request.",
       };
     }
 
     console.log(
-      `[compute-host] wake sent for ${config.id} via ${redactWakeUrl(config.wakeUrl)}, waiting for readiness`,
+      `[compute-host] wake sent for ${config.id} via ${method === "lan-magic-packet" ? "a LAN magic packet" : redactWakeUrl(config.wakeUrl)}, waiting for readiness`,
     );
     const outcome = await waitForReady(config);
     stored.lastWakeOutcome = outcome;
@@ -311,6 +405,7 @@ export async function wakeComputeHost(
     return {
       id: config.id,
       accepted: true,
+      method,
       reason: "sent",
       state: status.state,
       message:
@@ -332,7 +427,7 @@ export async function wakeComputeHost(
 export async function ensureComputeHostAwake(
   config: ComputeHostConfig,
 ): Promise<ComputeHostWakeResult | null> {
-  if (!config.autoWake || !config.wakeEnabled || !config.wakeUrl.trim()) return null;
+  if (!config.autoWake || !config.wakeEnabled || wakeMethodsFor(config).length === 0) return null;
   const status = await computeHostStatus(config);
   if (isComputeHostOnline(status.state)) return null;
   return wakeComputeHost(config);

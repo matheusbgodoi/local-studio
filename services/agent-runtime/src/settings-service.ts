@@ -5,7 +5,9 @@ import { chmod, readFile, rename, writeFile } from "fs/promises";
 import { existsSync } from "fs";
 import { resolveSettingsDefaultBackendUrl } from "../../../shared/agent/backend-url";
 import {
+  DEFAULT_WAKE_BROADCAST,
   DEFAULT_WAKE_READY_TIMEOUT_MS,
+  normalizeMacAddress,
   redactWakeUrl,
   type ComputeHostConfig,
 } from "../../../shared/agent/compute-host";
@@ -24,10 +26,13 @@ export interface ComputeHostUpdate {
   id: string;
   name?: string;
   controlUrl?: string;
+  controlUrlFallback?: string;
   controlToken?: string;
   clearControlToken?: boolean;
   wakeUrl?: string;
   clearWakeUrl?: boolean;
+  wakeMac?: string;
+  wakeBroadcast?: string;
   wakeEnabled?: boolean;
   autoWake?: boolean;
   readyTimeoutMs?: number;
@@ -149,8 +154,17 @@ function normalizeStoredComputeHosts(value: unknown): ComputeHostConfig[] {
       id,
       name: typeof record.name === "string" && record.name.trim() ? record.name.trim() : id,
       controlUrl: typeof record.controlUrl === "string" ? normalizeUrl(record.controlUrl) : "",
+      controlUrlFallback:
+        typeof record.controlUrlFallback === "string"
+          ? normalizeUrl(record.controlUrlFallback)
+          : "",
       controlToken: typeof record.controlToken === "string" ? record.controlToken.trim() : "",
       wakeUrl: typeof record.wakeUrl === "string" ? record.wakeUrl.trim() : "",
+      wakeMac: typeof record.wakeMac === "string" ? record.wakeMac.trim() : "",
+      wakeBroadcast:
+        typeof record.wakeBroadcast === "string" && record.wakeBroadcast.trim()
+          ? record.wakeBroadcast.trim()
+          : DEFAULT_WAKE_BROADCAST,
       wakeEnabled: record.wakeEnabled === true,
       autoWake: record.autoWake === true,
       readyTimeoutMs:
@@ -177,6 +191,10 @@ function mergedComputeHosts(
         update.controlUrl !== undefined
           ? normalizeUrl(update.controlUrl)
           : (previous?.controlUrl ?? ""),
+      controlUrlFallback:
+        update.controlUrlFallback !== undefined
+          ? normalizeUrl(update.controlUrlFallback)
+          : (previous?.controlUrlFallback ?? ""),
       controlToken: update.clearControlToken
         ? ""
         : update.controlToken !== undefined
@@ -187,6 +205,10 @@ function mergedComputeHosts(
         : update.wakeUrl !== undefined
           ? update.wakeUrl.trim()
           : (previous?.wakeUrl ?? ""),
+      wakeMac:
+        update.wakeMac !== undefined ? update.wakeMac.trim() : (previous?.wakeMac ?? ""),
+      wakeBroadcast:
+        update.wakeBroadcast?.trim() || previous?.wakeBroadcast || DEFAULT_WAKE_BROADCAST,
       wakeEnabled: update.wakeEnabled ?? previous?.wakeEnabled ?? false,
       autoWake: update.autoWake ?? previous?.autoWake ?? false,
       readyTimeoutMs:
@@ -321,9 +343,13 @@ export function settingsView(settings: ApiSettings) {
       id: host.id,
       name: host.name,
       controlUrl: host.controlUrl,
+      controlUrlFallback: host.controlUrlFallback,
       hasControlToken: Boolean(host.controlToken),
       wakeUrlPreview: redactWakeUrl(host.wakeUrl),
       hasWakeUrl: Boolean(host.wakeUrl),
+      wakeMac: host.wakeMac,
+      wakeBroadcast: host.wakeBroadcast,
+      hasMagicPacket: normalizeMacAddress(host.wakeMac) !== null,
       wakeEnabled: host.wakeEnabled,
       autoWake: host.autoWake,
       readyTimeoutMs: host.readyTimeoutMs,
