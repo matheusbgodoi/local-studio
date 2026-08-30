@@ -24,6 +24,8 @@ import {
   type RuntimeStartOptions,
 } from "./pi-runtime-helpers";
 import { refreshPiModels, resolvePiModelSelection } from "./pi-runtime-models";
+import { applyContextHeadroomSettings } from "./pi-agent-settings";
+import { shouldRecoverByCompaction } from "../../../shared/agent/context-headroom";
 import { getProviderHub } from "./provider-hub";
 import { attachGoalDriver } from "./goal-driver";
 import { createGoalPromptExtension } from "./goal-prompt";
@@ -498,6 +500,10 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
           : SessionManager.create(resolvedCwd, sessionDir);
         const resuming = Boolean(resumeFile);
         const agentDir = getAgentDir();
+        yield* Effect.tryPromise({
+          try: () => applyContextHeadroomSettings(agentDir, selectedModel.contextWindow),
+          catch: (error) => error,
+        }).pipe(Effect.catch(() => Effect.succeed(null)));
         //
         // The agent's shell is pointed at the jail shim here, before the session
         // exists, so the first bash call of a protected turn is already inside
@@ -734,6 +740,7 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     const priority = options.inferencePriority ?? "interactive";
     const controller = new AbortController();
     this.promptAbortControllers.add(controller);
+    let compactionRecoveryUsed = false;
     return Effect.tryPromise({
       try: () =>
         withInferenceContext(
@@ -749,6 +756,12 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
           ? this.restartPromptEffect(message, options, priority, controller.signal)
           : Effect.fail(error),
       ),
+      Effect.catch((error) => {
+        if (compactionRecoveryUsed || controller.signal.aborted) return Effect.fail(error);
+        if (!this.shouldCompactAfterPromptError(error)) return Effect.fail(error);
+        compactionRecoveryUsed = true;
+        return this.compactAndRetryPromptEffect(message, options, priority, controller.signal);
+      }),
       Effect.catch((error) =>
         Effect.sync(() => {
           this.lastError = error instanceof Error ? error.message : String(error);
@@ -772,6 +785,52 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
       source: options.source,
       preflightResult: options.preflightResult,
     });
+  }
+
+  private shouldCompactAfterPromptError(error: unknown): boolean {
+    if (!this.runtime) return false;
+    const detail = error instanceof Error ? error.message : String(error ?? "");
+    const usage = this.computeContextUsage();
+    return shouldRecoverByCompaction(detail, usage?.tokens ?? null, usage?.contextWindow ?? null);
+  }
+
+  private compactAndRetryPromptEffect(
+    message: string,
+    options: PiPromptOptions,
+    priority: "interactive" | "background",
+    signal: AbortSignal,
+  ): Effect.Effect<void, unknown> {
+    return Effect.tryPromise({
+      try: async () => {
+        const session = this.requireSession();
+        await session.waitForIdle();
+        this.recordEvent({
+          type: "notice",
+          level: "info",
+          message: "Context limit reached — compacting the conversation and continuing.",
+        });
+        await withInferenceContext(
+          "background",
+          undefined,
+          () => Promise.resolve(session.compact()),
+          options.inferenceObserver,
+        );
+      },
+      catch: (error) => error,
+    }).pipe(
+      Effect.andThen(
+        Effect.tryPromise({
+          try: () =>
+            withInferenceContext(
+              priority,
+              signal,
+              () => this.promptSession(message, options),
+              options.inferenceObserver,
+            ),
+          catch: (error) => error,
+        }),
+      ),
+    );
   }
 
   private restartPromptEffect(
