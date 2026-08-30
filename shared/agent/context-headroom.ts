@@ -8,6 +8,17 @@ export const COMPACTION_KEEP_RECENT_TOKENS = 20_000;
 
 export const LOCAL_BACKEND_HTTP_IDLE_TIMEOUT_MS = 1_800_000;
 
+//
+// The idle timeout above is sized for INFERENCE: a 150K-token prompt-processing
+// pass on a local llama.cpp box legitimately runs for minutes before the first
+// byte. It must not be inherited by the control plane. Listing models, probing
+// health or reading a status endpoint either answers quickly or is not going to
+// answer at all, and a sleeping host on a tailnet never sends a reset — so
+// without its own deadline that request hangs for the full inference timeout
+// and the model picker appears frozen.
+//
+export const CONTROL_PLANE_TIMEOUT_MS = 8_000;
+
 export function compactionReserveTokens(contextWindow: number | null | undefined): number {
   if (typeof contextWindow !== "number" || !Number.isFinite(contextWindow) || contextWindow <= 0) {
     return MIN_COMPACTION_RESERVE_TOKENS;
