@@ -202,6 +202,45 @@ each one, that every prompt sent is the rebuilt working set rather than the
 word "continue", and that lifetime token counters never fall while the active
 context does.
 
+### A plain conversation, with no Run
+
+**IMPLEMENTED.** `shared/agent/context-headroom.ts`,
+`services/agent-runtime/src/pi-agent-settings.ts`,
+`services/agent-runtime/src/http-dispatcher.ts`.
+
+Everything above is the Run path. A plain chat never enters the scheduler, so
+it relies on pi's own auto-compaction, which is correct — on a threshold hit it
+compacts and calls `agent.continue()`, so a turn stopped mid-task resumes on its
+own. What it lacked was room to work in.
+
+**MEASURED.** pi's threshold is `contextWindow - reserveTokens` against a flat
+`reserveTokens: 16384`. On the owner's `qwen-daily` and `qwen-uncensored`
+aliases — `contextWindow: 200704`, matching the live gateway's `-c 200704` —
+that is 91.8% of the window, so the first request past it already carries about
+185K tokens. Separately, `configureHttpDispatcher` is only called from pi's CLI
+entry points, never from the SDK path this runtime uses, so every inference call
+inherited a 300s idle timeout. In the owner's session logs, `Request timed out`,
+`terminated` and `Stream ended without finish_reason` appear **only** in
+sessions whose context passed 150K. Those errors classify as retryable rather
+than as overflow, so the same oversized request was retried and died the same
+way each time, and the conversation ended.
+
+**POLICY.** The reserve is now proportional to the model: 22% of the window,
+clamped to 16384..65536, which puts the trigger at 78% for every window the
+owner runs. Inference runs on a dispatcher with a 30 minute idle timeout. The
+policy is merged into the pi agent's `settings.json` before the session is
+created, and anything the owner set by hand there survives the merge.
+
+Those two are prevention. The net is in `pi-runtime.ts`: a prompt that still
+fails on a context-wall error compacts once and re-runs the turn. A deliberate
+abort is never a wall, a timeout below half the threshold is never a wall, and
+the recovery runs at most once per prompt so a genuinely unreachable backend
+still surfaces as an error instead of looping.
+
+**LIVE VERIFIED** in the installed dev app: opening a chat on `qwen-daily`
+rewrote the reserve to 44155, moving the trigger from 184320 to 156549 tokens,
+and set the idle timeout to 1800000ms, with every owner-set key preserved.
+
 ---
 
 ## 7. Large tool output
