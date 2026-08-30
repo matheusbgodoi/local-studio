@@ -1,3 +1,4 @@
+import { formatSkillsForPrompt } from "@earendil-works/pi-coding-agent";
 import type { AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
 
 //
@@ -31,12 +32,28 @@ export type ContextBudgetReport = {
   estimated: {
     systemPrompt: number;
     toolSchemas: number;
-    skills: number;
-    contextFiles: number;
     conversation: number;
     overheadBeforeConversation: number;
     total: number;
   };
+  //
+  // Inside the system prompt, not additional to it. Reporting these as separate
+  // lines that sum into the total was the first version of this file, and it
+  // triple-counted: the skills catalogue and the context files are built INTO
+  // the system prompt string, so they were already in `systemPrompt`.
+  //
+  withinSystemPrompt: {
+    skillsCatalogue: number;
+    contextFiles: number;
+    remainder: number;
+  };
+  //
+  // NOT sent. pi's skills are already lazy: only name, description and path go
+  // into the prompt, and the body is read on demand. This is here so the size
+  // of what is being deferred is visible, and it is deliberately excluded from
+  // every total.
+  //
+  skillBodiesNotSent: number;
   tools: ContextBudgetEntry[];
   skills: ContextBudgetEntry[];
   contextFiles: ContextBudgetEntry[];
@@ -75,6 +92,7 @@ export function describeContextBudget(session: SessionLike): ContextBudgetReport
 
   const loader = session.resourceLoader;
   const loadedSkills = loader.getSkills().skills ?? [];
+  const skillsCatalogue = estimateTextTokens(formatSkillsForPrompt(loadedSkills));
   const skills: ContextBudgetEntry[] = loadedSkills
     .map((skill) => {
       const record = skill as unknown as Record<string, unknown>;
@@ -103,7 +121,7 @@ export function describeContextBudget(session: SessionLike): ContextBudgetReport
 
   const systemPrompt = estimateTextTokens(session.systemPrompt ?? "");
   const toolSchemas = tools.reduce((sum, entry) => sum + entry.estimatedTokens, 0);
-  const skillTokens = skills.reduce((sum, entry) => sum + entry.estimatedTokens, 0);
+  const skillBodies = skills.reduce((sum, entry) => sum + entry.estimatedTokens, 0);
   const contextFileTokens = contextFiles.reduce((sum, entry) => sum + entry.estimatedTokens, 0);
 
   let conversation = 0;
@@ -115,7 +133,7 @@ export function describeContextBudget(session: SessionLike): ContextBudgetReport
     conversation = 0;
   }
 
-  const overheadBeforeConversation = systemPrompt + toolSchemas + skillTokens + contextFileTokens;
+  const overheadBeforeConversation = systemPrompt + toolSchemas;
   const usage = session.getContextUsage();
   const settings = session.settingsManager.getCompactionSettings();
   const contextWindow = session.model?.contextWindow ?? null;
@@ -133,12 +151,16 @@ export function describeContextBudget(session: SessionLike): ContextBudgetReport
     estimated: {
       systemPrompt,
       toolSchemas,
-      skills: skillTokens,
-      contextFiles: contextFileTokens,
       conversation,
       overheadBeforeConversation,
       total: overheadBeforeConversation + conversation,
     },
+    withinSystemPrompt: {
+      skillsCatalogue,
+      contextFiles: contextFileTokens,
+      remainder: Math.max(0, systemPrompt - skillsCatalogue - contextFileTokens),
+    },
+    skillBodiesNotSent: skillBodies,
     tools,
     skills,
     contextFiles,
@@ -146,6 +168,8 @@ export function describeContextBudget(session: SessionLike): ContextBudgetReport
     availableToolCount: allTools.length,
     note:
       "Every figure under `estimated` is a four-characters-per-token approximation of the " +
-      "text that would be sent. Only `measured` comes from the backend's own accounting.",
+      "text that would be sent. Only `measured` comes from the backend's own accounting. " +
+      "`withinSystemPrompt` decomposes the system prompt rather than adding to it, and " +
+      "`skillBodiesNotSent` is never sent — skills are loaded on demand.",
   };
 }
