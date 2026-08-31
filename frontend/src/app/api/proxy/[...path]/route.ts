@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { UPSTREAM_TIMEOUT_HEADER } from "@/lib/api/http-error-message";
+import { markUpstreamDown, markUpstreamUp, upstreamKey, upstreamVerdict } from "./upstream-breaker";
 import { getClientInfo, logProxyAccess, shouldLogProxyError } from "./proxy-logging";
 import {
   buildFallbackTargetUrl,
@@ -47,9 +48,23 @@ export async function DELETE(
   return handleRequest(request, "DELETE", path);
 }
 
+function upstreamTimeoutResponse(): NextResponse {
+  //
+  // A 504 from here is not a transient server fault. It is this proxy stating
+  // that the controller did not answer within the budget, and for a host that
+  // is powered off that is the steady state, not a blip — so the header tells
+  // the client not to spend the retry ladder rediscovering it.
+  //
+  return NextResponse.json(
+    { error: "Backend request timed out" },
+    { status: 504, headers: { [UPSTREAM_TIMEOUT_HEADER]: "1" } },
+  );
+}
+
 async function handleRequest(request: NextRequest, method: string, path: string[]) {
   const startTime = Date.now();
   const client = getClientInfo(request);
+  let breakerKey: string | null = null;
 
   try {
     const target = await resolveProxyTarget(request, client);
@@ -66,6 +81,12 @@ async function handleRequest(request: NextRequest, method: string, path: string[
     });
     const hasAuth = Boolean(request.headers.get("authorization"));
     logProxyAccess({ client, hasAuth, method, overrideUrl: target.overrideUrl, path });
+
+    // A controller already known to be silent is answered from memory rather
+    // than by holding this request — and the socket it occupies — open for the
+    // whole upstream budget.
+    breakerKey = upstreamKey(targetUrl);
+    if (upstreamVerdict(breakerKey) === "open") return upstreamTimeoutResponse();
 
     const body = await readProxyRequestBody(request, method, proxyRequestBodyLimit(path));
     const headers = buildProxyRequestHeaders(
@@ -88,6 +109,10 @@ async function handleRequest(request: NextRequest, method: string, path: string[
       },
     );
 
+    // It answered at all, so it is awake. Reopen immediately — waking the host
+    // must not require waiting out a cooldown.
+    if (breakerKey) markUpstreamUp(breakerKey);
+
     return toProxyNextResponse(response, {
       client,
       invalidateOverride: usedFallback || target.blockedOverrideCleared,
@@ -102,18 +127,8 @@ async function handleRequest(request: NextRequest, method: string, path: string[
       );
     }
     if (isAbortError(error)) {
-      //
-      // The header is the point. A 504 from here is not a transient server
-      // fault — it is this proxy stating that the controller did not answer
-      // within the budget, which for a sleeping host is the steady state, not a
-      // blip. Without a way to tell the two apart the client retried it three
-      // times with exponential backoff, turning one 5s wait into 27s and making
-      // the whole app appear frozen whenever the RTX was off.
-      //
-      return NextResponse.json(
-        { error: "Backend request timed out" },
-        { status: 504, headers: { [UPSTREAM_TIMEOUT_HEADER]: "1" } },
-      );
+      if (breakerKey) markUpstreamDown(breakerKey);
+      return upstreamTimeoutResponse();
     }
     if (error instanceof ProxyBodyTooLargeError) {
       return NextResponse.json({ error: error.message }, { status: 413 });
