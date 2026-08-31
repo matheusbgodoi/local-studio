@@ -2,7 +2,11 @@ import { hc } from "hono/client";
 import { clearStoredBackendUrl, getApiKey, getStoredBackendUrl } from "./connection";
 import { delay } from "../async";
 import { isRecord } from "../guards";
-import { formatHttpErrorMessage, isRetryableError } from "./http-error-message";
+import {
+  formatHttpErrorMessage,
+  isRetryableError,
+  isUpstreamTimeoutResponse,
+} from "./http-error-message";
 import {
   isBenignSseTransportFailure,
   scrubTransportFetchErrorMessage,
@@ -234,7 +238,13 @@ export function createApiCore(params: {
           }
 
           lastError = await responseError(response, endpoint);
-          if (shouldRetryAttempt(lastError, response.status, attempt, retries)) {
+          // A controller that did not answer will not answer three more times
+          // for the same reason. Retrying the proxy's own upstream-timeout 504
+          // turned a 5s wait into 27s of frozen UI whenever the RTX slept.
+          if (
+            !isUpstreamTimeoutResponse(response) &&
+            shouldRetryAttempt(lastError, response.status, attempt, retries)
+          ) {
             await waitBeforeRetry(
               endpoint,
               attempt,

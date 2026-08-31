@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { UPSTREAM_TIMEOUT_HEADER } from "@/lib/api/http-error-message";
 import { getClientInfo, logProxyAccess, shouldLogProxyError } from "./proxy-logging";
 import {
   buildFallbackTargetUrl,
@@ -101,7 +102,18 @@ async function handleRequest(request: NextRequest, method: string, path: string[
       );
     }
     if (isAbortError(error)) {
-      return NextResponse.json({ error: "Backend request timed out" }, { status: 504 });
+      //
+      // The header is the point. A 504 from here is not a transient server
+      // fault — it is this proxy stating that the controller did not answer
+      // within the budget, which for a sleeping host is the steady state, not a
+      // blip. Without a way to tell the two apart the client retried it three
+      // times with exponential backoff, turning one 5s wait into 27s and making
+      // the whole app appear frozen whenever the RTX was off.
+      //
+      return NextResponse.json(
+        { error: "Backend request timed out" },
+        { status: 504, headers: { [UPSTREAM_TIMEOUT_HEADER]: "1" } },
+      );
     }
     if (error instanceof ProxyBodyTooLargeError) {
       return NextResponse.json({ error: error.message }, { status: 413 });
