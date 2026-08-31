@@ -498,10 +498,17 @@ async function fetchModelsFromController(
         nativeReasoning: model.nativeReasoning,
       }),
       // The owner's label for this id wins over whatever the backend called it.
-      // oMLX publishes only the model directory name, so without this the local
-      // Ornith appears as `ornith-1.5-35b-a3b-mxfp4-mlx` beside the RTX's
-      // `Ornith-1.5-35B-A3B (turbo)` — same checkpoint, unrecognisably
-      // different rows.
+      //
+      // It has to land on `displayName`, not just `name`. `displayName` is the
+      // product's model-identity field, and the picker treats its absence as
+      // "this row has no official identity" and drops the row: a backend that
+      // does not declare one is invisible in the model list, however correct
+      // its `name` is. oMLX declares nothing but the model directory name, so
+      // the local Ornith was being filtered out of the picker entirely — the
+      // list showed three RTX models and no Mac group at all.
+      ...(controller.modelNames?.[model.rawId ?? model.id]
+        ? { displayName: controller.modelNames[model.rawId ?? model.id] }
+        : {}),
       name: (() => {
         const base = controller.modelNames?.[model.rawId ?? model.id] ?? model.name;
         return multipleControllers ? `${base} · ${label}` : base;

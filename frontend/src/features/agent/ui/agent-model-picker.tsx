@@ -711,10 +711,26 @@ function behaviorProfileLabel(model: AgentModel): string {
   );
 }
 
+//
+// The declared identity when there is one, and the backend's own name when
+// there is not.
+//
+// Returning undefined for an undeclared model meant `groupModelsByController`
+// filtered it out, so a backend that publishes no `displayName` had no rows in
+// the picker at all — silently. That is how the local oMLX host, serving a
+// model that loads and answers, showed up as nothing: three RTX rows and no Mac
+// group, with no indication a second host existed.
+//
+// The fallback is `name`, never `rawId`. Preferring the raw id is what once put
+// "qwen-daily" over a list reading "Qwen3.8-27B"; `name` is the label the
+// backend chose to show a human, which is the right thing to render when it
+// declined to state a canonical identity.
+//
 function officialPhysicalLabel(physical: PhysicalModel): string | undefined {
-  return physical.profiles
+  const declared = physical.profiles
     .map((profile) => profile.displayName?.trim())
     .find((label): label is string => Boolean(label));
+  return declared ?? physical.primary.name?.trim() ?? undefined;
 }
 
 function resolveModelSelection(models: AgentModel[], selectedModel: string): ModelSelection {
