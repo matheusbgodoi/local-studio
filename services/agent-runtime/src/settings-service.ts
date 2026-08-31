@@ -263,7 +263,10 @@ function mergedControllers(
       : update.apiKey !== undefined
         ? update.apiKey.trim()
         : (previous?.apiKey ?? "");
-    next.set(url, { url, apiKey, ...(name ? { name } : {}) });
+    // Carry everything the update does not speak for. Rebuilding the entry from
+    // the three fields an update can set silently dropped the owner's
+    // modelNames on the next save of any unrelated setting.
+    next.set(url, { ...previous, url, apiKey, ...(name ? { name } : {}) });
   }
   return [...next.values()];
 }
@@ -283,7 +286,7 @@ function migratedControllers(
     const previous = existing.get(url);
     const name = migration.name?.trim() || previous?.name;
     const apiKey = migration.apiKey?.trim() || previous?.apiKey || "";
-    existing.set(url, { url, apiKey, ...(name ? { name } : {}) });
+    existing.set(url, { ...previous, url, apiKey, ...(name ? { name } : {}) });
   }
   return [...existing.values()];
 }
