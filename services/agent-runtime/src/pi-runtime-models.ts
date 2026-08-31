@@ -211,12 +211,14 @@ export type PiControllerModelsRequest = {
   url: string;
   apiKey?: string;
   name?: string;
+  modelNames?: Record<string, string>;
 };
 
 type PiControllerConfig = {
   url: string;
   apiKey: string;
   name?: string;
+  modelNames?: Record<string, string>;
 };
 
 type ControllerModels = {
@@ -383,10 +385,12 @@ function normalizeControllerInput(input: PiControllerModelsRequest): PiControlle
   if (!url) return null;
   const apiKey = input.apiKey?.trim() ?? "";
   const name = input.name?.trim();
+  const modelNames = input.modelNames;
   return {
     url,
     apiKey,
     ...(name ? { name } : {}),
+    ...(modelNames && Object.keys(modelNames).length > 0 ? { modelNames } : {}),
   };
 }
 
@@ -428,6 +432,9 @@ async function loadPersistedControllers(agentDir: string): Promise<PiControllerM
                 url: record.url,
                 ...(typeof record.apiKey === "string" ? { apiKey: record.apiKey } : {}),
                 ...(typeof record.name === "string" ? { name: record.name } : {}),
+                ...(record.modelNames && typeof record.modelNames === "object"
+                  ? { modelNames: record.modelNames as Record<string, string> }
+                  : {}),
               },
             ]
           : [];
@@ -490,7 +497,15 @@ async function fetchModelsFromController(
         physicalModelId: model.physicalModelId,
         nativeReasoning: model.nativeReasoning,
       }),
-      name: multipleControllers ? `${model.name} · ${label}` : model.name,
+      // The owner's label for this id wins over whatever the backend called it.
+      // oMLX publishes only the model directory name, so without this the local
+      // Ornith appears as `ornith-1.5-35b-a3b-mxfp4-mlx` beside the RTX's
+      // `Ornith-1.5-35B-A3B (turbo)` — same checkpoint, unrecognisably
+      // different rows.
+      name: (() => {
+        const base = controller.modelNames?.[model.rawId ?? model.id] ?? model.name;
+        return multipleControllers ? `${base} · ${label}` : base;
+      })(),
     }),
   );
   return { controller: { ...controller, url: backendUrl }, models, providerId };

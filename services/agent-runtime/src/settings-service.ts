@@ -42,6 +42,13 @@ export interface ControllerConnection {
   url: string;
   name?: string;
   apiKey: string;
+  /** Display names for this controller's model ids, keyed by the raw id the
+   *  controller serves. A backend that publishes no name for a model — oMLX
+   *  serves the directory name and nothing else — otherwise shows the owner a
+   *  raw id in the picker. Stated by the owner rather than derived from the id,
+   *  because guessing a pretty name out of a slug is how a picker starts lying
+   *  about which checkpoint a row is. */
+  modelNames?: Record<string, string>;
 }
 
 export interface ControllerConnectionUpdate {
@@ -126,6 +133,16 @@ function normalizeUrl(url: string): string {
   }
 }
 
+function normalizeModelNames(value: unknown): Record<string, string> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const names: Record<string, string> = {};
+  for (const [id, label] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof label !== "string" || !label.trim()) continue;
+    names[id] = label.trim();
+  }
+  return Object.keys(names).length > 0 ? names : null;
+}
+
 function normalizeStoredControllers(value: unknown): ControllerConnection[] {
   if (!Array.isArray(value)) return [];
   const byUrl = new Map<string, ControllerConnection>();
@@ -136,7 +153,13 @@ function normalizeStoredControllers(value: unknown): ControllerConnection[] {
     if (!url) continue;
     const name = typeof record.name === "string" ? record.name.trim() : "";
     const apiKey = typeof record.apiKey === "string" ? record.apiKey.trim() : "";
-    byUrl.set(url, { url, apiKey, ...(name ? { name } : {}) });
+    const modelNames = normalizeModelNames(record.modelNames);
+    byUrl.set(url, {
+      url,
+      apiKey,
+      ...(name ? { name } : {}),
+      ...(modelNames ? { modelNames } : {}),
+    });
   }
   return [...byUrl.values()];
 }
