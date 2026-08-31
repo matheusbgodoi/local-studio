@@ -16,6 +16,90 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_RETRIES = 3;
 const DEFAULT_RETRY_DELAY_MS = 1_000;
 
+//
+// CONTROLLER REACHABILITY BREAKER.
+//
+// This client speaks to exactly one controller, and on this rig that controller
+// is a machine that sleeps. Every call against a sleeping host costs the full
+// upstream budget before failing, and a screen makes several — so the app read
+// as frozen for as long as the RTX was off, on surfaces that had nothing to do
+// with it.
+//
+// Once a call has proven the controller is not answering, the ones behind it
+// stop paying that price and fail immediately with the same error. After the
+// cooldown a single request is let through to find out whether the host came
+// back; a success reopens the gate at once.
+//
+// Deliberately NOT applied to: 4xx (the host answered), aborts by the caller, or
+// anything that does not go through this controller client. Local /api/agent/*
+// traffic does not use this module at all.
+//
+const CONTROLLER_DOWN_COOLDOWN_MS = 15_000;
+
+type BreakerState = { downSince: number; probing: boolean };
+
+const controllerBreaker = new Map<string, BreakerState>();
+
+export class ControllerUnreachableError extends Error {
+  readonly controllerUrl: string;
+  constructor(controllerUrl: string) {
+    super("Controller is not responding");
+    this.name = "ControllerUnreachableError";
+    this.controllerUrl = controllerUrl;
+  }
+}
+
+function breakerVerdict(key: string): "open" | "closed" | "probe" {
+  const state = controllerBreaker.get(key);
+  if (!state) return "closed";
+  if (Date.now() - state.downSince < CONTROLLER_DOWN_COOLDOWN_MS) {
+    return state.probing ? "open" : "closed";
+  }
+  // Cooldown elapsed: exactly one caller gets to find out if the host is back.
+  if (!state.probing) {
+    state.probing = true;
+    return "probe";
+  }
+  return "open";
+}
+
+function markControllerDown(key: string): void {
+  const existing = controllerBreaker.get(key);
+  if (existing) {
+    existing.downSince = Date.now();
+    existing.probing = true;
+    return;
+  }
+  controllerBreaker.set(key, { downSince: Date.now(), probing: true });
+}
+
+function markControllerUp(key: string): void {
+  controllerBreaker.delete(key);
+}
+
+/** Test seam and a hook for "the owner just woke the host, try again now". */
+export function resetControllerBreaker(): void {
+  controllerBreaker.clear();
+}
+
+/** The controller's own verdict on itself, folded into the breaker: an
+ *  upstream timeout means nothing is listening; any answer it composed itself
+ *  (4xx) proves it is awake. A 5xx is left alone — it answered, but it may be
+ *  mid-restart, and the retry ladder still covers that. */
+/** A transport failure against the controller is the same statement as an
+ *  upstream timeout: nothing is listening. The first attempt's own abort is the
+ *  one exception — that is this client's clock running out, not the host's
+ *  silence, and on a slow-but-live controller it must not latch the gate shut. */
+function recordBreakerTransportFailure(error: unknown, attempt: number, key: string): void {
+  if (error instanceof Error && error.name === "AbortError" && attempt === 0) return;
+  markControllerDown(key);
+}
+
+function recordBreakerOutcome(response: Response, key: string): void {
+  if (isUpstreamTimeoutResponse(response)) markControllerDown(key);
+  else if (response.status < 500) markControllerUp(key);
+}
+
 export const encodePathSegments = (path: string) =>
   path
     .split("/")
@@ -209,6 +293,10 @@ export function createApiCore(params: {
     } = options;
 
     const headers = buildHeaders(fetchOptions.headers);
+    const breakerKey =
+      headers["X-Backend-Url"] || backendUrlOverride || getStoredBackendUrl() || baseUrl;
+    const verdict = breakerVerdict(breakerKey);
+    if (verdict === "open") throw new ControllerUnreachableError(breakerKey);
     let lastError: Error | null = null;
     let lastStatus: number | undefined;
     let retriedWithoutBackendOverride = false;
@@ -241,6 +329,7 @@ export function createApiCore(params: {
           // A controller that did not answer will not answer three more times
           // for the same reason. Retrying the proxy's own upstream-timeout 504
           // turned a 5s wait into 27s of frozen UI whenever the RTX slept.
+          recordBreakerOutcome(response, breakerKey);
           if (
             !isUpstreamTimeoutResponse(response) &&
             shouldRetryAttempt(lastError, response.status, attempt, retries)
@@ -258,10 +347,12 @@ export function createApiCore(params: {
           throw lastError;
         }
 
+        markControllerUp(breakerKey);
         return response;
       } catch (error) {
         clearTimeout(timeoutId);
         lastError = normalizeRequestError(error, timeout);
+        recordBreakerTransportFailure(error, attempt, breakerKey);
 
         if (shouldRetryAttempt(error, lastStatus, attempt, retries)) {
           await waitBeforeRetry(endpoint, attempt, retries, retryDelay, `(${lastError.message})`);
