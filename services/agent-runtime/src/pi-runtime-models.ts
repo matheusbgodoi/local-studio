@@ -241,8 +241,17 @@ function modelCachePath(agentDir: string): string {
 // off. So a controller that has just failed is re-probed briefly, and one
 // success restores the patient timeout.
 //
-const OFFLINE_CONTROLLER_TIMEOUT_MS = 1_500;
-const OFFLINE_MEMORY_MS = 60_000;
+//
+// A controller that is up answers /v1/models in tens of milliseconds — it is a
+// static list — so the impatient probe costs a live host nothing, and one
+// success clears the mark immediately. The expiry therefore only exists for a
+// host that is alive but slower than the impatient budget, which is rare and
+// self-correcting; keeping it at a minute meant every cold start more than a
+// minute after the last one paid the full eight seconds again, which is the
+// case the owner actually feels.
+//
+const OFFLINE_CONTROLLER_TIMEOUT_MS = 2_500;
+const OFFLINE_MEMORY_MS = 15 * 60_000;
 const offlineControllers = new Map<string, number>();
 let offlineControllersDir: string | null = null;
 
