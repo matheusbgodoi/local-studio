@@ -36,7 +36,13 @@ const DEFAULT_RETRY_DELAY_MS = 1_000;
 //
 const CONTROLLER_DOWN_COOLDOWN_MS = 15_000;
 
-type BreakerState = { downSince: number; probing: boolean };
+//
+// `probeInFlight` means "one request is out there finding out whether the host
+// is back", NOT "the host is down". The first version set it when the breaker
+// latched, which made the half-open branch unreachable: a woken controller
+// stayed blocked because nothing was ever allowed to go and notice.
+//
+type BreakerState = { downSince: number; probeInFlight: boolean };
 
 const controllerBreaker = new Map<string, BreakerState>();
 
@@ -52,25 +58,18 @@ export class ControllerUnreachableError extends Error {
 function breakerVerdict(key: string): "open" | "closed" | "probe" {
   const state = controllerBreaker.get(key);
   if (!state) return "closed";
-  if (Date.now() - state.downSince < CONTROLLER_DOWN_COOLDOWN_MS) {
-    return state.probing ? "open" : "closed";
-  }
-  // Cooldown elapsed: exactly one caller gets to find out if the host is back.
-  if (!state.probing) {
-    state.probing = true;
-    return "probe";
-  }
-  return "open";
+  if (Date.now() - state.downSince < CONTROLLER_DOWN_COOLDOWN_MS) return "open";
+  // Cooldown spent: exactly one caller goes and looks, and everyone else keeps
+  // the fast answer until it reports back.
+  if (state.probeInFlight) return "open";
+  state.probeInFlight = true;
+  return "probe";
 }
 
 function markControllerDown(key: string): void {
-  const existing = controllerBreaker.get(key);
-  if (existing) {
-    existing.downSince = Date.now();
-    existing.probing = true;
-    return;
-  }
-  controllerBreaker.set(key, { downSince: Date.now(), probing: true });
+  // First failure or a probe that came back empty — either way, restart the
+  // cooldown and let the next probe happen after it.
+  controllerBreaker.set(key, { downSince: Date.now(), probeInFlight: false });
 }
 
 function markControllerUp(key: string): void {
