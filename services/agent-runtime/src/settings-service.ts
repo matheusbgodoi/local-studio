@@ -4,6 +4,13 @@
 import { chmod, readFile, rename, writeFile } from "fs/promises";
 import { existsSync } from "fs";
 import { resolveSettingsDefaultBackendUrl } from "../../../shared/agent/backend-url";
+import {
+  DEFAULT_WAKE_BROADCAST,
+  DEFAULT_WAKE_READY_TIMEOUT_MS,
+  normalizeMacAddress,
+  redactWakeUrl,
+  type ComputeHostConfig,
+} from "../../../shared/agent/compute-host";
 import { resolveDataDir, resolveSettingsFilePath } from "./data-dir";
 
 export interface ApiSettings {
@@ -12,6 +19,23 @@ export interface ApiSettings {
   controllers: ControllerConnection[];
   voiceUrl: string;
   voiceModel: string;
+  computeHosts: ComputeHostConfig[];
+}
+
+export interface ComputeHostUpdate {
+  id: string;
+  name?: string;
+  controlUrl?: string;
+  controlUrlFallback?: string;
+  controlToken?: string;
+  clearControlToken?: boolean;
+  wakeUrl?: string;
+  clearWakeUrl?: boolean;
+  wakeMac?: string;
+  wakeBroadcast?: string;
+  wakeEnabled?: boolean;
+  autoWake?: boolean;
+  readyTimeoutMs?: number;
 }
 
 export interface ControllerConnection {
@@ -35,6 +59,7 @@ export interface ApiSettingsUpdate {
   activateControllerUrl?: string;
   voiceUrl?: string;
   voiceModel?: string;
+  computeHosts?: ComputeHostUpdate[];
 }
 
 const DEFAULT_SETTINGS: ApiSettings = {
@@ -44,6 +69,7 @@ const DEFAULT_SETTINGS: ApiSettings = {
   voiceUrl: process.env.VOICE_URL || process.env.NEXT_PUBLIC_VOICE_URL || "",
   voiceModel:
     process.env.VOICE_MODEL || process.env.NEXT_PUBLIC_VOICE_MODEL || "whisper-large-v3-turbo",
+  computeHosts: [],
 };
 
 export async function getApiSettings(): Promise<ApiSettings> {
@@ -58,6 +84,7 @@ export async function getApiSettings(): Promise<ApiSettings> {
       controllers: normalizeStoredControllers(saved.controllers),
       voiceUrl: saved.voiceUrl || DEFAULT_SETTINGS.voiceUrl,
       voiceModel: saved.voiceModel || DEFAULT_SETTINGS.voiceModel,
+      computeHosts: normalizeStoredComputeHosts(saved.computeHosts),
     };
   } catch (error) {
     console.error(`[API Settings] Failed to read ${settingsFile}:`, error);
@@ -112,6 +139,85 @@ function normalizeStoredControllers(value: unknown): ControllerConnection[] {
     byUrl.set(url, { url, apiKey, ...(name ? { name } : {}) });
   }
   return [...byUrl.values()];
+}
+
+function normalizeStoredComputeHosts(value: unknown): ComputeHostConfig[] {
+  if (!Array.isArray(value)) return [];
+  const byId = new Map<string, ComputeHostConfig>();
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const record = entry as Record<string, unknown>;
+    const id = typeof record.id === "string" ? record.id.trim() : "";
+    if (!id) continue;
+    const timeout = typeof record.readyTimeoutMs === "number" ? record.readyTimeoutMs : NaN;
+    byId.set(id, {
+      id,
+      name: typeof record.name === "string" && record.name.trim() ? record.name.trim() : id,
+      controlUrl: typeof record.controlUrl === "string" ? normalizeUrl(record.controlUrl) : "",
+      controlUrlFallback:
+        typeof record.controlUrlFallback === "string"
+          ? normalizeUrl(record.controlUrlFallback)
+          : "",
+      controlToken: typeof record.controlToken === "string" ? record.controlToken.trim() : "",
+      wakeUrl: typeof record.wakeUrl === "string" ? record.wakeUrl.trim() : "",
+      wakeMac: typeof record.wakeMac === "string" ? record.wakeMac.trim() : "",
+      wakeBroadcast:
+        typeof record.wakeBroadcast === "string" && record.wakeBroadcast.trim()
+          ? record.wakeBroadcast.trim()
+          : DEFAULT_WAKE_BROADCAST,
+      wakeEnabled: record.wakeEnabled === true,
+      autoWake: record.autoWake === true,
+      readyTimeoutMs:
+        Number.isFinite(timeout) && timeout > 0 ? Math.floor(timeout) : DEFAULT_WAKE_READY_TIMEOUT_MS,
+    });
+  }
+  return [...byId.values()];
+}
+
+function mergedComputeHosts(
+  current: ApiSettings,
+  updates: ComputeHostUpdate[],
+): ComputeHostConfig[] {
+  const byId = new Map(current.computeHosts.map((entry) => [entry.id, entry]));
+  for (const update of updates) {
+    const id = update.id.trim();
+    if (!id) continue;
+    const previous = byId.get(id);
+    const timeout = update.readyTimeoutMs;
+    byId.set(id, {
+      id,
+      name: update.name?.trim() || previous?.name || id,
+      controlUrl:
+        update.controlUrl !== undefined
+          ? normalizeUrl(update.controlUrl)
+          : (previous?.controlUrl ?? ""),
+      controlUrlFallback:
+        update.controlUrlFallback !== undefined
+          ? normalizeUrl(update.controlUrlFallback)
+          : (previous?.controlUrlFallback ?? ""),
+      controlToken: update.clearControlToken
+        ? ""
+        : update.controlToken !== undefined
+          ? update.controlToken.trim()
+          : (previous?.controlToken ?? ""),
+      wakeUrl: update.clearWakeUrl
+        ? ""
+        : update.wakeUrl !== undefined
+          ? update.wakeUrl.trim()
+          : (previous?.wakeUrl ?? ""),
+      wakeMac:
+        update.wakeMac !== undefined ? update.wakeMac.trim() : (previous?.wakeMac ?? ""),
+      wakeBroadcast:
+        update.wakeBroadcast?.trim() || previous?.wakeBroadcast || DEFAULT_WAKE_BROADCAST,
+      wakeEnabled: update.wakeEnabled ?? previous?.wakeEnabled ?? false,
+      autoWake: update.autoWake ?? previous?.autoWake ?? false,
+      readyTimeoutMs:
+        typeof timeout === "number" && Number.isFinite(timeout) && timeout > 0
+          ? Math.floor(timeout)
+          : (previous?.readyTimeoutMs ?? DEFAULT_WAKE_READY_TIMEOUT_MS),
+    });
+  }
+  return [...byId.values()];
 }
 
 function mergedControllers(
@@ -206,6 +312,9 @@ export async function applySettingsUpdate(update: ApiSettingsUpdate): Promise<Ap
     controllers,
     voiceUrl: voiceUrl || current.voiceUrl,
     voiceModel: voiceModel || current.voiceModel,
+    computeHosts: update.computeHosts
+      ? mergedComputeHosts(current, update.computeHosts)
+      : current.computeHosts,
   };
 
   await saveApiSettings(next);
@@ -230,5 +339,24 @@ export function settingsView(settings: ApiSettings) {
     })),
     voiceUrl: settings.voiceUrl,
     voiceModel: settings.voiceModel,
+    computeHosts: settings.computeHosts.map((host) => ({
+      id: host.id,
+      name: host.name,
+      controlUrl: host.controlUrl,
+      controlUrlFallback: host.controlUrlFallback,
+      hasControlToken: Boolean(host.controlToken),
+      wakeUrlPreview: redactWakeUrl(host.wakeUrl),
+      hasWakeUrl: Boolean(host.wakeUrl),
+      wakeMac: host.wakeMac,
+      wakeBroadcast: host.wakeBroadcast,
+      hasMagicPacket: normalizeMacAddress(host.wakeMac) !== null,
+      wakeEnabled: host.wakeEnabled,
+      autoWake: host.autoWake,
+      readyTimeoutMs: host.readyTimeoutMs,
+    })),
   };
+}
+
+export function computeHostById(settings: ApiSettings, id: string): ComputeHostConfig | null {
+  return settings.computeHosts.find((host) => host.id === id) ?? null;
 }

@@ -7,6 +7,7 @@ import {
   handleExtensionUiResponse,
   handleRuntimeEvents,
   handleRuntimeSessions,
+  handleRuntimeContextBudget,
   handleRuntimeStatus,
   handleSetupChecks,
 } from "./handlers";
@@ -75,6 +76,11 @@ import {
   handleNetworkStatus,
 } from "./network-handlers";
 import {
+  handleComputeHostStatus,
+  handleComputeHostWake,
+  handleComputeHostsList,
+} from "./compute-host-handlers";
+import {
   handlePersonalMemoryCreate,
   handlePersonalMemoryDelete,
   handlePersonalMemoryDeleteOne,
@@ -98,6 +104,7 @@ export function createAgentRuntimeApp() {
   app.get("/api/agent/runtime/sessions", () => handleRuntimeSessions());
   app.get("/api/agent/runtime/status", (c) => handleRuntimeStatus(c.req.raw));
   app.get("/api/agent/runtime/events", (c) => handleRuntimeEvents(c.req.raw));
+  app.get("/api/agent/runtime/context-budget", (c) => handleRuntimeContextBudget(c.req.raw));
   app.get("/api/agent/setup-checks", () => handleSetupChecks());
   app.get("/api/agent/models", () => handleAgentModels());
   app.post("/api/agent/models", (c) => handleAgentModels(c.req.raw));
@@ -118,6 +125,9 @@ export function createAgentRuntimeApp() {
   );
   app.delete("/api/agent/automations/:id", (c) => handleAutomationDelete(c.req.param("id")));
   app.post("/api/agent/automations/:id/run", (c) => handleAutomationRun(c.req.param("id")));
+  app.get("/api/agent/compute-hosts", () => handleComputeHostsList());
+  app.get("/api/agent/compute-hosts/:id", (c) => handleComputeHostStatus(c.req.param("id")));
+  app.post("/api/agent/compute-hosts/:id/wake", (c) => handleComputeHostWake(c.req.param("id")));
   app.get("/api/agent/network/status", () => handleNetworkStatus());
   app.post("/api/agent/network/policy", (c) => handleNetworkPolicy(c.req.raw));
   app.get("/api/agent/network/provider", (c) => handleNetworkProvider(c.req.raw));

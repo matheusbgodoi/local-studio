@@ -14,6 +14,7 @@ import {
   type ThinkingContractInput,
 } from "../../../shared/agent/models";
 import { AGENT_THINKING_LEVELS, type AgentThinkingLevel } from "../../../shared/agent/agent-turn";
+import { CONTROL_PLANE_TIMEOUT_MS } from "../../../shared/agent/context-headroom";
 import { resolveModelVision } from "../../../controller/contracts/model-capabilities";
 
 const PROVIDER_ID = "local-studio";
@@ -330,7 +331,11 @@ async function fetchModelsFromController(
   const backendUrl = normalizeBackendUrl(controller.url);
   const headers: HeadersInit = { Accept: "application/json" };
   if (controller.apiKey) headers.Authorization = `Bearer ${controller.apiKey}`;
-  const response = await fetch(`${backendUrl}/v1/models`, { headers, cache: "no-store" });
+  const response = await fetch(`${backendUrl}/v1/models`, {
+    headers,
+    cache: "no-store",
+    signal: AbortSignal.timeout(CONTROL_PLANE_TIMEOUT_MS),
+  });
   if (!response.ok) {
     throw new Error(`${backendUrl}/v1/models failed with HTTP ${response.status}`);
   }

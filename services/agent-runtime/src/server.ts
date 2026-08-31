@@ -1,9 +1,12 @@
 import { serve } from "@hono/node-server";
 import { agenticRuntime } from "./agentic/service";
 import { startAutomationScheduler } from "./automation-scheduler";
+import { configureInferenceHttpTimeout } from "./http-dispatcher";
 import { createAgentRuntimeApp } from "./http/app";
 import { networkService } from "./network";
 import { resetBoundaryScopedResources } from "./network/boundary-reset";
+
+configureInferenceHttpTimeout();
 
 //
 // The jail binds a process when it is spawned and cannot be applied to one

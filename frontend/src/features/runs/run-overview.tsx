@@ -4,6 +4,7 @@ import { Card, ProgressBar, Stat, StatusPill } from "@/ui";
 import type { AgenticRunSnapshot } from "@shared/agent/agentic-run";
 import { isProtectedPolicy } from "@shared/agent/network-policy";
 import { RunNetworkStat } from "./run-network-badge";
+import { representativeAgent, runTokenTotals } from "./run-context";
 import { formatElapsed, formatTokens, humanStatus, runTone } from "./run-formatters";
 
 //
@@ -34,10 +35,16 @@ export function RunOverview({
 }) {
   const { run, tasks, agents } = snapshot;
   const done = tasks.filter((task) => task.status === "SUCCEEDED").length;
-  const agent = agents[0];
+  //
+  // The reading belongs to whichever agent is carrying the run, not to
+  // agents[0]. A run with three logical agents whose first one has already
+  // settled reported a context of zero while another agent was still holding
+  // 130K, which read as a broken gauge rather than as a finished agent.
+  //
+  const agent = representativeAgent(snapshot);
   const activeContext = agent?.activeContextTokens ?? 0;
   const contextLimit = agent?.contextLimit || run.usableLimit;
-  const cumulative = run.cumulativeInputTokens + run.cumulativeOutputTokens;
+  const tokens = runTokenTotals(run);
 
   return (
     <Card className="@container p-4">
@@ -69,12 +76,18 @@ export function RunOverview({
           label="Context"
           value={`${formatTokens(activeContext)} / ${formatTokens(contextLimit)}`}
         />
-        <Stat className={STAT} label="Session" value={`${formatTokens(cumulative)} cumulative`} />
+        <Stat className={STAT} label="Tokens" value={formatTokens(tokens.total)} />
         <Stat className={STAT} label="Compactions" value={String(run.compactionCount)} />
         <Stat className={STAT} label="Model" value={modelDisplayName} />
         <Stat className={STAT} label="Window" value={formatTokens(run.contextWindow)} />
         {isProtectedPolicy(run.networkPolicy) ? <RunNetworkStat /> : null}
       </div>
+
+      <p className="mt-2 text-[length:var(--fs-xs)] text-(--ui-muted)">
+        {formatTokens(tokens.input)} in · {formatTokens(tokens.output)} out ·{" "}
+        {formatTokens(tokens.cached)} cached
+        {agent ? ` · context from ${agent.name}` : ""}
+      </p>
 
       {run.recoveryState ? (
         <p className="mt-3 text-[length:var(--fs-xs)] text-(--ui-warning)">
