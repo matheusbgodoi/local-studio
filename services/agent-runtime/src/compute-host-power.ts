@@ -27,6 +27,10 @@ type HostRuntimeState = {
   lastSeenAt: string | null;
   lastWakeAt: string | null;
   lastWakeOutcome: "ready" | "timeout" | "failed" | null;
+  /** When the last probe found nothing listening. Persisted so a cold start
+   *  does not pay the full probe on a host it already knew was asleep — that
+   *  wait is felt as the app taking eight seconds to open. */
+  lastUnreachableAt: string | null;
 };
 
 type HostRuntime = {
@@ -64,6 +68,8 @@ async function loadPersisted(): Promise<void> {
           state.persisted.set(id, {
             lastSeenAt: typeof row.lastSeenAt === "string" ? row.lastSeenAt : null,
             lastWakeAt: typeof row.lastWakeAt === "string" ? row.lastWakeAt : null,
+            lastUnreachableAt:
+              typeof row.lastUnreachableAt === "string" ? row.lastUnreachableAt : null,
             lastWakeOutcome:
               row.lastWakeOutcome === "ready" ||
               row.lastWakeOutcome === "timeout" ||
@@ -97,7 +103,12 @@ function persistedFor(id: string): HostRuntimeState {
   const state = runtime();
   const existing = state.persisted.get(id);
   if (existing) return existing;
-  const created: HostRuntimeState = { lastSeenAt: null, lastWakeAt: null, lastWakeOutcome: null };
+  const created: HostRuntimeState = {
+    lastSeenAt: null,
+    lastWakeAt: null,
+    lastWakeOutcome: null,
+    lastUnreachableAt: null,
+  };
   state.persisted.set(id, created);
   return created;
 }
@@ -172,7 +183,12 @@ function buildStatus(
   const now = new Date();
   const details = payload?.detalhes ?? {};
   const resolved = overrideState ?? (payload ? stateFromPayload(payload) : "unreachable");
-  if (payload) stored.lastSeenAt = now.toISOString();
+  if (payload) {
+    stored.lastSeenAt = now.toISOString();
+    stored.lastUnreachableAt = null;
+  } else if (resolved === "unreachable") {
+    stored.lastUnreachableAt = now.toISOString();
+  }
 
   const usedMb = typeof details.vram_usada_mb === "number" ? details.vram_usada_mb : null;
   const freeMb = typeof details.vram_livre_mb === "number" ? details.vram_livre_mb : null;
@@ -212,7 +228,7 @@ async function refreshStatus(config: ComputeHostConfig): Promise<ComputeHostStat
   // eight seconds costs a full timeout each time and tells us nothing new.
   const ttl = payload ? STATUS_CACHE_MS : UNREACHABLE_CACHE_MS;
   state.cache.set(config.id, { status, expiresAt: Date.now() + ttl });
-  if (payload) void savePersisted();
+  void savePersisted();
   return status;
 }
 
@@ -222,6 +238,27 @@ export async function computeHostStatus(
 ): Promise<ComputeHostStatus> {
   await loadPersisted();
   const state = runtime();
+  //
+  // A cold start has an empty cache, so the first read of this surface paid the
+  // full probe against both addresses. Seed it from the verdict on disk: if the
+  // last thing we saw was a host that was not there, say so immediately and
+  // correct it in the background.
+  //
+  if (!state.cache.has(config.id)) {
+    const stored = persistedFor(config.id);
+    if (stored.lastUnreachableAt && !stored.lastSeenAt) {
+      state.cache.set(config.id, {
+        status: buildStatus(config, null),
+        expiresAt: 0,
+      });
+    } else if (stored.lastUnreachableAt && stored.lastSeenAt) {
+      const wentAway = Date.parse(stored.lastUnreachableAt);
+      const wasSeen = Date.parse(stored.lastSeenAt);
+      if (Number.isFinite(wentAway) && Number.isFinite(wasSeen) && wentAway > wasSeen) {
+        state.cache.set(config.id, { status: buildStatus(config, null), expiresAt: 0 });
+      }
+    }
+  }
   const cached = state.cache.get(config.id);
   if (!options.force && cached) {
     if (cached.expiresAt > Date.now()) return cached.status;

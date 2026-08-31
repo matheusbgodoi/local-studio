@@ -242,8 +242,43 @@ function modelCachePath(agentDir: string): string {
 // success restores the patient timeout.
 //
 const OFFLINE_CONTROLLER_TIMEOUT_MS = 1_500;
-const offlineControllers = new Map<string, number>();
 const OFFLINE_MEMORY_MS = 60_000;
+const offlineControllers = new Map<string, number>();
+let offlineControllersDir: string | null = null;
+
+function offlinePath(agentDir: string): string {
+  return path.join(agentDir, "controller-offline.json");
+}
+
+//
+// Persisted, because the expensive case is precisely a cold start: a fresh
+// process with an empty map spends the full timeout on a host it already knew
+// was asleep, and that eight seconds is the whole of "the app takes forever to
+// open". Surviving the restart is what makes the first launch fast too.
+//
+async function loadOfflineControllers(agentDir: string): Promise<void> {
+  offlineControllersDir = agentDir;
+  if (offlineControllers.size > 0) return;
+  try {
+    const parsed = JSON.parse(await readFile(offlinePath(agentDir), "utf-8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+    for (const [url, since] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof since === "number") offlineControllers.set(url, since);
+    }
+  } catch {
+    // No memory of a previous run is simply the patient path.
+  }
+}
+
+function persistOfflineControllers(): void {
+  const agentDir = offlineControllersDir;
+  if (!agentDir) return;
+  void writeFile(
+    offlinePath(agentDir),
+    JSON.stringify(Object.fromEntries(offlineControllers)),
+    "utf-8",
+  ).catch(() => undefined);
+}
 
 function controllerTimeoutMs(url: string): number {
   const since = offlineControllers.get(url);
@@ -252,17 +287,20 @@ function controllerTimeoutMs(url: string): number {
     // Long enough since the last failure that the host may well be back; spend
     // the full timeout again rather than writing it off on a 1.5s probe.
     offlineControllers.delete(url);
+    persistOfflineControllers();
     return CONTROL_PLANE_TIMEOUT_MS;
   }
   return OFFLINE_CONTROLLER_TIMEOUT_MS;
 }
 
 function markControllerReachable(url: string): void {
-  offlineControllers.delete(url);
+  if (offlineControllers.delete(url)) persistOfflineControllers();
 }
 
 function markControllerUnreachable(url: string): void {
-  if (!offlineControllers.has(url)) offlineControllers.set(url, Date.now());
+  if (offlineControllers.has(url)) return;
+  offlineControllers.set(url, Date.now());
+  persistOfflineControllers();
 }
 
 async function readCachedModels(agentDir: string): Promise<AgentModel[]> {
@@ -531,6 +569,7 @@ export async function refreshPiModels(
   const agentDir = path.join(dataDir, "pi-agent");
   await mkdir(agentDir, { recursive: true });
   await chmod(agentDir, 0o700).catch(() => undefined);
+  await loadOfflineControllers(agentDir);
   const persisted =
     requestedControllers && requestedControllers.length > 0
       ? requestedControllers
