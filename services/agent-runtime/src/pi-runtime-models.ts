@@ -229,6 +229,66 @@ function controllersPath(agentDir: string): string {
   return path.join(agentDir, "controllers.json");
 }
 
+function modelCachePath(agentDir: string): string {
+  return path.join(agentDir, "controller-models.cache.json");
+}
+
+//
+// A controller that is asleep does not refuse a connection — on a tailnet
+// nothing sends an RST, so every probe costs the full timeout. Paying eight
+// seconds is worth it once, to tell "asleep" from "slow"; paying it on every
+// retry is what made the model picker sit in a spinner forever with the RTX
+// off. So a controller that has just failed is re-probed briefly, and one
+// success restores the patient timeout.
+//
+const OFFLINE_CONTROLLER_TIMEOUT_MS = 1_500;
+const offlineControllers = new Map<string, number>();
+const OFFLINE_MEMORY_MS = 60_000;
+
+function controllerTimeoutMs(url: string): number {
+  const since = offlineControllers.get(url);
+  if (since === undefined) return CONTROL_PLANE_TIMEOUT_MS;
+  if (Date.now() - since > OFFLINE_MEMORY_MS) {
+    // Long enough since the last failure that the host may well be back; spend
+    // the full timeout again rather than writing it off on a 1.5s probe.
+    offlineControllers.delete(url);
+    return CONTROL_PLANE_TIMEOUT_MS;
+  }
+  return OFFLINE_CONTROLLER_TIMEOUT_MS;
+}
+
+function markControllerReachable(url: string): void {
+  offlineControllers.delete(url);
+}
+
+function markControllerUnreachable(url: string): void {
+  if (!offlineControllers.has(url)) offlineControllers.set(url, Date.now());
+}
+
+async function readCachedModels(agentDir: string): Promise<AgentModel[]> {
+  try {
+    const parsed = JSON.parse(await readFile(modelCachePath(agentDir), "utf-8")) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (entry): entry is AgentModel =>
+        Boolean(entry && typeof entry === "object" && typeof (entry as AgentModel).id === "string"),
+    );
+  } catch {
+    return [];
+  }
+}
+
+async function writeCachedModels(agentDir: string, models: AgentModel[]): Promise<void> {
+  if (models.length === 0) return;
+  try {
+    await writeFile(modelCachePath(agentDir), JSON.stringify(models), "utf-8");
+    await chmod(modelCachePath(agentDir), 0o600).catch(() => undefined);
+  } catch {
+    // A cache that cannot be written is a missed optimisation, never an error
+    // the caller should see: the live list it was about to return is fine.
+  }
+}
+
 function controllerLabel(controller: PiControllerConfig, index: number): string {
   if (controller.name?.trim()) return controller.name.trim();
   try {
@@ -331,14 +391,24 @@ async function fetchModelsFromController(
   const backendUrl = normalizeBackendUrl(controller.url);
   const headers: HeadersInit = { Accept: "application/json" };
   if (controller.apiKey) headers.Authorization = `Bearer ${controller.apiKey}`;
-  const response = await fetch(`${backendUrl}/v1/models`, {
-    headers,
-    cache: "no-store",
-    signal: AbortSignal.timeout(CONTROL_PLANE_TIMEOUT_MS),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${backendUrl}/v1/models`, {
+      headers,
+      cache: "no-store",
+      signal: AbortSignal.timeout(controllerTimeoutMs(backendUrl)),
+    });
+  } catch (error) {
+    markControllerUnreachable(backendUrl);
+    throw error;
+  }
   if (!response.ok) {
+    // It answered, so it is awake — a 500 from a live controller must not make
+    // the next probe impatient.
+    markControllerReachable(backendUrl);
     throw new Error(`${backendUrl}/v1/models failed with HTTP ${response.status}`);
   }
+  markControllerReachable(backendUrl);
   const payload = (await response.json()) as unknown;
   const providerId = providerIdForController(controller, index);
   const label = controllerLabel(controller, index);
@@ -455,7 +525,7 @@ export function resolvePiModelSelection(modelId: string): { providerId: string; 
 
 export async function refreshPiModels(
   requestedControllers?: PiControllerModelsRequest[],
-): Promise<{ models: AgentModel[]; agentDir: string }> {
+): Promise<{ models: AgentModel[]; agentDir: string; stale: boolean }> {
   const settings = await getApiSettings();
   const dataDir = resolveDataDir();
   const agentDir = path.join(dataDir, "pi-agent");
@@ -490,12 +560,26 @@ export async function refreshPiModels(
   const providerModels = await collectProviderAgentModels();
 
   const allModels = [...models, ...userPiModels, ...providerModels];
+  //
+  // A live answer replaces the cache; an offline controller falls back to it.
+  // Throwing here was what emptied the model picker whenever the RTX slept:
+  // the last known catalogue is far more useful than a 502, and selecting a
+  // model that turns out to be unreachable fails at send time with a clear
+  // message rather than leaving nothing to select at all.
+  //
+  if (models.length > 0) {
+    await writeCachedModels(agentDir, models);
+  }
   if (allModels.length === 0 && controllerError) {
+    const cached = await readCachedModels(agentDir);
+    if (cached.length > 0) {
+      return { models: cached, agentDir: writtenAgentDir, stale: true };
+    }
     throw controllerError instanceof Error
       ? controllerError
       : new Error("No controllers returned models.");
   }
-  return { models: allModels, agentDir: writtenAgentDir };
+  return { models: allModels, agentDir: writtenAgentDir, stale: false };
 }
 async function collectProviderAgentModels(): Promise<AgentModel[]> {
   await refreshProviderHub().catch(() => undefined);

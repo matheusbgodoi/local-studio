@@ -21,6 +21,7 @@ const PROBE_TIMEOUT_MS = 4_000;
 const WAKE_REQUEST_TIMEOUT_MS = 12_000;
 const READY_POLL_INTERVAL_MS = 5_000;
 const STATUS_CACHE_MS = 8_000;
+const UNREACHABLE_CACHE_MS = 30_000;
 
 type HostRuntimeState = {
   lastSeenAt: string | null;
@@ -31,6 +32,7 @@ type HostRuntimeState = {
 type HostRuntime = {
   cache: Map<string, { status: ComputeHostStatus; expiresAt: number }>;
   inFlight: Map<string, Promise<ComputeHostWakeResult>>;
+  refreshing: Set<string>;
   persisted: Map<string, HostRuntimeState>;
   loaded: boolean;
 };
@@ -39,6 +41,7 @@ function runtime(): HostRuntime {
   return getGlobalSingleton<HostRuntime>("computeHostPower", () => ({
     cache: new Map(),
     inFlight: new Map(),
+    refreshing: new Set(),
     persisted: new Map(),
     loaded: false,
   }));
@@ -200,6 +203,19 @@ function buildStatus(
   };
 }
 
+async function refreshStatus(config: ComputeHostConfig): Promise<ComputeHostStatus> {
+  const state = runtime();
+  const override = state.inFlight.has(config.id) ? "waking" : undefined;
+  const payload = await probeControl(config);
+  const status = buildStatus(config, payload, payload ? undefined : override);
+  // An unreachable host stays unreachable for a while: re-probing it every
+  // eight seconds costs a full timeout each time and tells us nothing new.
+  const ttl = payload ? STATUS_CACHE_MS : UNREACHABLE_CACHE_MS;
+  state.cache.set(config.id, { status, expiresAt: Date.now() + ttl });
+  if (payload) void savePersisted();
+  return status;
+}
+
 export async function computeHostStatus(
   config: ComputeHostConfig,
   options: { force?: boolean } = {},
@@ -207,14 +223,23 @@ export async function computeHostStatus(
   await loadPersisted();
   const state = runtime();
   const cached = state.cache.get(config.id);
-  if (!options.force && cached && cached.expiresAt > Date.now()) return cached.status;
-
-  const override = state.inFlight.has(config.id) ? "waking" : undefined;
-  const payload = await probeControl(config);
-  const status = buildStatus(config, payload, payload ? undefined : override);
-  state.cache.set(config.id, { status, expiresAt: Date.now() + STATUS_CACHE_MS });
-  if (payload) void savePersisted();
-  return status;
+  if (!options.force && cached) {
+    if (cached.expiresAt > Date.now()) return cached.status;
+    //
+    // Stale-while-revalidate. A sleeping host on a tailnet never sends an RST,
+    // so a probe costs the whole timeout; making the panel wait for it is what
+    // put eight seconds on every load of a surface that already knew the
+    // answer. Hand back what we last saw and correct it in the background.
+    //
+    if (!state.refreshing.has(config.id)) {
+      state.refreshing.add(config.id);
+      void refreshStatus(config)
+        .catch(() => undefined)
+        .finally(() => state.refreshing.delete(config.id));
+    }
+    return cached.status;
+  }
+  return refreshStatus(config);
 }
 
 function invalidate(id: string): void {
