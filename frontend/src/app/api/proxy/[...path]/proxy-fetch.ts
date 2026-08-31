@@ -10,21 +10,49 @@ export function isAbortError(error: unknown): boolean {
 }
 
 /**
+ * Nothing ever answered: the connection itself never came up.
+ *
+ * This is a different fact from a dropped socket, and the proxy's own deadline
+ * is not the only thing that can produce it. undici applies a ~10s connect
+ * timeout of its own, which fires BEFORE any upstream budget above ten seconds
+ * and surfaces as a TypeError rather than an AbortError — so routes with a 20s
+ * or 360s budget never reached the abort branch and fell through to a generic
+ * 500. A 500 carries no upstream-timeout marker and is retryable, so the client
+ * spent its whole ladder on it: measured at roughly ninety seconds per call
+ * against a sleeping host.
+ *
+ * Deliberately excludes ECONNRESET, EPIPE, UND_ERR_SOCKET and the bare
+ * cause-less "fetch failed": those are a connection dropped AFTER it was
+ * established, which happens to live hosts and is worth one more socket.
+ */
+export function isUpstreamUnreachableError(error: unknown): boolean {
+  const code = (error as { cause?: { code?: string } } | undefined)?.cause?.code;
+  return (
+    code === "UND_ERR_CONNECT_TIMEOUT" ||
+    code === "ECONNREFUSED" ||
+    code === "ENOTFOUND" ||
+    code === "EAI_AGAIN" ||
+    code === "ETIMEDOUT" ||
+    code === "EHOSTUNREACH" ||
+    code === "ENETUNREACH"
+  );
+}
+
+/**
  * Distinguishes a transiently dropped/stale connection (worth one retry with a
  * fresh socket) from a definitive failure like a clean connection refusal or
  * DNS error (where retrying just doubles the load on a down backend).
  */
 function isRetriableConnectionError(error: unknown): boolean {
   if (isAbortError(error)) return false;
+  // A connect timeout is not a stale keep-alive socket — it is the opposite
+  // case, where nothing ever answered the SYN. Retrying it here was doubling
+  // every wait against a sleeping host, ~10.5s becoming ~21s per attempt before
+  // the client ladder multiplied it again.
+  if (isUpstreamUnreachableError(error)) return false;
   const code = (error as { cause?: { code?: string } } | undefined)?.cause?.code;
   if (code) {
-    return (
-      code === "ECONNRESET" ||
-      code === "EPIPE" ||
-      code === "ETIMEDOUT" ||
-      code === "UND_ERR_SOCKET" ||
-      code === "UND_ERR_CONNECT_TIMEOUT"
-    );
+    return code === "ECONNRESET" || code === "EPIPE" || code === "UND_ERR_SOCKET";
   }
   // undici sometimes surfaces a stale keep-alive socket as a bare "fetch failed"
   // TypeError with no cause code; a single retry typically gets a fresh socket.
@@ -160,6 +188,11 @@ export async function fetchWithOptionalFallback(
   // Idempotent reads may retry once on a dropped/stale connection so a single
   // bad keep-alive socket doesn't surface to the user as a disconnect.
   const maxConnectionAttempts = context.method === "GET" || context.method === "HEAD" ? 2 : 1;
+  // The lifecycle routes exist to wait on a host that is deliberately still
+  // coming up, so for them a connection that has not come up yet is the
+  // expected state rather than a verdict, and the second window is worth
+  // spending. Everywhere else it only doubles the wait on a host that is off.
+  const isLifecycleRoute = context.path[0] === "launch" || context.path.join("/") === "wait-ready";
 
   const fetchOnce = async (url: string): Promise<Response> => {
     const controller = new AbortController();
@@ -182,7 +215,10 @@ export async function fetchWithOptionalFallback(
         return await fetchOnce(url);
       } catch (error) {
         lastError = error;
-        if (attempt < maxConnectionAttempts - 1 && isRetriableConnectionError(error)) {
+        const retriable =
+          isRetriableConnectionError(error) ||
+          (isLifecycleRoute && isUpstreamUnreachableError(error));
+        if (attempt < maxConnectionAttempts - 1 && retriable) {
           await new Promise((resolve) => setTimeout(resolve, 150));
           continue;
         }

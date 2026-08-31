@@ -9,6 +9,7 @@ import {
   fetchWithOptionalFallback,
   getForwardedSearchParams,
   isAbortError,
+  isUpstreamUnreachableError,
   ProxyBodyTooLargeError,
   proxyRequestBodyLimit,
   readProxyRequestBody,
@@ -85,8 +86,13 @@ async function handleRequest(request: NextRequest, method: string, path: string[
     // A controller already known to be silent is answered from memory rather
     // than by holding this request — and the socket it occupies — open for the
     // whole upstream budget.
-    breakerKey = upstreamKey(targetUrl);
-    if (upstreamVerdict(breakerKey) === "open") return upstreamTimeoutResponse();
+    // The wake path is exempt: `launch/*` and `wait-ready` are how the owner
+    // asks a sleeping host to come back, and a breaker latched by that very
+    // sleep must not be what refuses them.
+    if (path[0] !== "launch" && path.join("/") !== "wait-ready") {
+      breakerKey = upstreamKey(targetUrl);
+      if (upstreamVerdict(breakerKey) === "open") return upstreamTimeoutResponse();
+    }
 
     const body = await readProxyRequestBody(request, method, proxyRequestBodyLimit(path));
     const headers = buildProxyRequestHeaders(
@@ -126,7 +132,11 @@ async function handleRequest(request: NextRequest, method: string, path: string[
         `[PROXY ERROR] ip=${client.ip} | country=${client.country} | method=${method} | path=/${path.join("/")} | duration=${duration}ms | error=${String(error)}`,
       );
     }
-    if (isAbortError(error)) {
+    // Both say the same thing: the controller did not answer. One is our own
+    // deadline, the other is the connection never coming up — and undici's 10s
+    // connect timeout means the second arrives first on any route budgeted
+    // above ten seconds.
+    if (isAbortError(error) || isUpstreamUnreachableError(error)) {
       if (breakerKey) markUpstreamDown(breakerKey);
       return upstreamTimeoutResponse();
     }
