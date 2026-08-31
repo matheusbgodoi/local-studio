@@ -77,6 +77,7 @@ import {
 } from "./network-handlers";
 import {
   handleComputeHostStatus,
+  handleComputeHostPowerMode,
   handleComputeHostWake,
   handleComputeHostsList,
 } from "./compute-host-handlers";
@@ -128,6 +129,9 @@ export function createAgentRuntimeApp() {
   app.get("/api/agent/compute-hosts", () => handleComputeHostsList());
   app.get("/api/agent/compute-hosts/:id", (c) => handleComputeHostStatus(c.req.param("id")));
   app.post("/api/agent/compute-hosts/:id/wake", (c) => handleComputeHostWake(c.req.param("id")));
+  app.post("/api/agent/compute-hosts/:id/power-mode", (c) =>
+    handleComputeHostPowerMode(c.req.param("id"), c.req.query("mode") ?? ""),
+  );
   app.get("/api/agent/network/status", () => handleNetworkStatus());
   app.post("/api/agent/network/policy", (c) => handleNetworkPolicy(c.req.raw));
   app.get("/api/agent/network/provider", (c) => handleNetworkProvider(c.req.raw));

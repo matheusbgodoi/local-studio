@@ -8,6 +8,7 @@ import {
   patchComputeHost,
   refreshComputeHosts,
   subscribeComputeHosts,
+  setComputeHostPowerMode,
   wakeComputeHost,
   type ComputeHostStatus as HostStatus,
 } from "./compute-hosts-store";
@@ -93,6 +94,7 @@ export function ComputeHostsSection() {
         const meta = STATE_LABEL[host.state] ?? STATE_LABEL.unknown;
         const cooling =
           host.wakeCooldownUntil !== null && new Date(host.wakeCooldownUntil) > new Date();
+        const busy = waking === host.id;
         return (
           <div key={host.id} className="mb-4 last:mb-0">
             <SettingsRow
@@ -121,6 +123,32 @@ export function ComputeHostsSection() {
             <SettingsRow
               label="Last seen"
               value={<SettingsValue dim>{relative(host.lastSeenAt)}</SettingsValue>}
+            />
+            <SettingsRow
+              label="Power behaviour"
+              description="Who decides when this machine sleeps. Normal hands it back to you: the host stops sleeping on its own and Windows returns to its original power scheme. Automatic lets it save power by itself, even with this Mac off."
+              control={
+                <div className="flex w-full flex-wrap items-center gap-2">
+                  <SettingsButton
+                    disabled={busy}
+                    onClick={() => void setComputeHostPowerMode(host.id, "NORMAL")}
+                  >
+                    Normal — never sleeps
+                  </SettingsButton>
+                  <SettingsButton
+                    disabled={busy}
+                    onClick={() => void setComputeHostPowerMode(host.id, "AI_AUTO")}
+                  >
+                    Automatic
+                  </SettingsButton>
+                  <SettingsButton
+                    disabled={busy}
+                    onClick={() => void setComputeHostPowerMode(host.id, "NORMAL_GAMING")}
+                  >
+                    Gaming — free the VRAM
+                  </SettingsButton>
+                </div>
+              }
             />
             <SettingsRow
               label="Wake method"

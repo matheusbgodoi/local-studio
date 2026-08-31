@@ -116,3 +116,42 @@ export async function wakeComputeHost(id: string): Promise<void> {
     await refreshComputeHosts();
   }
 }
+
+export type ComputeHostPowerMode = "AI_AUTO" | "NORMAL_GAMING" | "KEEP_AWAKE" | "NORMAL";
+
+/**
+ * Hand the host's power behaviour back to its owner.
+ *
+ * `NORMAL` is the one that matters day to day and it is not a governor mode:
+ * it is the combination that actually stops a machine putting itself to sleep
+ * while someone is using it. The runtime performs all three steps, because any
+ * one of them alone leaves the machine sleeping again.
+ */
+export async function setComputeHostPowerMode(
+  id: string,
+  mode: ComputeHostPowerMode,
+): Promise<void> {
+  emit({ ...state, busyHostId: id, notice: null });
+  try {
+    const response = await fetch(
+      `/api/agent/compute-hosts/${encodeURIComponent(id)}/power-mode?mode=${mode}`,
+      { method: "POST" },
+    );
+    const body = (await response.json()) as { detail?: string; ok?: boolean };
+    emit({
+      ...state,
+      notice: {
+        text: body.detail ?? "The power mode request finished.",
+        tone: body.ok ? "info" : "danger",
+      },
+    });
+  } catch {
+    emit({
+      ...state,
+      notice: { text: "The power mode request could not be sent.", tone: "danger" },
+    });
+  } finally {
+    emit({ ...state, busyHostId: null });
+    await refreshComputeHosts();
+  }
+}

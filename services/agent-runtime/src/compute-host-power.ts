@@ -366,6 +366,78 @@ async function waitForReady(config: ComputeHostConfig): Promise<"ready" | "timeo
   return "timeout";
 }
 
+export type ComputeHostPowerMode = "AI_AUTO" | "NORMAL_GAMING" | "KEEP_AWAKE" | "NORMAL";
+
+//
+// The owner's own switch for the host's power behaviour.
+//
+// "NORMAL" is not one of the governor's modes: it is the combination that
+// actually gives a person their machine back, and it takes three calls because
+// any one of them alone leaves the machine sleeping. KEEP_AWAKE stops the
+// governor deciding to sleep, zeroing the deep-sleep timer means a later mode
+// change cannot resurrect that decision, and restore-normal puts Windows back
+// on its original power scheme rather than the cloned Eco one.
+//
+async function controlPost(
+  base: string,
+  token: string,
+  path: string,
+  timeoutMs: number,
+): Promise<boolean> {
+  try {
+    const response = await fetch(`${base}${path}`, {
+      method: "POST",
+      headers: { "X-Auth-Token": token },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+const MODE_TIMEOUT_MS = 120_000;
+
+export async function setComputeHostPowerMode(
+  config: ComputeHostConfig,
+  mode: ComputeHostPowerMode,
+): Promise<{ ok: boolean; mode: ComputeHostPowerMode; detail: string }> {
+  const token = config.controlToken.trim();
+  if (!token) return { ok: false, mode, detail: "No control token configured for this host." };
+
+  const primary = config.controlUrl.trim().replace(/\/+$/, "");
+  const fallback = config.controlUrlFallback.trim().replace(/\/+$/, "");
+  const bases = [primary, fallback].filter((base, index, all) =>
+    Boolean(base) && all.indexOf(base) === index,
+  );
+
+  for (const base of bases) {
+    const steps: string[] =
+      mode === "NORMAL"
+        ? ["/power/mode?mode=KEEP_AWAKE", "/power/timers?deep_sleep_s=0", "/power/restore-normal"]
+        : [`/power/mode?mode=${mode}`];
+    let allOk = true;
+    for (const step of steps) {
+      if (!(await controlPost(base, token, step, MODE_TIMEOUT_MS))) {
+        allOk = false;
+        break;
+      }
+    }
+    if (allOk) {
+      invalidate(config.id);
+      return {
+        ok: true,
+        mode,
+        detail:
+          mode === "NORMAL"
+            ? "Host will not sleep on its own, and Windows is back on its original power scheme."
+            : `Host power mode set to ${mode}.`,
+      };
+    }
+  }
+  return { ok: false, mode, detail: "The host did not accept the power mode change." };
+}
+
 export async function wakeComputeHost(
   config: ComputeHostConfig,
 ): Promise<ComputeHostWakeResult> {
