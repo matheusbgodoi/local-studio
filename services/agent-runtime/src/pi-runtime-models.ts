@@ -303,23 +303,38 @@ function markControllerUnreachable(url: string): void {
   persistOfflineControllers();
 }
 
-async function readCachedModels(agentDir: string): Promise<AgentModel[]> {
+//
+// Keyed by controller URL, not one flat list, so a host that is asleep keeps
+// contributing its own models while the hosts that are up contribute theirs
+// live. Dropping an offline host's models entirely was the second half of
+// "I cannot see models with the 3090 off": the Mac answering did not bring the
+// RTX aliases back, it just stopped the list being empty.
+//
+type ModelCache = Record<string, AgentModel[]>;
+
+async function readModelCache(agentDir: string): Promise<ModelCache> {
   try {
     const parsed = JSON.parse(await readFile(modelCachePath(agentDir), "utf-8")) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (entry): entry is AgentModel =>
-        Boolean(entry && typeof entry === "object" && typeof (entry as AgentModel).id === "string"),
-    );
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const cache: ModelCache = {};
+    for (const [url, models] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!Array.isArray(models)) continue;
+      cache[url] = models.filter(
+        (entry): entry is AgentModel =>
+          Boolean(
+            entry && typeof entry === "object" && typeof (entry as AgentModel).id === "string",
+          ),
+      );
+    }
+    return cache;
   } catch {
-    return [];
+    return {};
   }
 }
 
-async function writeCachedModels(agentDir: string, models: AgentModel[]): Promise<void> {
-  if (models.length === 0) return;
+async function writeModelCache(agentDir: string, cache: ModelCache): Promise<void> {
   try {
-    await writeFile(modelCachePath(agentDir), JSON.stringify(models), "utf-8");
+    await writeFile(modelCachePath(agentDir), JSON.stringify(cache), "utf-8");
     await chmod(modelCachePath(agentDir), 0o600).catch(() => undefined);
   } catch {
     // A cache that cannot be written is a missed optimisation, never an error
@@ -472,20 +487,46 @@ async function fetchModelsFromController(
   return { controller: { ...controller, url: backendUrl }, models, providerId };
 }
 
-async function fetchModelsFromControllers(controllers: PiControllerConfig[]): Promise<{
+async function fetchModelsFromControllers(
+  controllers: PiControllerConfig[],
+  cache: ModelCache,
+): Promise<{
   models: AgentModel[];
   controllerModels: ControllerModels[];
+  offlineControllerUrls: string[];
 }> {
   const settled = await Promise.allSettled(
     controllers.map((controller, index) =>
       fetchModelsFromController(controller, index, controllers.length > 1),
     ),
   );
-  const controllerModels = settled
-    .filter(
-      (result): result is PromiseFulfilledResult<ControllerModels> => result.status === "fulfilled",
-    )
-    .map((result) => result.value);
+  const controllerModels: ControllerModels[] = [];
+  const offlineControllerUrls: string[] = [];
+  settled.forEach((result, index) => {
+    const controller = controllers[index];
+    if (result.status === "fulfilled") {
+      controllerModels.push(result.value);
+      return;
+    }
+    if (!controller) return;
+    //
+    // The host did not answer, but we have seen it before. Keep its models in
+    // the list so the picker still shows them: choosing one is a reasonable
+    // thing to do — it is how the owner asks for that host to be woken — and a
+    // send that cannot reach it fails with a clear message. An empty picker
+    // offers no such move.
+    //
+    const url = normalizeBackendUrl(controller.url);
+    const cached = cache[url];
+    if (cached && cached.length > 0) {
+      offlineControllerUrls.push(url);
+      controllerModels.push({
+        controller: { ...controller, url },
+        models: cached,
+        providerId: providerIdForController(controller, index),
+      });
+    }
+  });
   if (controllerModels.length === 0) {
     const firstError = settled.find(
       (result): result is PromiseRejectedResult => result.status === "rejected",
@@ -503,7 +544,11 @@ async function fetchModelsFromControllers(controllers: PiControllerConfig[]): Pr
       models.push(model);
     }
   }
-  return { models: models.sort((a, b) => a.name.localeCompare(b.name)), controllerModels };
+  return {
+    models: models.sort((a, b) => a.name.localeCompare(b.name)),
+    controllerModels,
+    offlineControllerUrls,
+  };
 }
 
 async function writePiModelsConfig(
@@ -582,8 +627,13 @@ export async function refreshPiModels(
   let models: AgentModel[] = [];
   let controllerModels: ControllerModels[] = [];
   let controllerError: unknown = null;
+  let offlineControllerUrls: string[] = [];
+  const cache = await readModelCache(agentDir);
   try {
-    ({ models, controllerModels } = await fetchModelsFromControllers(controllers));
+    ({ models, controllerModels, offlineControllerUrls } = await fetchModelsFromControllers(
+      controllers,
+      cache,
+    ));
   } catch (error) {
     controllerError = error;
   }
@@ -598,27 +648,27 @@ export async function refreshPiModels(
   const writtenAgentDir = await writePiModelsConfig(controllerModels, userPiProviders);
   const providerModels = await collectProviderAgentModels();
 
-  const allModels = [...models, ...userPiModels, ...providerModels];
   //
-  // A live answer replaces the cache; an offline controller falls back to it.
-  // Throwing here was what emptied the model picker whenever the RTX slept:
-  // the last known catalogue is far more useful than a 502, and selecting a
-  // model that turns out to be unreachable fails at send time with a clear
-  // message rather than leaving nothing to select at all.
+  // Only what a host actually answered updates its own cache entry: models
+  // replayed from the cache for an offline host must not be written back as if
+  // they had just been observed, or the entry would never age out.
   //
-  if (models.length > 0) {
-    await writeCachedModels(agentDir, models);
+  const offline = new Set(offlineControllerUrls);
+  let cacheChanged = false;
+  for (const entry of controllerModels) {
+    if (offline.has(entry.controller.url) || entry.models.length === 0) continue;
+    cache[entry.controller.url] = entry.models;
+    cacheChanged = true;
   }
+  if (cacheChanged) await writeModelCache(agentDir, cache);
+
+  const allModels = [...models, ...userPiModels, ...providerModels];
   if (allModels.length === 0 && controllerError) {
-    const cached = await readCachedModels(agentDir);
-    if (cached.length > 0) {
-      return { models: cached, agentDir: writtenAgentDir, stale: true };
-    }
     throw controllerError instanceof Error
       ? controllerError
       : new Error("No controllers returned models.");
   }
-  return { models: allModels, agentDir: writtenAgentDir, stale: false };
+  return { models: allModels, agentDir: writtenAgentDir, stale: offline.size > 0 };
 }
 async function collectProviderAgentModels(): Promise<AgentModel[]> {
   await refreshProviderHub().catch(() => undefined);
