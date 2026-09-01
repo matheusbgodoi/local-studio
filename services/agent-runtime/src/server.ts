@@ -3,6 +3,7 @@ import { agenticRuntime } from "./agentic/service";
 import { startAutomationScheduler } from "./automation-scheduler";
 import { configureInferenceHttpTimeout } from "./http-dispatcher";
 import { createAgentRuntimeApp } from "./http/app";
+import { unloadLocalModels } from "./local-model-unload";
 import { networkService } from "./network";
 import { resetBoundaryScopedResources } from "./network/boundary-reset";
 
@@ -54,9 +55,22 @@ const stopNetwork = async (): Promise<void> => {
   }
 };
 
+//
+// Quitting the app is a clearer statement than going idle: the owner is done,
+// so the local model should stop occupying a third of a 24 GB machine rather
+// than waiting out the idle timer.
+//
+const releaseLocalModels = async (): Promise<void> => {
+  try {
+    await unloadLocalModels();
+  } catch {
+    // a model that will not unload must not keep the process alive
+  }
+};
+
 process.once("exit", () => litterBridgeGateway.dispose());
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {
-    void stopNetwork().then(() => process.exit(0));
+    void Promise.all([stopNetwork(), releaseLocalModels()]).then(() => process.exit(0));
   });
 }
