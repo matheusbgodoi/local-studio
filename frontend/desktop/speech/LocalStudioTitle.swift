@@ -148,7 +148,10 @@ func generateTitle(excerpt: String, localeIdentifier: String) async -> Never {
     }
 
     let session = LanguageModelSession(instructions: instructions(localeIdentifier: localeIdentifier))
-    let options = GenerationOptions(samplingMode: .greedy, maximumResponseTokens: 32)
+    // Apple renamed this label in the macOS 27 SDK: `samplingMode:` became
+    // `sampling:`. The old spelling only compiled here because no Xcode was
+    // installed and this file was never actually built.
+    let options = GenerationOptions(sampling: .greedy, maximumResponseTokens: 32)
     let prompt = "Conversation excerpt:\n\n\(excerpt)"
 
     do {
