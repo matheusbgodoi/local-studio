@@ -42,3 +42,18 @@ Bun resolves the standalone runtime differently and applies its existing brace-e
 ## Validation and remaining acceptance
 
 Frontend, controller, and standalone runtime TypeScript checks pass against the independently installed upgraded dependencies. The normal commit hooks run without bypass. Integrated `npm run check`, production packaging, actual packaged dependency inspection, and browser/agent acceptance remain root integration work. Reverting this commit restores the previous manifests and lockfiles; no live service rollback is necessary because no service was changed.
+
+## Actual package closure inspection
+
+MEASURED / PROVEN: inspection of the installed application, including `app.asar`, found the following physical copies. Node's ESM resolver was used without executing Pi to identify its Undici and minimatch → brace-expansion resolution.
+
+| Physical tree | Undici | brace-expansion | Evidence |
+| --- | --- | --- | --- |
+| Installed `Resources/app/agent-runtime` | 8.5.0 | 5.0.9 | Normal runtime Pi dependency resolution |
+| Installed Next standalone, nested under Pi | 8.5.0 | 5.0.7 | Both files ship and resolve from that Pi package |
+| Installed `app.asar` | 8.5.0 | 5.0.9 | Archive package inventory; normal chat use not established |
+| Qualified isolated portable runtime bundle | 8.9.0 | 5.0.9 | Actual bundle built successfully, 124 copied packages; Pi resolution confirmed |
+
+The frontend copy is not merely an unshipped development dependency. `complete-standalone` explicitly copies its entire Pi package tree; `afterPack` requires that CLI to exist. `resolvePackagedPiCli` in `litter-bridge-gateway.ts` selects it as a fallback when ordinary runtime Pi import resolution fails. No direct Pi import was found in the installed Next server JavaScript chunks. Therefore the vulnerable nested copy is a shipped fallback path, while the upgraded standalone runtime is the normal target path. This inspection does not demonstrate exploitation or routine execution of the fallback.
+
+The root checkout's previously compiled Next tree also retained the nested vulnerable versions. Its runtime `dist` contained the TypeScript build output rather than the portable bundle at inspection time: the final runtime check can replace the portable output made earlier in the frontend build. Final desktop packaging must use the normal desktop build flow, which regenerates the portable runtime, and inspect the resulting candidate again. The isolated qualification did not modify the root build output or the installed application.
