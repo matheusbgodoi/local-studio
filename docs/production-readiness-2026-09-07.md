@@ -34,9 +34,11 @@ subagent restrictions/cancellation, repeated compaction and checkpoint
 measurement provenance. Passing these does not establish installed acceptance.
 
 Authenticated profiling of the old installed app reproduced Settings' unhandled
-setup-request failures. The fixes are in source; a candidate installation and
-repeated authenticated profiling, offline/recovery flows, real tool execution
-and long-conversation compaction remain required before promotion.
+setup-request failures. The subsequent candidate installations and acceptance results are tracked in
+[the installed receipt](installed-candidate-2026-09-07.md) and the status evidence.
+That receipt now includes actual threshold compaction at 190,073 backend tokens,
+externally verified memory-only continuation and bounded cancellation. Those
+results do not establish every workflow or the latest candidate's restart acceptance.
 
 Related evidence: [status](status-readiness-2026-09-07.md),
 [subagents](subagent-readiness-2026-09-07.md),
