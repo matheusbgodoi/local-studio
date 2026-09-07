@@ -1,4 +1,5 @@
 import { contextUsageIsMeasured } from "./context-usage-provenance";
+import { releaseBrowserSession } from "./browser-host/browser-host";
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { closeSync, constants, fsyncSync, openSync, readSync, statSync } from "node:fs";
@@ -979,9 +980,12 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
       pending.resolve(pending.method === "confirm" ? false : undefined);
     }
     this.extensionUiPending.clear();
-    if (!runtime) return Effect.void;
+    const browserSessionId = this.currentStartOptions.browserSessionId;
     return Effect.tryPromise({
-      try: () => runtime.dispose(),
+      try: async () => {
+        await releaseBrowserSession(browserSessionId);
+        await runtime?.dispose();
+      },
       catch: () => undefined,
     }).pipe(Effect.catch(() => Effect.void));
   }

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import os from "node:os";
@@ -9,11 +10,6 @@ import { networkService } from "../network";
 
 const LAUNCH_TIMEOUT_MS = 15_000;
 
-// The profile is where a site's cookies live after the owner has legitimately
-// signed in or passed a verification check, so it belongs beside the rest of
-// Local Studio's user data rather than in os.tmpdir(), which the OS is entitled
-// to sweep and which every other process on the machine can read. It stays a
-// DEDICATED profile: the owner's own Chrome profile is never opened or copied.
 const browserDataDirectory = (): string => {
   const override = process.env.LOCAL_STUDIO_BROWSER_PROFILE_DIR?.trim();
   if (override) return override;
@@ -86,7 +82,10 @@ export const findBrowserBinary = (): string | null => {
   return platformBrowserCandidates().find((candidate) => existsSync(candidate)) ?? null;
 };
 
-class PlaywrightManager {
+const managers = new Set<PlaywrightManager>();
+
+export class PlaywrightManager {
+  constructor(private readonly sessionId?: string) {}
   private context: BrowserContext | null = null;
   private launching: Promise<BrowserContext> | null = null;
   private headful = false;
@@ -100,10 +99,17 @@ class PlaywrightManager {
   }
 
   profileDirectory(): string {
-    return browserDataDirectory();
+    return this.sessionId
+      ? path.join(
+          browserDataDirectory(),
+          "sessions",
+          createHash("sha256").update(this.sessionId).digest("hex"),
+        )
+      : browserDataDirectory();
   }
 
   async ensure(): Promise<BrowserContext> {
+    managers.add(this);
     if (this.context) return this.context;
     if (this.launching) return this.launching;
     const executablePath = findBrowserBinary();
@@ -111,15 +117,7 @@ class PlaywrightManager {
       throw new Error("Browser unavailable: no Chromium found — set LOCAL_STUDIO_CHROME_PATH");
     }
     const headless = !this.headful;
-    //
-    // Chromium ignores HTTP_PROXY entirely — it reads the system network
-    // settings or --proxy-server and nothing else — so the environment other
-    // tools follow does nothing for it. Under protection it is launched inside
-    // the same jail as every other child, which is what actually contains it,
-    // and given the proxy flag so that it works rather than merely fails
-    // closed. Both headless and headful take this path, and so does the
-    // relaunch behind browser_verify, because they all go through here.
-    //
+
     const network = networkService();
     const jailArgs = network.chromiumArguments();
     const launch = (userDataDir: string): Promise<BrowserContext> =>
@@ -139,12 +137,9 @@ class PlaywrightManager {
           ? { proxy: { server: `socks5://${network.proxyEndpoint()}` } }
           : {}),
       });
-    const dataDirectory = browserDataDirectory();
+    const dataDirectory = this.profileDirectory();
     this.launching = launch(dataDirectory)
       .catch((error: unknown) => {
-        // A second Chromium on the same userDataDir corrupts it, so Playwright
-        // refuses. Falling back to a per-pid profile keeps the browser usable
-        // but LOSES every cookie the owner verified with - hence the warning.
         if (!String(error).includes("ProcessSingleton")) throw error;
         console.warn(
           "[browser] profile already in use; starting an isolated copy — verified sessions will not carry over",
@@ -164,14 +159,6 @@ class PlaywrightManager {
     return this.launching;
   }
 
-  // Reopen the SAME profile with a visible window so the owner can complete a
-  // challenge or a login by hand.
-  //
-  // Chromium cannot switch a live context between headless and headful, and two
-  // processes must never hold one userDataDir at once, so the only safe order is
-  // close-then-relaunch. Cookies and local storage survive because they live in
-  // the profile on disk, not in the process - which is exactly why the profile
-  // had to stop being a temp directory.
   async setInteractive(headful: boolean): Promise<BrowserContext> {
     if (this.headful === headful && this.context) return this.context;
     if (this.launching) await this.launching.catch(() => undefined);
@@ -182,10 +169,13 @@ class PlaywrightManager {
     return this.ensure();
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
+    const pending = this.launching;
+    if (pending) await pending.catch(() => undefined);
     const context = this.context;
     this.context = null;
-    if (context) void context.close().catch(() => undefined);
+    if (context) await context.close().catch(() => undefined);
+    managers.delete(this);
   }
 }
 
@@ -196,7 +186,11 @@ export const playwrightManager = getGlobalSingleton(
 
 getGlobalSingleton("playwrightExitHook", () => {
   if (typeof process !== "undefined") {
-    process.on("exit", () => playwrightManager.stop());
+    process.on("exit", stopBrowserManagers);
   }
   return true;
 });
+
+export function stopBrowserManagers(): void {
+  for (const manager of managers) void manager.stop();
+}
