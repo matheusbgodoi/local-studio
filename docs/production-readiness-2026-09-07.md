@@ -50,3 +50,33 @@ commits already reachable from that remote's tracking refs, while validating
 every new outgoing subject. Direct pushes to dev/main and the full static,
 cleanup and standalone gates remain enforced. This fixes history selection;
 it does not disable hooks or permit new nonconventional commits.
+
+## Installed acceptance candidate
+
+The integrated source at `bbb78a9cff0f50ce0cdf7c25cb34a01011e3cc52`
+passed `npm run setup`, `npm run check` and
+`npm --prefix frontend run desktop:dist:dev`. The generated dev app identifies
+as `org.local.studio.desktop.dev`, version 2.1.0, with Next build
+`mtqrwv7q58dh7l`. Its DMG SHA-256 is
+`d60c132ba3c9993e6600f4f21d0390586b288b91c731dbe272e85c6a74abbe7e`.
+
+The documented `scripts/install-desktop-app.sh dev` installed and verified the
+ad-hoc-signed owner build. It was launched with an explicit isolated user-data
+directory, `Local Studio Acceptance 20260907`. The compiled one-way mirror
+copied existing histories and configuration; SQLite's read-only backup API
+copied durable task state, and local memory/artifacts were copied separately.
+The stable application's data was not migrated or modified. The task snapshot
+contained three cancelled, three completed, one failed and one paused run;
+none was running. A fresh private frontend token gates the acceptance instance.
+
+The installed candidate started its packaged Next frontend and dedicated Pi
+runtime successfully. Authenticated browser profiling observed Settings with
+zero uncaught exceptions and zero console errors, compared with the reproduced
+setup-request exceptions in the old installation. Read-only API requests loaded
+22 sessions, five projects, one memory entry and eight durable runs. This is
+initial acceptance evidence, not completion of offline, tool, context or
+long-session qualification. Further profile results and failures are retained
+until root causes are resolved.
+
+The branch is published with normal hooks enabled in draft PR
+[#39](https://github.com/matheusbgodoi/local-studio/pull/39), targeting dev.
