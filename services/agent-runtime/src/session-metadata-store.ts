@@ -1,3 +1,5 @@
+import { Schema } from "effect";
+import { SubagentRunSchema, type SubagentRun } from "../../../shared/agent/subagent";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import lockfile from "proper-lockfile";
@@ -31,6 +33,7 @@ type StoredSessionMetadata = {
 type SessionMetadataStore = {
   version: 1;
   sessions: Record<string, StoredSessionMetadata>;
+  subagentRuns: Record<string, SubagentRun>;
 };
 
 export type ArchivedSessionMetadata = SessionArchiveState & {
@@ -52,7 +55,7 @@ type SessionArchiveMetadataInput = {
 };
 
 function defaultStore(): SessionMetadataStore {
-  return { version: 1, sessions: {} };
+  return { version: 1, sessions: {}, subagentRuns: {} };
 }
 
 function storePath(): string {
@@ -80,7 +83,14 @@ function normalizeStore(value: unknown): SessionMetadataStore {
       subagentName: typeof metadata.subagentName === "string" ? metadata.subagentName : undefined,
     };
   }
-  return { version: 1, sessions };
+  const subagentRuns: Record<string, SubagentRun> = {};
+  if (isRecord(value.subagentRuns)) {
+    for (const [id, valueRun] of Object.entries(value.subagentRuns)) {
+      const decoded = Schema.decodeUnknownOption(SubagentRunSchema)(valueRun);
+      if (decoded._tag === "Some" && decoded.value.id === id) subagentRuns[id] = decoded.value;
+    }
+  }
+  return { version: 1, sessions, subagentRuns };
 }
 
 function backupUnreadableStore(filepath: string): void {
@@ -260,22 +270,15 @@ export function listArchivedSessionMetadata(): ArchivedSessionMetadata[] {
     });
 }
 
-//
-// Everything this store remembers about one session, dropped.
-//
-// Archiving is a flag and is meant to be reversible; this is the other thing,
-// and it is used only when the transcript itself is being deleted. Leaving the
-// metadata behind would keep a title, a project and an archive state pointing
-// at a file that no longer exists, and the archived list would render rows the
-// owner can never open.
-//
 export async function forgetSessionMetadata(sessionId: string): Promise<void> {
   const id = sessionId.trim();
   if (!id) return;
   await withStoreLock(() => {
     const store = readStore();
-    if (!store.sessions[id]) return;
     delete store.sessions[id];
+    for (const [runId, run] of Object.entries(store.subagentRuns)) {
+      if (run.piSessionId === id || run.parentPiSessionId === id) delete store.subagentRuns[runId];
+    }
     writeStore(store);
   });
 }
@@ -290,6 +293,12 @@ export async function forgetSessionMetadataMany(sessionIds: readonly string[]): 
       if (!store.sessions[id]) continue;
       delete store.sessions[id];
       changed = true;
+    }
+    for (const [runId, run] of Object.entries(store.subagentRuns)) {
+      if ((run.piSessionId && ids.has(run.piSessionId)) || ids.has(run.parentPiSessionId)) {
+        delete store.subagentRuns[runId];
+        changed = true;
+      }
     }
     if (changed) writeStore(store);
   });
@@ -338,5 +347,48 @@ export async function setSessionArchived(
     }
     writeStore(store);
     return { archived, archivedAt };
+  });
+}
+
+export function readSubagentRuns(parentPiSessionId: string): SubagentRun[] {
+  const store = readStore();
+  const runs = Object.values(store.subagentRuns).filter(
+    (run) => run.parentPiSessionId === parentPiSessionId,
+  );
+  const knownSessions = new Set(runs.map((run) => run.piSessionId));
+  for (const [id, metadata] of Object.entries(store.sessions)) {
+    if (metadata.parentSessionId !== parentPiSessionId || knownSessions.has(id)) continue;
+    runs.push({
+      id: `legacy:${id}`,
+      parentPiSessionId,
+      name: metadata.subagentName ?? "Subagent",
+      task: "Task details were not stored by this version.",
+      piSessionId: id,
+      status: "interrupted",
+      startedAt: "",
+      finishedAt: null,
+      cwd: metadata.cwd,
+      error:
+        "Prior completion status is unknown. Open the transcript to inspect its work; no automatic resume occurred.",
+    });
+  }
+  return runs;
+}
+
+export async function saveSubagentRun(run: SubagentRun): Promise<void> {
+  const decoded = Schema.decodeUnknownSync(SubagentRunSchema)(run);
+  await withStoreLock(() => {
+    const store = readStore();
+    store.subagentRuns[decoded.id] = decoded;
+    if (decoded.piSessionId) {
+      store.sessions[decoded.piSessionId] = {
+        ...(store.sessions[decoded.piSessionId] ?? {}),
+        parentSessionId: decoded.parentPiSessionId,
+        subagentName: decoded.name,
+        cwd: decoded.cwd,
+        updatedAt: new Date().toISOString(),
+      };
+    }
+    writeStore(store);
   });
 }

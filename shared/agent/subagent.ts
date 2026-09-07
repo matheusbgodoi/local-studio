@@ -11,3 +11,21 @@ export const SubagentRunInputSchema = Schema.Struct({
 });
 
 export type SubagentRunInput = typeof SubagentRunInputSchema.Type;
+
+export const SubagentRunSchema = Schema.Struct({
+  id: Schema.String,
+  parentPiSessionId: Schema.String,
+  name: Schema.String,
+  task: Schema.String,
+  piSessionId: Schema.NullOr(Schema.String),
+  status: Schema.Literals(["running", "done", "error", "interrupted"]),
+  startedAt: Schema.String,
+  finishedAt: Schema.NullOr(Schema.String),
+  error: Schema.optional(Schema.String),
+  result: Schema.optional(Schema.String),
+  cwd: Schema.optional(Schema.String),
+});
+
+export type SubagentRun = {
+  -readonly [K in keyof typeof SubagentRunSchema.Type]: (typeof SubagentRunSchema.Type)[K];
+};

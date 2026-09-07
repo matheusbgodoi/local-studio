@@ -1,10 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { Effect } from "effect";
-import { SUBAGENT_RUN_TIMEOUT_MS, type SubagentRunInput } from "../../../shared/agent/subagent";
+import {
+  SUBAGENT_RUN_TIMEOUT_MS,
+  type SubagentRunInput,
+  type SubagentRun,
+} from "../../../shared/agent/subagent";
+import { resolveDataDir } from "./data-dir";
 import { getGlobalSingleton } from "./instances";
 import { piRuntimeManager } from "./pi-runtime";
 import { lastAssistantText } from "./session-text";
-import { sessionSubagentLink, setSubagentLink } from "./session-metadata-store";
+import { sessionSubagentLink, readSubagentRuns, saveSubagentRun } from "./session-metadata-store";
 
 const NICKNAMES = [
   "Euclid",
@@ -33,17 +38,7 @@ const MAX_CONCURRENT_PER_PARENT = 4;
 const MAX_RESULT_CHARS = 8000;
 const SUBAGENT_SESSION_PREFIX = "subagent:";
 
-export type SubagentRun = {
-  id: string;
-  parentPiSessionId: string;
-  name: string;
-  task: string;
-  piSessionId: string | null;
-  status: "running" | "done" | "error";
-  startedAt: string;
-  finishedAt: string | null;
-  error?: string;
-};
+export type { SubagentRun } from "../../../shared/agent/subagent";
 
 type SubagentState = {
   byParent: Map<string, SubagentRun[]>;
@@ -51,14 +46,29 @@ type SubagentState = {
 };
 
 function state(): SubagentState {
-  return getGlobalSingleton("subagentRegistry", () => ({
+  return getGlobalSingleton(`subagentRegistry:${resolveDataDir()}`, () => ({
     byParent: new Map<string, SubagentRun[]>(),
     childPiSessionIds: new Set<string>(),
   }));
 }
 
 export function listSubagents(parentPiSessionId: string): SubagentRun[] {
-  return state().byParent.get(parentPiSessionId) ?? [];
+  const restored = readSubagentRuns(parentPiSessionId).map(
+    (run): SubagentRun =>
+      run.status === "running"
+        ? {
+            ...run,
+            status: "interrupted",
+            error:
+              "Runtime ended before this subagent settled. Inspect its transcript and partial work before starting a replacement; it was not automatically resumed.",
+          }
+        : run,
+  );
+  const byId = new Map(restored.map((run) => [run.id, run]));
+  for (const run of state().byParent.get(parentPiSessionId) ?? []) {
+    if (run.status === "running" || byId.has(run.id)) byId.set(run.id, { ...run });
+  }
+  return [...byId.values()];
 }
 
 function findParentRuntime(parentPiSessionId: string) {
@@ -85,10 +95,12 @@ export function runSubagent(
     AbortSignal.timeout(SUBAGENT_RUN_TIMEOUT_MS),
     ...(requestSignal ? [requestSignal] : []),
   ]);
-  return Effect.runPromise(Effect.tryPromise({
-    try: () => executeSubagent(input, signal),
-    catch: (error) => error,
-  }));
+  return Effect.runPromise(
+    Effect.tryPromise({
+      try: () => executeSubagent(input, signal),
+      catch: (error) => error,
+    }),
+  );
 }
 
 async function executeSubagent(
@@ -121,7 +133,7 @@ async function executeSubagent(
 
   const siblingCount = listSubagents(parentPiSessionId).length;
   const run: SubagentRun = {
-    id: randomUUID().slice(0, 8),
+    id: randomUUID(),
     parentPiSessionId,
     name: input.name.trim() || NICKNAMES[siblingCount % NICKNAMES.length],
     task: input.task,
@@ -129,6 +141,7 @@ async function executeSubagent(
     status: "running",
     startedAt: new Date().toISOString(),
     finishedAt: null,
+    cwd: parent.session.status.cwd,
   };
   const runs = registry.byParent.get(parentPiSessionId) ?? [];
   runs.push(run);
@@ -139,9 +152,13 @@ async function executeSubagent(
   const runtimeSessionId = `${SUBAGENT_SESSION_PREFIX}${parentPiSessionId}:${run.id}`;
 
   const { session } = piRuntimeManager.getSessionForLookup(runtimeSessionId, null);
-  const cancel = () => { void session.abortStrict().catch(() => undefined); };
+  const cancel = () => {
+    void session.abortStrict().catch(() => undefined);
+  };
   signal.addEventListener("abort", cancel, { once: true });
   try {
+    await saveSubagentRun(run);
+    signal.throwIfAborted();
     await session.ensureStarted(modelId, cwd || undefined, null, {
       ...parent.session.getStartOptions(),
       browserSessionId: runtimeSessionId,
@@ -150,7 +167,7 @@ async function executeSubagent(
     run.piSessionId = session.status.piSessionId;
     if (!run.piSessionId) throw new Error("Subagent session was not persisted.");
     registry.childPiSessionIds.add(run.piSessionId);
-    await setSubagentLink(run.piSessionId, parentPiSessionId, run.name);
+    await saveSubagentRun(run);
     signal.throwIfAborted();
     await session.prompt(taskPrompt(run.name, input.task), () => {}, {
       inferencePriority: "background",
@@ -164,11 +181,12 @@ async function executeSubagent(
       run.finishedAt = new Date().toISOString();
       throw new Error(`Subagent "${run.name}" failed: ${status.lastError}`);
     }
+    run.result = text.slice(0, MAX_RESULT_CHARS) || "(the subagent produced no final text)";
     run.status = "done";
     run.finishedAt = new Date().toISOString();
     return {
       piSessionId: status.piSessionId,
-      result: text.slice(0, MAX_RESULT_CHARS) || "(the subagent produced no final text)",
+      result: run.result,
     };
   } catch (error) {
     if (run.status === "running") {
@@ -180,10 +198,14 @@ async function executeSubagent(
   } finally {
     signal.removeEventListener("abort", cancel);
     try {
-      await session.abortStrict();
+      await saveSubagentRun(run);
     } finally {
-      await session.stop();
-      piRuntimeManager.releaseSession(runtimeSessionId, session);
+      try {
+        await session.abortStrict();
+      } finally {
+        await session.stop();
+        piRuntimeManager.releaseSession(runtimeSessionId, session);
+      }
     }
   }
 }
