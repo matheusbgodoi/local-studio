@@ -1,5 +1,9 @@
 # Production readiness work — 2026-09-07
 
+## Current installed outcome
+
+Final11 source `3c44bf00` is installed in both desktop channels; the stable app is running normally with Qwen Standard/XHigh as its durable native default. Complete checks and both official desktop builds passed. Actual Electron acceptance verified visible admission failures, restored drafts, safe automatic defaults, persisted preferences after restart and an externally witnessed tool write. The [final receipt](installed-candidate-2026-09-07.md#final11-stable-installation-and-native-electron-acceptance) records hashes and limits. The Golden inference backend remains selected after the bounded challenger campaign; no universal99% quality claim is made.
+
 ## Source lineage
 
 The owner's starting checkout was clean at `64a7cda3c`, on

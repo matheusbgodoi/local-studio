@@ -1,0 +1,54 @@
+{
+  "artifacts": {
+    "source": "3c44bf000759ebb04fb0f9a788d6e78ba1427d21",
+    "check_log": "/tmp/local-studio-readiness-check-final11-r4-20260907.log",
+    "artifacts": {
+      "frontend/dist-desktop-dev/CRIAs AI Dev-2.1.0-arm64-mac.zip": "5a79cc5fea45a233f038dbaa7a9a3845a998d386997ca7ffcc0b093672c9becf",
+      "frontend/dist-desktop-dev/CRIAs AI Dev-2.1.0-arm64.dmg": "13633fb411187faa8aee44157ec7a57d8a5ddf95fc1bc9f353f27c90b9238e0d",
+      "frontend/dist-desktop/CRIAs AI-2.1.0-arm64-mac.zip": "382c6c9e4e2e65f56039112ca6ac0c248d0ac04da1a0a5969e44b9277ca1e70d",
+      "frontend/dist-desktop/CRIAs AI-2.1.0-arm64.dmg": "f811ed415c5098a271140689fbe71d38fd4ba7f3f1e757b9f3a6b229fbcf2e33"
+    },
+    "original_rollback_preserved": true
+  },
+  "native_admission": {
+    "source": "3c44bf000759ebb04fb0f9a788d6e78ba1427d21",
+    "surface": "installed Dev Electron via loopback CDP",
+    "http": 400,
+    "restrictedIdentityVisible": true,
+    "actionableAlertVisible": true,
+    "draftRestored": true,
+    "uncaught": 0,
+    "restrictedChoiceDisabled": true,
+    "repairedRendererDefault": "local-studio-ai-node-3090-tail6146ef-ts-net/qwen-daily",
+    "automaticWithoutPreference": {
+      "label": "Model: Qwen3.8-27B XHigh",
+      "standardBehavior": true,
+      "restrictedWarning": false
+    },
+    "durableFileDefault": "local-studio-ai-node-3090-tail6146ef-ts-net/qwen-daily"
+  },
+  "native_stable": {
+    "source": "3c44bf000759ebb04fb0f9a788d6e78ba1427d21",
+    "surface": "actual stable Electron",
+    "startupDefault": "local-studio-ai-node-3090-tail6146ef-ts-net/qwen-daily",
+    "freshLabel": "Model: Qwen3.8-27B XHigh",
+    "durableFileDefault": "local-studio-ai-node-3090-tail6146ef-ts-net/qwen-daily",
+    "tool": {
+      "http": 200,
+      "outcome": "accepted",
+      "piSessionId": "01a07b40-6825-7320-bb07-e25aaa11ef97",
+      "runtimeSessionId": "tab-mtr1yc8v-4d698471",
+      "fileExact": true,
+      "readyVisible": true,
+      "observationAfterMs": 29219
+    },
+    "uncaught": 0,
+    "restart": {
+      "rendererDefault": "local-studio-ai-node-3090-tail6146ef-ts-net/qwen-daily",
+      "freshLabel": "Model: Qwen3.8-27B XHigh",
+      "durableFileDefault": "local-studio-ai-node-3090-tail6146ef-ts-net/qwen-daily",
+      "nativeBridge": true,
+      "settingsBusy": 0
+    }
+  }
+}

@@ -1,5 +1,7 @@
 # Installed candidate receipt — September 7, 2026
 
+This is a chronological evidence ledger. Earlier pending statements describe their named milestone. The final installed state is [final11 native acceptance](#final11-stable-installation-and-native-electron-acceptance) below.
+
 ## MEASURED / PROVEN — source and build
 
 Root worktree `/Users/matheusbgodoi/src/local-studio-readiness` was clean at `eb6f875f9c2f81080c2848ff25a8ba2a8df3e267` before and after these successful commands:
@@ -188,3 +190,22 @@ MEASURED / PROVEN — root used native Electron CDP on final10 to choose Qwen St
 DECIDED / APPLIED — explicit model-default writes now invoke the existing debounced durable preference save when, and only when, the supplied storage is the browser's actual `window.localStorage`. Existing retired-alias migration routes its write through the same helper. Ephemeral memory storage and server-side execution do not schedule a save. The existing backup mechanism remains the sole owner of controller/desktop persistence; no duplicate persistence format or preference authority was added.
 
 MEASURED / PROVEN — frontend TypeScript and scoped ESLint pass. Evidence: `/tmp/local-studio-durable-default-typecheck.log` and `/tmp/local-studio-durable-default-lint.log`. No frontend tests or live preference changes were made. Actual native Electron UI selection followed by matching durable file contents remains pending in the rebuilt installation.
+
+
+## Final11 stable installation and native Electron acceptance
+
+MEASURED / PROVEN — source `3c44bf000759ebb04fb0f9a788d6e78ba1427d21` passed the complete `npm run check`, then both official Dev and stable desktop distribution builds. Both packages were installed with `scripts/install-desktop-app.sh`; no git hook was bypassed. Logs: `/tmp/local-studio-readiness-check-final11-r4-20260907.log`, `/tmp/local-studio-readiness-build-final11-r4-20260907.log`, `/tmp/local-studio-readiness-build-stable-final11-20260907.log`, and the corresponding `install-dev-final11` / `install-stable-final11` logs. Exact four archive hashes and sanitized native acceptance are preserved in [the committed receipt](evidence/final11-native-acceptance-2026-09-07.json).
+
+MEASURED / PROVEN — manual Playwright CDP attached to the actual installed Electron renderer, including its native preload bridge, with temporary listeners verified bound only to `127.0.0.1`. This is native acceptance, unlike the earlier separate headless HTTP browser:
+
+- Isolated Dev data reproduced a stored restricted default. The picker visibly identified it as unavailable for agents. An actual rejected turn returned HTTP400, displayed its actionable explanation, and restored the exact submitted text in the composer, with zero uncaught JavaScript exceptions.
+- The restricted behavior row was disabled. The same physical model's Standard default action remained enabled and repaired the preference explicitly. No silent replacement of an existing conversation model was used.
+- With the isolated default deliberately empty, a fresh native conversation automatically selected Qwen Standard, with no restricted warning.
+- The model-default UI action updated both native renderer storage and `ui-preferences.json`. In the real stable user-data directory, a fresh process restart retained Qwen Standard and XHigh; native Settings loaded with zero busy markers. Existing conversation model choices were preserved.
+- A fresh stable scratch conversation executed a real write tool. External byte comparison verified its random nonce, the UI displayed `READY`, and no uncaught exception occurred. The accepted Pi session was `01a07b40-6825-7320-bb07-e25aaa11ef97`. The receipt's 29.219-second observation time is an upper bound after submission, not measured decode latency or TTFT. The short acceptance used Off; the original XHigh preference was restored afterwards.
+
+DECIDED / APPLIED — `/Applications/CRIAs AI.app` now contains final11 and was relaunched normally without remote-debugging flags. The Dev acceptance application and temporary debug listeners were stopped. Qwen Standard is the native default; the inference Golden was not replaced.
+
+MEASURED / PROVEN — the official stable installer used a separate `Rollbacks/final10-before-final11` directory. The original pre-promotion rollback archive remains byte-identical at SHA256 `dea7df6fdef7ea9387438d2e0d9bc67ef35e1489b3161e1a0a8a1f0da0b55de3`; its CRC and bundle identity were previously verified. This proves archive preservation/integrity, not a reinstall of that old client. Backend Golden restoration was actually executed and verified repeatedly in the paired inference campaign. The private pre-promotion user-data/session recovery snapshot remains under `Local Studio Installer/Recovery/production-readiness-20260907`.
+
+Remaining limits are deliberate: browser-profile cleanup can retain a profile when the actual browser close never settles; full Windows desktop reserve is below the campaign's512MiB floor; optional gateway capability requests still return404; physical sleep/wake and same-tab Retry were not fully accepted. Golden stable Vision took42.133seconds, and a text-only follow-up retaining the image took40.906seconds. The qualified task examples do not prove arbitrary long-running job resumability or a99% daily-task success rate. B's installed near-context compaction was not qualified and B was not promoted. No old model/recovery artifact was deleted.
