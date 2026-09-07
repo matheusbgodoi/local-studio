@@ -189,7 +189,7 @@ const clampDelta = (value: number): number => {
   return Math.max(-10_000, Math.min(10_000, Math.trunc(value)));
 };
 
-const browserHost = getGlobalSingleton("browserHost", () => new BrowserHost());
+export const browserHost = getGlobalSingleton("browserHost", () => new BrowserHost());
 
 const sessionHosts = getGlobalSingleton(
   "sessionBrowserHosts",
