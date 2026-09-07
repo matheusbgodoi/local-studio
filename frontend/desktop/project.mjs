@@ -223,7 +223,7 @@ async function pageTarget(debugPort) {
 }
 async function waitForComplete(page, expectedUrl) {
   for (let attempt = 0;attempt < 100; attempt += 1) {
-    if ((await page.send("Runtime.evaluate", { returnByValue: !0, expression: `location.href === ${JSON.stringify(expectedUrl)} && document.readyState` })).result.value === "complete")
+    if ((await page.send("Runtime.evaluate", { returnByValue: !0, expression: `location.origin === ${JSON.stringify(new URL(expectedUrl).origin)} && document.readyState` })).result.value === "complete")
       return;
     await sleep(50);
   }
@@ -240,6 +240,8 @@ async function pageMetrics(page) {
         nav: nav ? nav.toJSON() : null,
         paints,
         appDocument: Boolean(document.querySelector('script[src*="/_next/static/"]')),
+        busyIndicators: document.querySelectorAll('[aria-busy="true"], [role="progressbar"]').length,
+        stateLabels: ["Offline", "Unavailable", "Connecting", "Loading", "No models available", "No models", "Disconnected", "Retry", "Try again", "Indisponível", "Carregando"].filter((label) => (document.body?.innerText ?? "").toLowerCase().includes(label.toLowerCase())),
         resources: resources.length,
         scripts: resources.filter((entry) => entry.initiatorType === "script").length,
         css: resources.filter((entry) => entry.initiatorType === "link" || entry.name.endsWith(".css")).length,
@@ -250,6 +252,8 @@ async function pageMetrics(page) {
   }), performanceMetrics = await page.send("Performance.getMetrics"), metric = Object.fromEntries(performanceMetrics.metrics.map((entry) => [entry.name, entry.value])), value = evaluated.result.value;
   return {
     appDocument: value.appDocument,
+    busyIndicators: value.busyIndicators,
+    stateLabels: value.stateLabels,
     dclMs: value.nav.domContentLoadedEventEnd,
     loadMs: value.nav.loadEventEnd,
     fcpMs: value.paints["first-contentful-paint"] || 0,
@@ -277,7 +281,15 @@ async function routeResult(route) {
   try {
     let status = null, frameId = null, exceptions = 0, consoleErrors = 0;
     const exceptionSites = [], consoleCategories = new Set(), httpErrors = new Map();
+    let page, blockedNavigation = false;
     const onEvent = (event) => {
+      if (event.method === "Fetch.requestPaused") {
+        const allowed = new URL(event.params.request.url).origin === new URL(baseUrl).origin;
+        if (!allowed) blockedNavigation = true;
+        void page.send(allowed ? "Fetch.continueRequest" : "Fetch.failRequest", {
+          requestId: event.params.requestId, ...(allowed ? {} : { errorReason: "BlockedByClient" })
+        }).catch(() => undefined);
+      }
       if (event.method === "Network.responseReceived" && event.params.response.status >= 400) {
         const failedUrl = new URL(event.params.response.url);
         if (failedUrl.origin === new URL(baseUrl).origin) {
@@ -301,10 +313,12 @@ async function routeResult(route) {
       }
       if (event.method === "Network.responseReceived" && event.params.type === "Document" && event.params.frameId === frameId) status = event.params.response.status;
     };
-    let debugPort = await debugPortFor(userDataDir), target = await pageTarget(debugPort), page = await connectToTarget(target.webSocketDebuggerUrl, onEvent);
+    let debugPort = await debugPortFor(userDataDir), target = await pageTarget(debugPort);
+    page = await connectToTarget(target.webSocketDebuggerUrl, onEvent);
     try {
       await page.send("Page.enable");
       await page.send("Network.enable");
+      await page.send("Fetch.enable", { patterns: [{ resourceType: "Document", requestStage: "Request" }] });
       await page.send("Runtime.enable");
       await page.send("Performance.enable");
       frameId = (await page.send("Page.getFrameTree")).frameTree.frame.id;
@@ -317,14 +331,21 @@ async function routeResult(route) {
       }
       const url = `${baseUrl}${route.path}`;
       await page.send("Page.navigate", { url });
-      await waitForComplete(page, url);
-      await sleep(1500);
+      await waitForComplete(page, url).catch((error) => {
+        if (blockedNavigation) throw Error("Cross-origin document navigation blocked");
+        throw error;
+      });
+      await sleep(Math.min(10000, Math.max(0, Number(process.env.LOCAL_STUDIO_PERF_OBSERVE_MS) || 1500)));
       return { path: route.path, status, exceptions, consoleErrors, exceptionSites, consoleCategories: [...consoleCategories], httpErrors: [...httpErrors.entries()], ...await pageMetrics(page), budget: route };
     } finally {
       page.close();
     }
   } finally {
-    child.kill("SIGTERM"), await sleep(100), rmSync(userDataDir, { recursive: !0, force: !0, maxRetries: 5, retryDelay: 50 });
+    child.kill("SIGTERM");
+    for (let attempt = 0; attempt < 40 && child.exitCode === null && child.signalCode === null; attempt += 1) await sleep(50);
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    for (let attempt = 0; attempt < 20 && child.exitCode === null && child.signalCode === null; attempt += 1) await sleep(50);
+    rmSync(userDataDir, { recursive: !0, force: !0, maxRetries: 10, retryDelay: 100 });
   }
 }
 function diagnosticErrorCategory(message) {
@@ -381,20 +402,29 @@ var init_browser_perf_audit = __esm(async () => {
   if (tokenFile && !browserToken) throw Error("Profiler token file is empty");
   const requestedRoutes = process.env.LOCAL_STUDIO_PERF_ROUTES?.split(",").map((value) => value.trim());
   if (requestedRoutes) {
-    if (requestedRoutes.some((value) => !routes.some((route) => route.path === value))) throw Error("Profiler route selection contains an unknown route");
-    routes = routes.filter((route) => requestedRoutes.includes(route.path));
+    routes = requestedRoutes.map((value) => {
+      const requested = new URL(value, baseUrl);
+      const known = routes.find((route) => route.path === requested.pathname);
+      if (!known || requested.origin !== targetUrl.origin || requested.username || requested.password) throw Error("Profiler route selection contains an unknown or external route");
+      return { ...known, path: `${requested.pathname}${requested.search}${requested.hash}` };
+    });
   }
   console.log(`Local Studio browser perf audit: ${baseUrl}`);
-  console.log("route              dcl    load     fcp    task    heap nodes  text res scripts css HTTP exceptions consoleErrors");
+  console.log("route              dcl    load     fcp    task    heap nodes  text res scripts css HTTP exceptions consoleErrors busy states");
   failures = [];
   for (let route of routes) {
-    let result = await Promise.race([
-      routeResult(route).catch((error) => {
-        throw Error(`${route.path}: ${error instanceof Error ? error.message : String(error)}`);
-      }),
-      timeoutAfter(routeTimeoutMs, `${route.path} timed out after ${routeTimeoutMs}ms`)
-    ]), bad = violations(result);
-    if (console.log(`${result.path.padEnd(16)} ${formatNumber(result.dclMs)}ms ${formatNumber(result.loadMs)}ms ${formatNumber(result.fcpMs)}ms ${formatNumber(result.taskMs)}ms ${formatNumber(result.heapMiB)}MiB ${String(result.nodes).padStart(5, " ")} ${String(result.textChars).padStart(5, " ")} ${String(result.resources).padStart(3, " ")} ${String(result.scripts).padStart(7, " ")} ${String(result.css).padStart(3, " ")} ${result.status} ${result.exceptions} ${result.consoleErrors}`), bad.length > 0)
+    let result;
+    try {
+      result = await Promise.race([
+        routeResult(route),
+        timeoutAfter(routeTimeoutMs, `route timed out after ${routeTimeoutMs}ms`)
+      ]);
+    } catch (error) {
+      failures.push(`${route.path}: ${error instanceof Error ? error.message : "profiling failed"}`);
+      continue;
+    }
+    const bad = violations(result);
+    if (console.log(`${result.path.padEnd(16)} ${formatNumber(result.dclMs)}ms ${formatNumber(result.loadMs)}ms ${formatNumber(result.fcpMs)}ms ${formatNumber(result.taskMs)}ms ${formatNumber(result.heapMiB)}MiB ${String(result.nodes).padStart(5, " ")} ${String(result.textChars).padStart(5, " ")} ${String(result.resources).padStart(3, " ")} ${String(result.scripts).padStart(7, " ")} ${String(result.css).padStart(3, " ")} ${result.status} ${result.exceptions} ${result.consoleErrors} ${result.busyIndicators} ${result.stateLabels.join("|") || "none"}`), bad.length > 0)
       failures.push(`${result.path}: ${bad.join(", ")}`);
   }
   if (failures.length > 0) {
