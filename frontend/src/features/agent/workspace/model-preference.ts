@@ -2,12 +2,13 @@ import { scheduleDurableUiPreferencesSave } from "@/lib/desktop-ui-preferences";
 
 export const DEFAULT_AGENT_MODEL_KEY = "local-studio.agent.defaultModel";
 
-const RETIRED_MODEL_IDS: Readonly<Record<string, string>> = {
+const DEFAULT_MODEL_MIGRATIONS: Readonly<Record<string, string>> = {
   "qwen-turbo": "ornith-turbo",
+  "qwen-uncensored": "qwen-daily",
 };
 
 function migrate(modelId: string): string {
-  return RETIRED_MODEL_IDS[modelId] ?? modelId;
+  return DEFAULT_MODEL_MIGRATIONS[modelId] ?? modelId;
 }
 
 export function readDefaultAgentModel(storage: Pick<Storage, "getItem">): string {

@@ -1,4 +1,3 @@
-import { assertAgentBehaviorProfileAllowed } from "../../../../shared/agent/behavior-profile";
 import type { AgentModel } from "../../../../shared/agent/models";
 
 export type AgenticCapability = {
@@ -31,7 +30,6 @@ const trimmedOrNull = (value: unknown): string | null => {
 };
 
 export function resolveAgenticCapability(model: AgentModel): AgenticCapability {
-  assertAgentBehaviorProfileAllowed(model);
   const contextWindow = Math.max(
     MIN_CONTEXT_WINDOW,
     positiveInt(model.contextWindow, MIN_CONTEXT_WINDOW),

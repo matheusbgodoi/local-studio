@@ -9,7 +9,7 @@ import {
   type PointerEvent,
 } from "react";
 import Link from "next/link";
-import { requiresTrustedConversation } from "@shared/agent/behavior-profile";
+import { isUncensoredBehaviorProfile } from "@shared/agent/behavior-profile";
 import { Check, ChevronDown, ChevronLeft, ChevronRight, Pin } from "@/ui/icon-registry";
 import { AGENT_THINKING_LEVELS, type AgentThinkingLevel } from "@/features/agent/contracts";
 import type { AgentModel } from "@/features/agent/workspace/types";
@@ -102,13 +102,8 @@ export function AgentModelPicker({
     [visible.visibleModels],
   );
   const disabled = loading;
-  const restricted = active
-    ? requiresTrustedConversation(active)
-    : requiresTrustedConversation({ id: selectedModel });
   const baseModelLabel = modelTriggerLabel(selection, visible.controllerModels.length);
-  const modelLabel = restricted
-    ? `${baseModelLabel} · Uncensored (unavailable for agents)`
-    : baseModelLabel;
+  const modelLabel = baseModelLabel;
   const turnRunning = reasoningDisabled;
   const supportsReasoning = Boolean(reasoningLevel && onSelectReasoning);
   const requestedReasoning = reasoningLevel ?? "off";
@@ -125,12 +120,10 @@ export function AgentModelPicker({
   }, []);
   const select = useCallback(
     (modelId: string, physicalModel: AgentModelSelection["physicalModel"]) => {
-      const model = models.find((candidate) => candidate.id === modelId);
-      if (requiresTrustedConversation(model ?? { id: modelId })) return;
       onSelect({ modelId, physicalModel, thinkingLevel: effectiveReasoning });
       close();
     },
-    [close, models, onSelect, effectiveReasoning],
+    [close, onSelect, effectiveReasoning],
   );
 
   return (
@@ -166,12 +159,6 @@ export function AgentModelPicker({
           aria-label="Model and reasoning"
           onKeyDown={(event) => handleMenuKeyDown(event, view, setView, close)}
         >
-          {restricted ? (
-            <p className="px-2.5 py-2 text-[length:var(--fs-sm)] text-(--warn)">
-              Uncensored is unavailable for agent chats. Select Standard under Behavior or choose
-              another model. Your selection has not been changed.
-            </p>
-          ) : null}
           {view === "root" ? (
             <PickerRoot
               modelLabel={modelLabel}
@@ -426,7 +413,7 @@ function BehaviorList({
             key={profile.id}
             label={behaviorProfileLabel(profile)}
             selected={profile.id === selectedModel}
-            disabled={disabled || requiresTrustedConversation(profile)}
+            disabled={disabled}
             onSelect={() => onSelect(profile.id, "unchanged")}
           />
         ))}
@@ -580,7 +567,6 @@ function ModelOption({
   const selected = ownsProfile(physical, selectedModel);
   const targetId = resolveProfileId(physical, selectedModel, defaultModel);
   const target = physical.profiles.find((profile) => profile.id === targetId) ?? physical.primary;
-  const restricted = requiresTrustedConversation(target);
   return (
     <div
       className={cx(
@@ -592,18 +578,11 @@ function ModelOption({
         type="button"
         role="menuitemradio"
         aria-checked={selected}
-        disabled={restricted}
-        title={
-          restricted
-            ? "Uncensored is unavailable for agent chats; select Standard under Behavior"
-            : undefined
-        }
         onClick={() => onSelect(targetId, selected ? "unchanged" : "changed")}
         className="flex min-h-8 min-w-0 flex-1 items-center gap-2 rounded-lg pl-2.5 text-left focus-visible:outline-none active:translate-y-px"
       >
         <span className="min-w-0 flex-1 truncate" title={label}>
           {label}
-          {restricted ? " · Uncensored (unavailable for agents)" : ""}
         </span>
         {selected ? <Check className="h-3.5 w-3.5 shrink-0 text-(--fg)" /> : null}
       </button>
@@ -633,12 +612,12 @@ function DefaultModelPin({
       ? `${officialPhysicalLabel(physical) ?? "Model"} · ${behaviorProfileLabel(profile)}`
       : (officialPhysicalLabel(physical) ?? "Model");
   const current = physical.profiles.find((profile) => profile.id === defaultModel);
-  const validCurrent = current && !requiresTrustedConversation(current);
+  const validCurrent = current && !isUncensoredBehaviorProfile(current);
   const repairingRestrictedDefault = Boolean(current && !validCurrent);
   return (
     <button
       type="button"
-      disabled={Boolean(validCurrent) || requiresTrustedConversation(physical.primary)}
+      disabled={Boolean(validCurrent) || isUncensoredBehaviorProfile(physical.primary)}
       onClick={() => onSetDefault(physical.primary.id)}
       aria-label={
         validCurrent
@@ -679,7 +658,6 @@ function modelTriggerLabel(selection: ModelSelection, modelCount: number): strin
 }
 
 function behaviorProfileLabel(model: AgentModel): string {
-  if (requiresTrustedConversation(model)) return "Uncensored · unavailable for agents";
   return (
     model.behaviorProfileLabel?.trim() ||
     (model.behaviorProfileDefault ? "Standard" : "Alternate behavior")

@@ -1,4 +1,4 @@
-import { requiresTrustedConversation } from "@shared/agent/behavior-profile";
+import { isUncensoredBehaviorProfile } from "@shared/agent/behavior-profile";
 import {
   patchSession as patchSessionInMap,
   removeSession,
@@ -36,7 +36,7 @@ function chooseModelId(
   if (remembered) {
     return remembered;
   }
-  const allowed = models.filter((model) => !requiresTrustedConversation(model));
+  const allowed = models.filter((model) => !isUncensoredBehaviorProfile(model));
   return (
     allowed.find((model) => model.active && model.behaviorProfileDefault)?.id ||
     allowed.find((model) => model.active)?.id ||
