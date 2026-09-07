@@ -1,3 +1,4 @@
+import { criterionIsSatisfied } from "../../../../shared/agent/acceptance";
 import type {
   AgenticArtifact,
   AgenticEvent,
@@ -79,7 +80,7 @@ export function buildWorkingSet(input: WorkingSetInput): AgenticWorkingSet {
 
 function nextActionFor(task: AgenticTask | null): string {
   if (!task) return "Select the next ready task from the plan.";
-  const outstanding = task.acceptance.filter((criterion) => !criterion.satisfied);
+  const outstanding = task.acceptance.filter((criterion) => !criterionIsSatisfied(criterion));
   if (outstanding.length === 0) {
     return `Confirm the acceptance evidence for "${task.title}" and report TASK_COMPLETE.`;
   }
@@ -99,7 +100,11 @@ export function renderWorkingSet(workingSet: AgenticWorkingSet): string {
   if (workingSet.acceptance.length > 0) {
     lines.push("ACCEPTANCE CRITERIA:");
     for (const criterion of workingSet.acceptance) {
-      const mark = criterion.satisfied ? "satisfied" : "outstanding";
+      const mark = criterionIsSatisfied(criterion)
+        ? criterion.evidenceSource === "runtime_observation"
+          ? "runtime-observed"
+          : "model-reported, not independently verified"
+        : "outstanding";
       const evidence = criterion.evidence ? ` — evidence: ${criterion.evidence}` : "";
       lines.push(`  - [${criterion.id}] ${criterion.description} (${mark})${evidence}`);
     }

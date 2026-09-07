@@ -66,6 +66,7 @@ export const AcceptanceCriterionSchema = Schema.Struct({
   kind: Schema.Literals(["command", "file", "artifact", "review", "assertion"]),
   satisfied: Schema.Boolean,
   evidence: nullableString,
+  evidenceSource: Schema.optional(Schema.Literals(["model_report", "runtime_observation"])),
 });
 
 export const AgenticRunSchema = Schema.Struct({

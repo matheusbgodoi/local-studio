@@ -1,3 +1,4 @@
+import { criterionIsSatisfied, acceptanceReviewReason } from "../../../../shared/agent/acceptance";
 import {
   computeContextBudget,
   preflightContext,
@@ -466,13 +467,16 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
             status,
             outcome: status,
             evidence: outcome.acceptance
-              .filter((c) => c.satisfied)
+              .filter(criterionIsSatisfied)
               .map((c) => `${c.id}: ${c.evidence ?? ""}`),
             error,
           });
         }
       };
 
+      const review = acceptanceReviewReason(outcome.acceptance);
+      if (review && (report.claimedComplete || report.evidence.length > 0))
+        report.userQuestion = review;
       if (report.userQuestion) {
         settle("ABANDONED", null);
         store.updateTask(activeTask.id, { status: "WAITING_USER", blocker: report.userQuestion });

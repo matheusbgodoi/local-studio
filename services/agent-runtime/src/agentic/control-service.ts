@@ -1,11 +1,4 @@
-//
-// Committing a validated proposal.
-//
-// Everything here runs after `control-plane` has said the proposal is
-// well-formed. Ids, statuses, agent identity and the acceptance gate are the
-// runtime's; the proposal only supplied intent.
-//
-
+import { acceptanceReviewReason } from "../../../../shared/agent/acceptance";
 import type { AgenticCapability } from "./capability";
 import { computeContextBudget, type ContextBudgetPolicy } from "./context-budget";
 import type { AgenticAgent, AgenticRun, AgenticTask } from "./contract";
@@ -21,11 +14,6 @@ export type CommittedPlan = {
   agents: AgenticAgent[];
 };
 
-//
-// A plan that names no agents gets one. Naming several is how the model says
-// the work has independent strands; each becomes a durable agent with its own
-// working context, and the tasks it was given carry its id from the start.
-//
 function assignAgents(
   store: AgenticStore,
   run: AgenticRun,
@@ -35,7 +23,10 @@ function assignAgents(
 ): AgenticAgent[] {
   const existing = store.listAgents(run.id);
   const byName = new Map(existing.map((agent) => [agent.name, agent] as const));
-  const wanted = plan.agents.length > 0 ? plan.agents : [{ name: "Primary", role: "generalist", taskTitles: [] }];
+  const wanted =
+    plan.agents.length > 0
+      ? plan.agents
+      : [{ name: "Primary", role: "generalist", taskTitles: [] }];
 
   const agents: AgenticAgent[] = [];
   for (const proposed of wanted) {
@@ -106,7 +97,11 @@ export function createRunFromPlan(
     networkPolicy: input.networkPolicy ?? networkService().sessionPolicy(input.sessionId),
     cwd: input.cwd,
   });
-  store.recordPlanRevision({ runId: run.id, reason: "plan proposed by the model", tasks: input.plan.seeds });
+  store.recordPlanRevision({
+    runId: run.id,
+    reason: "plan proposed by the model",
+    tasks: input.plan.seeds,
+  });
   const agents = assignAgents(store, run, input.capability, input.plan, budget.usableLimit);
   store.updateRun(run.id, { status: "PLANNING" });
   applyReadiness(store, run.id);
@@ -121,11 +116,6 @@ export function revisePlanForRun(
   store.recordPlanRevision({ runId: run.id, reason: input.reason, tasks: input.plan.seeds });
   const agents = assignAgents(store, run, input.capability, input.plan, run.usableLimit);
   store.appendEvent({ runId: run.id, type: "REPLAN", summary: input.reason });
-  //
-  // A revision changes which tasks are blocked. Leaving that to the next
-  // inference showed the model a plan where nothing depended on anything and
-  // everything was still BLOCKED.
-  //
   applyReadiness(store, run.id);
   return { run: store.requireRun(run.id), tasks: store.listTasks(run.id), agents };
 }
@@ -140,6 +130,7 @@ export type ProgressOutcome =
       settled?: boolean;
       unblocked?: string[];
       validCriteria?: string[];
+      reviewReason?: string;
     };
 
 export function reportProgressForTask(
@@ -153,17 +144,12 @@ export function reportProgressForTask(
   if (task.status === "SUCCEEDED" || task.status === "CANCELLED") {
     return { ok: false, reason: `task ${input.taskId} is already ${task.status.toLowerCase()}` };
   }
-  //
-  // A task still waiting on its dependencies has not been worked on, so
-  // evidence for it would be a claim about work that has not happened, and
-  // satisfying its gate early would let the plan be skipped.
-  //
-  // Asked of the dependencies themselves rather than of the task's stored
-  // label: the label is derived, and a derived value read before its inputs
-  // settled is exactly how a task that was ready looked blocked.
-  //
   const byId = new Map(store.listTasks(task.runId).map((entry) => [entry.id, entry] as const));
-  const unmet = task.dependencies.filter((id) => byId.get(id)?.status !== "SUCCEEDED");
+  const unmet = task.dependencies.filter(
+    (id) =>
+      byId.get(id)?.status !== "SUCCEEDED" ||
+      acceptanceReviewReason(byId.get(id)?.acceptance ?? []) !== null,
+  );
   if (unmet.length > 0) {
     const names = unmet.map((id) => byId.get(id)?.title ?? id);
     return {
@@ -172,11 +158,19 @@ export function reportProgressForTask(
     };
   }
   const applied = applyProgressReport(store, task, input.report, input.turnId);
-  //
-  // Settle now, while the model is still working. Waiting for the next
-  // inference left a proved task RUNNING and its dependents BLOCKED, and the
-  // model replanned around a gate that had in fact already been met.
-  //
+  const review = acceptanceReviewReason(store.requireTask(task.id).acceptance);
+  if (review && (input.report.complete || input.report.evidence.length > 0)) {
+    store.updateTask(task.id, { status: "WAITING_USER", blocker: review });
+    store.updateRun(task.runId, { status: "WAITING_USER" });
+    store.recordSignal({
+      runId: task.runId,
+      taskId: task.id,
+      agentId: task.agentId,
+      turnId: input.turnId,
+      kind: "needs_user",
+      detail: { question: review },
+    });
+  }
   const settled = settleTaskIfSatisfied(
     store,
     task.id,
@@ -191,5 +185,5 @@ export function reportProgressForTask(
       validCriteria: task.acceptance.map((criterion) => criterion.id),
     } as ProgressOutcome;
   }
-  return { ok: true, ...applied, ...settled };
+  return { ok: true, ...applied, ...settled, ...(review ? { reviewReason: review } : {}) };
 }

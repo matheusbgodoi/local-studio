@@ -298,7 +298,7 @@ one resident checkpoint through five sessions, which is why every agent row
 carries its physical model id and behaviour profile.
 
 **POLICY — acceptance.** An agent saying "done" is a candidate for validation.
-A task succeeds when every acceptance criterion carries evidence, reported as
+Assertion/review tasks can complete from model-reported evidence, explicitly not independently verified. Executable command/file/artifact criteria require runtime-observed evidence; model text cannot satisfy them. Reports use
 `TASK_EVIDENCE <criterion-id>: <evidence>`. A claim of `TASK_COMPLETE` with
 criteria still owed is recorded as `ACCEPTANCE_REJECTED` and the task stays
 open with the missing evidence named.
@@ -437,7 +437,7 @@ turn which calls no tool leaves the store empty.
 ### Structured reporting
 
 **IMPLEMENTED.** `agentic_turn_signals`. A turn that called the reporting tool
-has already had its evidence validated and committed; the scheduler adjudicates
+has had its criterion IDs and report shape validated, not its claims independently verified; the scheduler adjudicates
 from those signals. Prose markers still parse as a fallback for a turn that
 reported in words, but no state transition depends on the model spelling a
 magic string correctly any more.
@@ -640,3 +640,13 @@ DECIDED / APPLIED in source: current agent sessions reject the `uncensored` beha
 The shared guard uses catalog behavior metadata, including renamed aliases. Only when metadata is absent does the exact known `qwen-uncensored` raw alias provide a compatibility fallback; other profile names are not guessed. Daily remains unchanged. Offline deterministic checks cover renamed profiles, durable admission, metadata precedence and fallback. Installed acceptance remains separate.
 
 TARGET / NOT APPLIED: a dedicated trusted conversation mode without tools or imported untrusted context. Direct gateway requests are outside this client admission guard; the stack ADR-008 operational restrictions still apply there. This change does not claim a gateway-wide policy boundary.
+
+## 21. Acceptance provenance and review
+
+MEASURED / PROVEN offline: before this fix a fabricated command-success report settled a real temporary SQLite task with zero tool operations, even with `complete:false`. A prose marker also satisfied a file criterion. Plan strings such as “npm run check exits zero” are assertions, not executable specifications.
+
+DECIDED / APPLIED in source: optional `evidenceSource` survives JSON persistence and checkpoints; missing legacy provenance remains unverified. Both model report paths write `model_report` regardless of extra input fields. A shared predicate requires `runtime_observation` for command/file/artifact criteria in settlement, readiness, scheduling, working context, progress fingerprints and plan evidence carryover. Revisions retain evidence only for the same kind and description, with provenance. Historical executable claims cannot unlock dependencies when an active run is reconciled.
+
+Unverifiable executable reports enter `WAITING_USER` with an explicit review/replan instruction; repeating a model claim cannot satisfy them. Assertion/review tasks retain autonomous completion and are labeled model-reported, not independently verified. Legacy acceptance is labeled unverified. Completed historical runs are not silently reopened.
+
+TARGET / NOT APPLIED: a runtime-owned verifier binding exact command/path expectations to observed results. No writer of `runtime_observation` is introduced, no arbitrary successful shell call counts as proof, and no executable criterion is inferred from English. Current planner strings remain model assertions, so task completion does not prove builds, files or tests actually succeeded. Product acceptance must still verify those externally.

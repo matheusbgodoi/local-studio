@@ -1,14 +1,4 @@
-//
-// Deriving readiness, callable from anywhere that changes the shape of a plan.
-//
-// This used to live inside the scheduler, which meant a plan only became
-// coherent between turns. A capable model does thirty tool calls in one turn:
-// it reported a task done and watched it stay RUNNING, saw its dependents stay
-// BLOCKED with no dependencies left, and replanned twice against a problem that
-// did not exist. Readiness has to follow the facts as they change, not wait for
-// the next inference.
-//
-
+import { criterionIsSatisfied, acceptanceReviewReason } from "../../../../shared/agent/acceptance";
 import type { AgenticTask } from "./contract";
 import { resolveReadiness, type TaskNode } from "./dag";
 import type { AgenticStore } from "./store";
@@ -17,6 +7,14 @@ const nodesOf = (tasks: readonly AgenticTask[]): TaskNode[] =>
   tasks.map((task) => ({ id: task.id, status: task.status, dependencies: task.dependencies }));
 
 export function applyReadiness(store: AgenticStore, runId: string): AgenticTask[] {
+  for (const task of store.listTasks(runId)) {
+    if (task.status === "SUCCEEDED" && acceptanceReviewReason(task.acceptance)) {
+      store.updateTask(task.id, {
+        status: "WAITING_USER",
+        blocker: acceptanceReviewReason(task.acceptance),
+      });
+    }
+  }
   const tasks = store.listTasks(runId);
   const { ready, blocked } = resolveReadiness(nodesOf(tasks));
   const readySet = new Set(ready);
@@ -31,12 +29,6 @@ export function applyReadiness(store: AgenticStore, runId: string): AgenticTask[
   return store.listTasks(runId);
 }
 
-//
-// A task is finished the moment its acceptance criteria are all met and the
-// model says so — not one inference later. Settling here is what lets the plan
-// move while the model is still working, and what stops it from replanning
-// around a task it has already proved.
-//
 export function settleTaskIfSatisfied(
   store: AgenticStore,
   taskId: string,
@@ -47,7 +39,11 @@ export function settleTaskIfSatisfied(
   if (!task || task.status === "SUCCEEDED" || task.status === "CANCELLED") {
     return { settled: false, unblocked: [] };
   }
-  if (task.acceptance.length === 0 ? !claimedComplete : task.acceptance.some((c) => !c.satisfied)) {
+  if (
+    task.acceptance.length === 0
+      ? !claimedComplete
+      : task.acceptance.some((c) => !criterionIsSatisfied(c))
+  ) {
     return { settled: false, unblocked: [] };
   }
 

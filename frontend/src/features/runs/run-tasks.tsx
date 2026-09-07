@@ -1,14 +1,10 @@
 "use client";
 
+import { criterionIsSatisfied } from "@shared/agent/acceptance";
 import { Card, ListRow, RowDetailLine, StatusPill } from "@/ui";
 import type { AgenticRunSnapshot, AgenticTask } from "@shared/agent/agentic-run";
 import { humanStatus, taskTone } from "./run-formatters";
 
-//
-// The DAG rendered as a dependency-ordered hierarchy: each task states what it
-// is blocked by, what evidence it still owes, and how many attempts it has
-// taken. Acceptance is the gate, so it is what the row is about.
-//
 export function RunTasks({ snapshot }: { snapshot: AgenticRunSnapshot }) {
   const titleById = new Map(snapshot.tasks.map((task) => [task.id, task.title] as const));
 
@@ -39,13 +35,8 @@ function TaskRow({
   titleById: ReadonlyMap<string, string>;
   activeTaskId: string | null;
 }) {
-  const outstanding = task.acceptance.filter((criterion) => !criterion.satisfied);
+  const outstanding = task.acceptance.filter((criterion) => !criterionIsSatisfied(criterion));
   const dependencies = task.dependencies.map((id) => titleById.get(id) ?? id).filter(Boolean);
-  //
-  // Which task the Run is actually on is the first thing anyone looks for, and
-  // in a narrow column a word at the end of the row is easy to miss — so the
-  // row itself carries the mark, not only its value slot.
-  //
   const active = task.id === activeTaskId;
 
   return (
@@ -73,8 +64,15 @@ function TaskRow({
       </RowDetailLine>
       {task.acceptance.map((criterion) => (
         <RowDetailLine key={criterion.id}>
-          {criterion.satisfied ? "✓" : "○"} {criterion.description}
+          {criterionIsSatisfied(criterion) ? "✓" : "○"} {criterion.description}
           {criterion.evidence ? ` — ${criterion.evidence}` : ""}
+          {criterion.evidence || criterion.satisfied
+            ? criterion.evidenceSource === "runtime_observation"
+              ? " · Runtime observed"
+              : criterion.evidenceSource === "model_report"
+                ? " · Model reported · Not independently verified"
+                : " · Legacy evidence · Not independently verified"
+            : ""}
         </RowDetailLine>
       ))}
       {task.blocker ? <RowDetailLine tone="danger">{task.blocker}</RowDetailLine> : null}

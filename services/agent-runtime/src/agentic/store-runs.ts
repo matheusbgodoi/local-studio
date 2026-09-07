@@ -1,12 +1,4 @@
-//
-// Runs, plan revisions and tasks.
-//
-// A Run is the durable copy of what the agent is doing. Cumulative token
-// counters are additive and never reset: a compaction lowers the ACTIVE
-// context and leaves lifetime spend alone, and conflating the two is what made
-// a healthy compaction read as lost work.
-//
-
+import { criterionIsSatisfied } from "../../../../shared/agent/acceptance";
 import { randomUUID } from "node:crypto";
 
 import type { AcceptanceCriterion, AgenticEvent, AgenticRun, AgenticTask } from "./contract";
@@ -191,11 +183,6 @@ export function createRunStore(context: AgenticStoreContext) {
     return requireRun(id);
   };
 
-  //
-  // A revision rewrites the shape of the plan without forgetting the work
-  // already accepted: a task carried across by id or title keeps its status,
-  // attempts and evidence.
-  //
   const recordPlanRevision = (input: {
     runId: string;
     reason: string;
@@ -221,25 +208,23 @@ export function createRunStore(context: AgenticStoreContext) {
         const dependencies = JSON.stringify(
           seed.dependencies.map((dependency) => idByTitle.get(dependency) ?? dependency),
         );
-        //
-        // Evidence belongs to the claim it proved, not to a position in a list.
-        // A criterion the revision restated is a different claim and starts
-        // unproven; one it kept keeps what was already shown, or the model
-        // would be made to prove the same thing twice and the stall detector
-        // would read that as no progress.
-        //
         const provenByDescription = new Map(
           (carried?.acceptance ?? [])
-            .filter((criterion) => criterion.satisfied)
-            .map((criterion) => [criterion.description, criterion.evidence] as const),
+            .filter(criterionIsSatisfied)
+            .map((criterion) => [`${criterion.kind}:${criterion.description}`, criterion] as const),
         );
         const acceptance = JSON.stringify(
           seed.acceptance.map((criterion) =>
-            provenByDescription.has(criterion.description)
+            provenByDescription.has(`${criterion.kind}:${criterion.description}`)
               ? {
                   ...criterion,
                   satisfied: true,
-                  evidence: provenByDescription.get(criterion.description) ?? null,
+                  evidence:
+                    provenByDescription.get(`${criterion.kind}:${criterion.description}`)
+                      ?.evidence ?? null,
+                  evidenceSource: provenByDescription.get(
+                    `${criterion.kind}:${criterion.description}`,
+                  )?.evidenceSource,
                 }
               : criterion,
           ),
@@ -276,11 +261,6 @@ export function createRunStore(context: AgenticStoreContext) {
         );
       });
 
-      //
-      // A task the revision left out is no longer work. Finished work stays
-      // finished — it happened — but anything unfinished is cancelled with the
-      // reason, so the scheduler cannot pick up a task the plan has dropped.
-      //
       const kept = new Set(ids);
       for (const existing of listTasks(input.runId)) {
         if (kept.has(existing.id)) continue;

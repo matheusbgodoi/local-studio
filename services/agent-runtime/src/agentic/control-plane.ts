@@ -1,23 +1,8 @@
-//
-// The control plane the served model proposes against.
-//
-// The model never touches the store. It proposes a plan, a revision or a
-// progress report; this module validates the proposal, generates every id,
-// enforces the DAG and the acceptance gate, and only then commits. A malformed
-// or dishonest proposal is rejected with a reason the model can act on, which
-// is the whole difference between "the LLM drives" and "the LLM has a database
-// handle".
-//
-
+import { criterionIsSatisfied } from "../../../../shared/agent/acceptance";
 import type { AcceptanceCriterion, AgenticTask } from "./contract";
 import { validatePlan } from "./dag";
 import type { AgenticStore, TaskSeed } from "./store";
 
-//
-// Bounds exist so a trivial request cannot become a twelve-task DAG, and so a
-// confused model cannot fill the store. They are deliberately generous enough
-// that real work fits.
-//
 export const MAX_TASKS_PER_PLAN = 12;
 export const MAX_CRITERIA_PER_TASK = 6;
 export const MAX_AGENTS_PER_RUN = 4;
@@ -57,12 +42,15 @@ const trimmed = (value: unknown, limit: number): string =>
   typeof value === "string" ? value.trim().slice(0, limit) : "";
 
 const asStringArray = (value: unknown): string[] =>
-  Array.isArray(value) ? value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean) : [];
+  Array.isArray(value)
+    ? value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean)
+    : [];
 
 const criterionId = (taskIndex: number, index: number): string => `t${taskIndex + 1}c${index + 1}`;
 
 export function validateProposal(input: unknown): ValidatedPlan | ValidationFailure {
-  if (!input || typeof input !== "object") return { ok: false, reason: "the proposal must be an object" };
+  if (!input || typeof input !== "object")
+    return { ok: false, reason: "the proposal must be an object" };
   const proposal = input as Record<string, unknown>;
 
   const goal = trimmed(proposal.goal, MAX_GOAL_LENGTH);
@@ -81,7 +69,8 @@ export function validateProposal(input: unknown): ValidatedPlan | ValidationFail
   const seeds: TaskSeed[] = [];
 
   for (const [index, raw] of rawTasks.entries()) {
-    if (!raw || typeof raw !== "object") return { ok: false, reason: `task ${index + 1} must be an object` };
+    if (!raw || typeof raw !== "object")
+      return { ok: false, reason: `task ${index + 1} must be an object` };
     const task = raw as Record<string, unknown>;
     const title = trimmed(task.title, MAX_TITLE_LENGTH);
     if (!title) return { ok: false, reason: `task ${index + 1} needs a title` };
@@ -96,36 +85,49 @@ export function validateProposal(input: unknown): ValidatedPlan | ValidationFail
       };
     }
     if (acceptance.length > MAX_CRITERIA_PER_TASK) {
-      return { ok: false, reason: `task "${title}" has more than ${MAX_CRITERIA_PER_TASK} acceptance criteria` };
+      return {
+        ok: false,
+        reason: `task "${title}" has more than ${MAX_CRITERIA_PER_TASK} acceptance criteria`,
+      };
     }
 
     seeds.push({
       title,
       description: trimmed(task.description, MAX_TEXT_LENGTH) || title,
       dependencies: asStringArray(task.dependsOn),
-      acceptance: acceptance.map((description, position): AcceptanceCriterion => ({
-        id: criterionId(index, position),
-        description: description.slice(0, MAX_TEXT_LENGTH),
-        kind: "assertion",
-        satisfied: false,
-        evidence: null,
-      })),
+      acceptance: acceptance.map(
+        (description, position): AcceptanceCriterion => ({
+          id: criterionId(index, position),
+          description: description.slice(0, MAX_TEXT_LENGTH),
+          kind: "assertion",
+          satisfied: false,
+          evidence: null,
+        }),
+      ),
     });
   }
 
   for (const seed of seeds) {
     for (const dependency of seed.dependencies) {
       if (!titles.has(dependency)) {
-        return { ok: false, reason: `task "${seed.title}" depends on "${dependency}", which is not in the plan` };
+        return {
+          ok: false,
+          reason: `task "${seed.title}" depends on "${dependency}", which is not in the plan`,
+        };
       }
     }
   }
 
   const validation = validatePlan(
-    seeds.map((seed) => ({ id: seed.title, status: "PENDING" as const, dependencies: seed.dependencies })),
+    seeds.map((seed) => ({
+      id: seed.title,
+      status: "PENDING" as const,
+      dependencies: seed.dependencies,
+    })),
   );
   if (!validation.ok) {
-    const detail = validation.reason === "cycle" ? validation.cycle.join(" -> ") : validation.reason;
+    const detail =
+      validation.reason === "cycle" ? validation.cycle.join(" -> ") : validation.reason;
     return { ok: false, reason: `the plan is not a DAG (${detail})` };
   }
 
@@ -136,7 +138,8 @@ export function validateProposal(input: unknown): ValidatedPlan | ValidationFail
   const agents: ValidatedPlan["agents"] = [];
   const names = new Set<string>();
   for (const [index, raw] of rawAgents.entries()) {
-    if (!raw || typeof raw !== "object") return { ok: false, reason: `agent ${index + 1} must be an object` };
+    if (!raw || typeof raw !== "object")
+      return { ok: false, reason: `agent ${index + 1} must be an object` };
     const agent = raw as Record<string, unknown>;
     const name = trimmed(agent.name, MAX_TITLE_LENGTH);
     if (!name) return { ok: false, reason: `agent ${index + 1} needs a name` };
@@ -145,7 +148,10 @@ export function validateProposal(input: unknown): ValidatedPlan | ValidationFail
     const taskTitles = asStringArray(agent.tasks);
     for (const title of taskTitles) {
       if (!titles.has(title)) {
-        return { ok: false, reason: `agent "${name}" is assigned "${title}", which is not in the plan` };
+        return {
+          ok: false,
+          reason: `agent "${name}" is assigned "${title}", which is not in the plan`,
+        };
       }
     }
     agents.push({ name, role: trimmed(agent.role, MAX_TITLE_LENGTH) || "generalist", taskTitles });
@@ -162,7 +168,8 @@ export type ProgressReport = {
 };
 
 export function validateProgress(input: unknown): ProgressReport | ValidationFailure {
-  if (!input || typeof input !== "object") return { ok: false, reason: "the report must be an object" };
+  if (!input || typeof input !== "object")
+    return { ok: false, reason: "the report must be an object" };
   const report = input as Record<string, unknown>;
   const rawEvidence = Array.isArray(report.evidence) ? report.evidence : [];
   const evidence: ProgressReport["evidence"] = [];
@@ -172,7 +179,10 @@ export function validateProgress(input: unknown): ProgressReport | ValidationFai
     const criterion = trimmed(entry.criterion, MAX_TITLE_LENGTH);
     const proof = trimmed(entry.evidence, MAX_TEXT_LENGTH);
     if (!criterion || !proof) {
-      return { ok: false, reason: "each evidence entry needs both a criterion id and the evidence itself" };
+      return {
+        ok: false,
+        reason: "each evidence entry needs both a criterion id and the evidence itself",
+      };
     }
     evidence.push({ criterion, evidence: proof });
   }
@@ -184,11 +194,6 @@ export function validateProgress(input: unknown): ProgressReport | ValidationFai
   };
 }
 
-//
-// Applying a report is a validated transition, not a write-through. Evidence
-// lands only on criteria that exist, the gate stays the runtime's to enforce,
-// and the model is told exactly what is still outstanding.
-//
 export function applyProgressReport(
   store: AgenticStore,
   task: AgenticTask,
@@ -206,9 +211,14 @@ export function applyProgressReport(
       continue;
     }
     const slot = next.find((criterion) => criterion.id === entry.criterion);
-    if (!slot || slot.satisfied) continue;
-    slot.satisfied = true;
+    if (!slot || criterionIsSatisfied(slot)) continue;
+    slot.satisfied = criterionIsSatisfied({
+      ...slot,
+      satisfied: true,
+      evidenceSource: "model_report",
+    });
     slot.evidence = entry.evidence;
+    slot.evidenceSource = "model_report";
     store.recordSignal({
       runId: task.runId,
       taskId: task.id,
@@ -220,7 +230,7 @@ export function applyProgressReport(
     store.appendEvent({
       runId: task.runId,
       taskId: task.id,
-      type: "ACCEPTANCE_SATISFIED",
+      type: criterionIsSatisfied(slot) ? "ACCEPTANCE_SATISFIED" : "ACCEPTANCE_REJECTED",
       summary: entry.criterion,
     });
   }
@@ -258,6 +268,8 @@ export function applyProgressReport(
     });
   }
 
-  const outstanding = next.filter((criterion) => !criterion.satisfied).map((criterion) => criterion.id);
+  const outstanding = next
+    .filter((criterion) => !criterionIsSatisfied(criterion))
+    .map((criterion) => criterion.id);
   return { outstanding, satisfied: outstanding.length === 0, unknownCriteria };
 }
