@@ -1,3 +1,4 @@
+import { browserSessionPath } from "@shared/agent/browser-session";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 
 export type LocalhostSite = {
@@ -71,18 +72,22 @@ export function useAgentBrowserEffects({
 const LIVE_STATE_POLL_MS = 2_000;
 
 export function useBrowserLiveStateSync({
+  sessionId,
   enabled,
   onLiveUrl,
 }: {
   enabled: boolean;
   onLiveUrl: (url: string) => void;
+  sessionId?: string;
 }): void {
   useMountSubscription(() => {
     if (!enabled) return;
     let cancelled = false;
     const poll = async () => {
       try {
-        const response = await fetch("/api/agent/browser/state", { cache: "no-store" });
+        const response = await fetch(browserSessionPath("/api/agent/browser/state", sessionId), {
+          cache: "no-store",
+        });
         const payload = (await response.json()) as { ok?: boolean; data?: { url?: string } };
         const liveUrl = payload.ok ? (payload.data?.url ?? "") : "";
         if (!cancelled && liveUrl && liveUrl !== "about:blank") onLiveUrl(liveUrl);
@@ -96,5 +101,5 @@ export function useBrowserLiveStateSync({
       cancelled = true;
       clearInterval(timer);
     };
-  }, [enabled, onLiveUrl]);
+  }, [enabled, onLiveUrl, sessionId]);
 }

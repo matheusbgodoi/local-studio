@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { Effect, Schema } from "effect";
-import { BrowserSessionScopeSchema } from "../../../../shared/agent/browser-session";
+import { Effect } from "effect";
+import { decodeBrowserSessionId } from "../../../../shared/agent/browser-session";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { sanitizeBrowserPaneUrl } from "../../../../shared/agent/sanitize-embedded-browser-url";
@@ -68,14 +68,7 @@ export async function handleBrowserVerb(request: Request, verb: string): Promise
   }
   const payload = await readPayload(request);
   try {
-    const decoded = Schema.decodeUnknownSync(BrowserSessionScopeSchema)(payload);
-    const sessionId = decoded.sessionId?.trim();
-    if (sessionId && (sessionId.length > 256 || /[\u0000-\u001f]/.test(sessionId))) {
-      return Response.json(
-        { ok: false, error: "Invalid browser session identifier" },
-        { status: 400 },
-      );
-    }
+    const sessionId = decodeBrowserSessionId(payload) ?? scope.getStore();
     const result = await scope.run(sessionId ?? "", () =>
       Effect.runPromise(
         Effect.tryPromise({
@@ -551,4 +544,10 @@ export async function handleBrowserViewport(request: Request): Promise<Response>
       error: error instanceof Error ? error.message : "setViewport failed",
     });
   }
+}
+
+export function withBrowserRequestScope<T>(request: Request, task: () => Promise<T>): Promise<T> {
+  const value = new URL(request.url).searchParams.get("sessionId") ?? undefined;
+  const sessionId = decodeBrowserSessionId({ sessionId: value });
+  return scope.run(sessionId ?? "", task);
 }

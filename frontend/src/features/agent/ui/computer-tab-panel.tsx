@@ -143,10 +143,6 @@ function SideChatTab({
             models={models}
             selectedModel={modelId}
             onSelect={(selection) => {
-              // The same rule as the main panes, applied by hand because these tabs
-              // live outside the workspace reducer: setting modelId alone left a tab
-              // whose thinkingLevel was never saved falling back to the incoming
-              // alias's key, so a behaviour switch reset the effort here too.
               const levels = models.find((model) => model.id === selection.modelId)
                 ?.thinkingLevels ?? ["off"];
               const thinking = thinkingAfterModelSelection(
@@ -190,9 +186,11 @@ function SideChatTab({
   );
 }
 
-function BrowserTab({ onNavigateBrowser, tools }: ComputerTabPanelProps) {
+function BrowserTab({ onNavigateBrowser, tools, focusedSession }: ComputerTabPanelProps) {
   return (
     <LazyAgentBrowser
+      key={focusedSession?.id ?? "default-browser"}
+      sessionId={focusedSession?.id}
       url={tools.browser.url}
       inputValue={tools.browser.input}
       onInputChange={tools.setBrowserInput}
@@ -204,9 +202,6 @@ function BrowserTab({ onNavigateBrowser, tools }: ComputerTabPanelProps) {
   );
 }
 
-// The Run belongs to the focused conversation, never to the panel: when the
-// focus moves the ids move with it, so the panel re-resolves instead of holding
-// on to whatever the previous chat was running.
 function RunTab({ focusedSession }: { focusedSession: Session | null }) {
   return (
     <LazyRunSessionPanel

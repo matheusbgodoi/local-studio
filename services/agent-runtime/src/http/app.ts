@@ -19,6 +19,7 @@ import {
   handleBrowserState,
   handleBrowserVerb,
   handleBrowserViewport,
+  withBrowserRequestScope,
 } from "./browser-handlers";
 import {
   handleProviderLogin,
@@ -184,6 +185,7 @@ export function createAgentRuntimeApp() {
   app.post("/api/agent/terminal/pty/input", (c) => handlePtyInput(c.req.raw));
   app.post("/api/agent/terminal/pty/resize", (c) => handlePtyResize(c.req.raw));
   app.post("/api/agent/terminal/pty/close", (c) => handlePtyClose(c.req.raw));
+  app.use("/api/agent/browser/*", (c, next) => withBrowserRequestScope(c.req.raw, next));
   app.get("/api/agent/browser/fetch", (c) => handleBrowserFetch(c.req.raw));
   app.get("/api/agent/browser/frame", () => handleBrowserFrame());
   app.post("/api/agent/browser/input", (c) => handleBrowserInput(c.req.raw));
