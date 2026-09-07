@@ -1,10 +1,3 @@
-// The /api/agent/turn wire contract: request parsing, command-result shape,
-// and the generic body-field helpers the other agent route parsers reuse.
-//
-// Moved here from frontend/src/features/agent/contracts.ts so the
-// @local-studio/agent-runtime HTTP handlers can share the exact parsing logic
-// with the frontend; the frontend module re-exports everything from this file.
-
 import {
   agentImageDataError,
   agentImageLimitError,
@@ -12,11 +5,7 @@ import {
 } from "./agent-image-input";
 import { sanitizeComposerPromptTemplates, sanitizeComposerSkills } from "./composer-refs";
 import { Schema } from "effect";
-import {
-  DEFAULT_NETWORK_POLICY,
-  parseNetworkPolicy,
-  type NetworkPolicy,
-} from "./network-policy";
+import { parseNetworkPolicy, type NetworkPolicy } from "./network-policy";
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -75,7 +64,7 @@ export type AgentTurnRequest = {
   cwd?: string;
   piSessionId: string | null;
   toolAccess: AgentToolAccess;
-  networkPolicy: NetworkPolicy;
+  networkPolicy?: NetworkPolicy;
   browserSessionId?: string;
   browserBackend?: AgentBrowserBackend;
   skills: ReturnType<typeof sanitizeComposerSkills>;
@@ -91,21 +80,15 @@ export type AgentTurnRuntimeStatus = {
   running?: boolean;
   piSessionId?: string | null;
   modelId?: string | null;
+  behaviorProfile?: string | null;
+  networkPolicy?: NetworkPolicy;
   eventSeq?: number;
-  contextUsage?: {
-    tokens: number | null;
-    contextWindow: number;
-    percent: number | null;
-    shouldCompact: boolean;
-  } | null;
+  contextUsage?: import("./context-usage").RuntimeContextUsage | null;
 };
 
 export type AgentTurnCommandResult = {
   type: "command";
   outcome: "accepted" | "queued" | "rejected";
-  // Wire field of the /turn response: the server echoes the opaque runtime key
-  // it resolved the command to. The client sends the session id as that key
-  // and does not read this back.
   runtimeSessionId: string;
   piSessionId?: string | null;
   active: boolean;
@@ -154,6 +137,10 @@ export function parseAgentTurnRequest(input: unknown): ParseResult<AgentTurnRequ
       : undefined;
   const images = parseImages(body.images);
   if (!images.ok) return images;
+  const networkPolicy = parseNetworkPolicy(body.networkPolicy);
+  if (body.networkPolicy != null && !networkPolicy) {
+    return { ok: false, error: "networkPolicy must be direct or vpn_protected" };
+  }
   return {
     ok: true,
     value: {
@@ -165,7 +152,7 @@ export function parseAgentTurnRequest(input: unknown): ParseResult<AgentTurnRequ
       cwd: cwd.value,
       piSessionId: piSessionId.value ?? null,
       toolAccess: body.toolAccess === "full" ? "full" : "read_only",
-      networkPolicy: parseNetworkPolicy(body.networkPolicy) ?? DEFAULT_NETWORK_POLICY,
+      ...(networkPolicy ? { networkPolicy } : {}),
       browserSessionId: browserSessionId.value,
       browserBackend,
       skills: sanitizeComposerSkills(body.skills),

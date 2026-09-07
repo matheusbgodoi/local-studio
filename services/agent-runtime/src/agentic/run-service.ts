@@ -118,7 +118,7 @@ export function createAgenticRunService(options: AgenticRunServiceOptions) {
     if (run.networkPolicy !== "vpn_protected") return null;
     const network = networkService();
     network.setRunPolicy(run.id, run.networkPolicy);
-    if (network.mayEgress()) return null;
+    if (network.mayEgress(run.networkPolicy)) return null;
     if (run.status !== "PAUSED") {
       store.updateRun(run.id, { status: "PAUSED" });
       store.appendEvent({

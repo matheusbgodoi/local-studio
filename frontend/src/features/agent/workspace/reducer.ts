@@ -1,3 +1,4 @@
+import { isUncensoredBehaviorProfile } from "@shared/agent/behavior-profile";
 import {
   patchSession as patchSessionInMap,
   removeSession,
@@ -31,14 +32,18 @@ function chooseModelId(
   if (currentModelId && models.some((model) => model.id === currentModelId)) {
     return currentModelId;
   }
-  // NO SILENT FALLBACK. A remembered model that is absent from the catalogue is OFFLINE,
-  // not a reason to quietly serve a different one: the picker keeps showing it and marks
-  // it unavailable. Only a workspace with nothing remembered at all picks a starting model.
   const remembered = preferredModelId || currentModelId;
   if (remembered) {
     return remembered;
   }
-  return models.find((model) => model.active)?.id || models[0]?.id || "";
+  const allowed = models.filter((model) => !isUncensoredBehaviorProfile(model));
+  return (
+    allowed.find((model) => model.active && model.behaviorProfileDefault)?.id ||
+    allowed.find((model) => model.active)?.id ||
+    allowed.find((model) => model.behaviorProfileDefault)?.id ||
+    allowed[0]?.id ||
+    ""
+  );
 }
 
 function reduceWorkspaceStatus(

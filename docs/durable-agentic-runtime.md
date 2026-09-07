@@ -20,7 +20,7 @@ Each claim below is labelled:
 ## 1. The defect this replaces
 
 **MEASURED.** Compaction is a memory operation, and its return value was being
-used as the answer to a different question: *should the agent keep working?*
+used as the answer to a different question: _should the agent keep working?_
 On an autonomous run there was no queued human message, so the loop exited and
 the task was abandoned silently. In a live rollout, 9 of 11 compactions were
 followed by a human message rather than by the agent continuing.
@@ -42,17 +42,17 @@ SQLite file, `agentic-runtime.sqlite`, beside the rest of the user data,
 opened through the `bun:sqlite` / `node:sqlite` shim the Litter ledger already
 proved (this package is typechecked by bun and shipped as `node dist/server.js`).
 
-| table | holds |
-|---|---|
-| `agentic_runs` | goal, status, model + physical model + behaviour profile, context window, usable limit, plan revision, active task, cumulative input/output/cache tokens, compaction count, latest checkpoint, result, failure, recovery state |
-| `agentic_plan_revisions` | revision number, why it happened, the resulting task id list |
-| `agentic_tasks` | title, description, status, dependencies, acceptance criteria, attempt count, agent, result summary, evidence, blocker |
-| `agentic_agents` | logical agent: role, status, model + physical model + behaviour profile, current task, session, active context, context limit, cumulative tokens, compactions, heartbeat |
-| `agentic_attempts` | one row per attempt at a task: status, outcome, evidence, error |
-| `agentic_tool_operations` | idempotency key, request hash, `PLANNED / STARTED / COMMITTED / FAILED / UNKNOWN`, whether it is side-effecting, external state |
-| `agentic_artifacts` | externalised payloads: size, token estimate, digest, path, preview, provenance |
-| `agentic_checkpoints` | tokens before/after, target, usable limit, duration, and the working set that was rebuilt |
-| `agentic_events` | the timeline the owner sees |
+| table                     | holds                                                                                                                                                                                                                          |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `agentic_runs`            | goal, status, model + physical model + behaviour profile, context window, usable limit, plan revision, active task, cumulative input/output/cache tokens, compaction count, latest checkpoint, result, failure, recovery state |
+| `agentic_plan_revisions`  | revision number, why it happened, the resulting task id list                                                                                                                                                                   |
+| `agentic_tasks`           | title, description, status, dependencies, acceptance criteria, attempt count, agent, result summary, evidence, blocker                                                                                                         |
+| `agentic_agents`          | logical agent: role, status, model + physical model + behaviour profile, current task, session, active context, context limit, cumulative tokens, compactions, heartbeat                                                       |
+| `agentic_attempts`        | one row per attempt at a task: status, outcome, evidence, error                                                                                                                                                                |
+| `agentic_tool_operations` | idempotency key, request hash, `PLANNED / STARTED / COMMITTED / FAILED / UNKNOWN`, whether it is side-effecting, external state                                                                                                |
+| `agentic_artifacts`       | externalised payloads: size, token estimate, digest, path, preview, provenance                                                                                                                                                 |
+| `agentic_checkpoints`     | tokens before/after, target, usable limit, duration, and the working set that was rebuilt                                                                                                                                      |
+| `agentic_events`          | the timeline the owner sees                                                                                                                                                                                                    |
 
 **POLICY.** Every table is prefixed `agentic_`. `controller/src/stores/sqlite.ts`
 sweeps a list of legacy names on every open — `runs`, `sessions`, `messages`,
@@ -159,7 +159,7 @@ backend refused to compact it.
 
 **IMPLEMENTED.** The expected next operation is the prompt alone, and
 compaction is skipped when the session is already at or below what the task
-needs, because compaction can only remove what is *not* the working set.
+needs, because compaction can only remove what is _not_ the working set.
 **EVIDENCE:** two tests in `agentic-compaction-resume.test.ts` named for this
 defect.
 
@@ -185,12 +185,13 @@ reason, duration, run and task id, and the working set itself. The run's
 compaction count is cumulative, and it counts compactions **performed** — a
 refusal leaves it, and the agent's, where they were.
 
-**MEASURED.** A backend reports no context usage until the next turn produces
-some, so `tokensAfter` is often absent rather than zero immediately after a
-compaction. It is stored as measured-or-zero and the working-set estimate is
-stored beside it as `targetTokens`; the timeline marks an estimate with a
-tilde. Publishing the absent reading as zero would have been a measurement
-nobody took.
+**IMPLEMENTED.** Pi reports unknown usage immediately after compaction. The
+runtime then estimates the complete retained context, including system prompt,
+tool schemas, summary and recent messages. Checkpoints persist whether each
+reading is backend-anchored or estimated; the timeline marks estimates. The
+working-set target is not substituted for actual retained context. Without a
+usable estimate, admission fails with an actionable diagnostic. Estimated
+readings do not prove compaction effective or ineffective.
 
 **POLICY — loop guard.** A compaction that creates no headroom twice fails the
 run with a diagnostic rather than compacting in a circle.
@@ -201,6 +202,46 @@ checkpoint/compact/resume cycles and asserts the task is still `RUNNING` after
 each one, that every prompt sent is the rebuilt working set rather than the
 word "continue", and that lifetime token counters never fall while the active
 context does.
+
+### A plain conversation, with no Run
+
+**IMPLEMENTED.** `shared/agent/context-headroom.ts`,
+`services/agent-runtime/src/pi-agent-settings.ts`,
+`services/agent-runtime/src/http-dispatcher.ts`.
+
+Everything above is the Run path. A plain chat never enters the scheduler, so
+it relies on pi's own auto-compaction. Overflow recovery compacts and continues
+the interrupted turn. Threshold compaction runs after a settled response and
+continues only when messages are queued; it does not independently keep a
+completed plain-chat turn running.
+
+**MEASURED.** pi's threshold is `contextWindow - reserveTokens` against a flat
+`reserveTokens: 16384`. On the owner's `qwen-daily` and `qwen-uncensored`
+aliases — `contextWindow: 200704`, matching the live gateway's `-c 200704` —
+that is 91.8% of the window, so the first request past it already carries about
+185K tokens. Separately, `configureHttpDispatcher` is only called from pi's CLI
+entry points, never from the SDK path this runtime uses, so every inference call
+inherited a 300s idle timeout. In the owner's session logs, `Request timed out`,
+`terminated` and `Stream ended without finish_reason` appear **only** in
+sessions whose context passed 150K. Those errors classify as retryable rather
+than as overflow, so the same oversized request was retried and died the same
+way each time, and the conversation ended.
+
+**POLICY.** The reserve is now proportional to the model: 22% of the window,
+clamped to 16384..65536, which puts the trigger at 78% for every window the
+owner runs. Inference runs on a dispatcher with a 30 minute idle timeout. The
+policy is merged into the pi agent's `settings.json` before the session is
+created, and anything the owner set by hand there survives the merge.
+
+Those two are prevention. The net is in `pi-runtime.ts`: a prompt that still
+fails on a context-wall error compacts once and re-runs the turn. A deliberate
+abort is never a wall, a timeout below half the threshold is never a wall, and
+the recovery runs at most once per prompt so a genuinely unreachable backend
+still surfaces as an error instead of looping.
+
+**LIVE VERIFIED** in the installed dev app: opening a chat on `qwen-daily`
+rewrote the reserve to 44155, moving the trigger from 184320 to 156549 tokens,
+and set the idle timeout to 1800000ms, with every owner-set key preserved.
 
 ---
 
@@ -224,14 +265,14 @@ the payload and does not contain its last line.
 
 Every operation carries an idempotency key and a hash of its request:
 
-| state found | what happens |
-|---|---|
-| nothing | reserved, `PLANNED` |
-| same key, different request | `mismatch` — never a silent overwrite |
-| `COMMITTED` | `cached` — served from the ledger, not redone |
+| state found                         | what happens                                                  |
+| ----------------------------------- | ------------------------------------------------------------- |
+| nothing                             | reserved, `PLANNED`                                           |
+| same key, different request         | `mismatch` — never a silent overwrite                         |
+| `COMMITTED`                         | `cached` — served from the ledger, not redone                 |
 | `STARTED`/`UNKNOWN`, side-effecting | `reconcile` — the real external state must be inspected first |
-| `STARTED`, read-only | reserved — safe to retry |
-| `FAILED` | reserved — nothing was committed |
+| `STARTED`, read-only                | reserved — safe to retry                                      |
+| `FAILED`                            | reserved — nothing was committed                              |
 
 On restart: agents whose process is gone become `INTERRUPTED`, never
 `COMPLETED`; running attempts are settled as `INTERRUPTED`; `RUNNING` tasks
@@ -250,14 +291,14 @@ be on disk.
 **IMPLEMENTED.** `agentic/scheduler.ts`, driven by `agentic/service.ts`.
 
 **POLICY.** One local inference at a time. `prompt()` resolves when the turn is
-done, so the loop *is* the turn sequencing; no event listener can advance a Run
+done, so the loop _is_ the turn sequencing; no event listener can advance a Run
 twice, and no parallel GPU capacity is fabricated. Logical agents are durable
 objects with independent contexts and their own tasks; five of them may be the
 one resident checkpoint through five sessions, which is why every agent row
 carries its physical model id and behaviour profile.
 
 **POLICY — acceptance.** An agent saying "done" is a candidate for validation.
-A task succeeds when every acceptance criterion carries evidence, reported as
+Assertion/review tasks can complete from model-reported evidence, explicitly not independently verified. Executable command/file/artifact criteria require runtime-observed evidence; model text cannot satisfy them. Reports use
 `TASK_EVIDENCE <criterion-id>: <evidence>`. A claim of `TASK_COMPLETE` with
 criteria still owed is recorded as `ACCEPTANCE_REJECTED` and the task stays
 open with the missing evidence named.
@@ -323,21 +364,21 @@ the scheduler is the production one. That is what makes it possible to force a
 dozen compactions in a millisecond rather than filling 176128 real tokens to
 observe the third.
 
-| file | covers |
-|---|---|
-| `agentic-dag.test.ts` | dependencies, cycles, readiness, selection |
-| `agentic-context-budget.test.ts` | capability read-through, reserves at six windows, preflight, post-compaction region, the override |
-| `agentic-compaction-resume.test.ts` | one compaction, ≥3 compactions on one unfinished task, working-set reconstruction, automatic resume, counters, loop guard |
-| `agentic-tool-operations.test.ts` | call/result pairing, externalisation, exactly-once |
-| `agentic-crash-recovery.test.ts` | restart after checkpoint, mid-task, around a tool operation |
-| `agentic-profile-durability.test.ts` | profile restoration, declared default, ordinary chat untouched |
-| `agentic-stall-replan.test.ts` | bounded retry, replan, no infinite loop |
-| `agentic-review-findings.test.ts` | every state an adversarial review found the runtime could not leave |
-| `agentic-control-plane.test.ts` | what the runtime accepts as a plan, and what it refuses |
-| `agentic-control-tools.test.ts` | the tools under the names and shapes the model sees |
-| `agentic-tool-interception.test.ts` | artifacts and idempotency on the real tool path |
-| `agentic-multi-agent.test.ts` | two agents, independent contexts, one decode at a time |
-| `agentic-inference-gate.test.ts` | one card decodes once; the owner goes first |
+| file                                 | covers                                                                                                                    |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `agentic-dag.test.ts`                | dependencies, cycles, readiness, selection                                                                                |
+| `agentic-context-budget.test.ts`     | capability read-through, reserves at six windows, preflight, post-compaction region, the override                         |
+| `agentic-compaction-resume.test.ts`  | one compaction, ≥3 compactions on one unfinished task, working-set reconstruction, automatic resume, counters, loop guard |
+| `agentic-tool-operations.test.ts`    | call/result pairing, externalisation, exactly-once                                                                        |
+| `agentic-crash-recovery.test.ts`     | restart after checkpoint, mid-task, around a tool operation                                                               |
+| `agentic-profile-durability.test.ts` | profile restoration, declared default, ordinary chat untouched                                                            |
+| `agentic-stall-replan.test.ts`       | bounded retry, replan, no infinite loop                                                                                   |
+| `agentic-review-findings.test.ts`    | every state an adversarial review found the runtime could not leave                                                       |
+| `agentic-control-plane.test.ts`      | what the runtime accepts as a plan, and what it refuses                                                                   |
+| `agentic-control-tools.test.ts`      | the tools under the names and shapes the model sees                                                                       |
+| `agentic-tool-interception.test.ts`  | artifacts and idempotency on the real tool path                                                                           |
+| `agentic-multi-agent.test.ts`        | two agents, independent contexts, one decode at a time                                                                    |
+| `agentic-inference-gate.test.ts`     | one card decodes once; the owner goes first                                                                               |
 
 ---
 
@@ -354,12 +395,12 @@ anything.
 because deciding that a request is durable work is the model's to make and a
 session that could not reach the tools could never make it.
 
-| tool | what the model proposes |
-|---|---|
-| `plan_agentic_run` | a goal, tasks with dependencies and acceptance criteria, optionally named agents |
-| `revise_agentic_plan` | a replacement plan, when what it learned means the current one cannot work |
-| `report_task_progress` | evidence against a task's criteria, or that it is blocked, or a question only the owner can answer |
-| `read_agentic_artifact` | part of a large output the runtime stored outside the conversation |
+| tool                    | what the model proposes                                                                            |
+| ----------------------- | -------------------------------------------------------------------------------------------------- |
+| `plan_agentic_run`      | a goal, tasks with dependencies and acceptance criteria, optionally named agents                   |
+| `revise_agentic_plan`   | a replacement plan, when what it learned means the current one cannot work                         |
+| `report_task_progress`  | evidence against a task's criteria, or that it is blocked, or a question only the owner can answer |
+| `read_agentic_artifact` | part of a large output the runtime stored outside the conversation                                 |
 
 **POLICY — the model proposes, the runtime decides.** There is no tool that
 writes a row, sets a status or invents an id. `agentic/control-plane.ts`
@@ -396,7 +437,7 @@ turn which calls no tool leaves the store empty.
 ### Structured reporting
 
 **IMPLEMENTED.** `agentic_turn_signals`. A turn that called the reporting tool
-has already had its evidence validated and committed; the scheduler adjudicates
+has had its criterion IDs and report shape validated, not its claims independently verified; the scheduler adjudicates
 from those signals. Prose markers still parse as a fallback for a turn that
 reported in words, but no state transition depends on the model spelling a
 magic string correctly any more.
@@ -512,3 +553,122 @@ checkpoint/compact/resume cycles happen in minutes instead of hours. It touches
 neither the model nor the served window, it can only ever narrow (a wider value
 is ignored), and it is unset in production. It is read once, in
 `agentic/service.ts`, and flows in as an ordinary policy parameter.
+
+## 17. Terminal inference errors (2026-09-07)
+
+**MEASURED — offline SDK.** Pi's agent resolves `prompt()` after a failed
+inference, emitting an assistant message with `stopReason: error`. Treating
+only rejected promises as failures made the runtime's context recovery and
+durable backend-loss handling miss these errors.
+
+**IMPLEMENTED.** `pi-turn-lifecycle.ts` observes the last assistant result
+through the complete SDK operation. A final error becomes a rejected runtime
+turn; an error followed by a successful SDK retry remains successful. Context
+recovery compacts once and sends a hidden continuation through the SDK's
+normal turn lifecycle, preserving the original user request and completed
+tool results instead of inserting the user's message and images again.
+Cancellation prevents queued recovery or continuation from starting.
+Explicit overflow can trigger recovery regardless of previous usage; a
+transport timeout requires evidence of substantial context before it can
+trigger summarization. Unknown usage does not establish context pressure.
+
+**EVIDENCE — deterministic offline.** `pi-turn-lifecycle.test.ts` exercises the
+installed Pi agent with a failing stream, a successful continuation, preflight
+rejection, and context/cancellation classification. Real near-ceiling and
+installed-product acceptance remain required before this is a live claim.
+
+**IMPLEMENTED — session isolation.** Each SDK session applies its own model's
+reserve as an in-memory settings override after services are created.
+Concurrent settings updates use unique temporary files. Owner compaction
+enablement and recent-token preferences remain unchanged. Detailed task
+descriptions now appear in the first inference and every rebuilt working set;
+old checkpoints without the optional field remain readable.
+
+**EVIDENCE — offline.** `context-session-isolation.test.ts` checks concurrent
+settings writes, independent model budgets, owner preferences, and detailed
+task instructions in both the initial prompt and reconstructed context.
+
+## 18. Compaction accounting qualification (2026-09-07)
+
+**EVIDENCE — offline.** `context-measurement.test.ts` covers full-context
+estimate selection, unknown-context admission failure, nullable effectiveness,
+and additive migration/reopening of checkpoint provenance. Nullable columns
+preserve old records and keep the version-8 store readable by older builds.
+The existing repeated-compaction and crash-recovery checks also pass.
+
+**SOURCE VERIFIED — installed Pi 0.83.0.** Summary input combines the previous
+summary with post-boundary history, rather than re-summarizing the full raw
+conversation. Output is capped at the smaller of 80% of the reserve and the
+model output limit; a split-turn prefix can require a separate summary capped
+at 50% of the reserve. Serialization does not enforce a tokenizer-verified
+input budget. A single oversized message can therefore exceed the default
+summarizer window. The supported fallback below addresses this input failure;
+real near-ceiling quality/cost qualification remains **HYPOTHESIS / TODO**.
+
+## 19. Bounded summarizer overflow recovery (2026-09-07)
+
+**IMPLEMENTED.** The supported `session_before_compact` extension hook runs
+Pi's normal exported compactor for inputs estimated to fit. A predicted or
+backend-reported overflow switches to ordered incremental summary segments.
+Each segment updates the previous summary; rejected segments shrink and retry
+without replaying successful segments. The existing summary, user text,
+split-turn prefix and file-operation provenance flow through the fallback.
+Pi's normal serialization still truncates tool-result text; original rollout
+entries and the recent-message boundary remain intact. No transcript entries
+are replaced until every segment succeeds.
+
+**POLICY.** The fallback allows at most 32 model-stream calls, including
+summarizer retries; transport retries retain the configured SDK policy. It rejects empty/truncated summaries and honors cancellation.
+Failure returns hook cancellation explicitly because Pi otherwise swallows
+extension exceptions and retries the default oversized summary. Terminal-turn
+metadata prevents the outer recovery path from repeating a failed SDK
+compaction, or redundantly compacting one that already succeeded. Progress and
+errors appear as notices; final details record the method, segments, calls and
+serialized input size. There are no private SDK calls or vendor patches.
+
+**EVIDENCE — deterministic offline.** `bounded-compaction.test.ts` reproduces
+overflow in the installed SDK against a strict fake backend, then verifies
+staged completion, nonce goal/decision/pending/prior-summary retention, the
+unchanged recent boundary and original preparation, request bounds, aborts,
+truncated-output rejection and failure cancellation. These establish control
+flow, not real-model summary fidelity, tokenization accuracy or latency.
+
+## 20. Inherited execution policy
+
+DECIDED / APPLIED in source: Standard remains the automatic default for new
+ordinary sessions. Once a session starts, its effective behavior profile and
+network policy are captured together. Durable Runs, logical agents, ordinary
+subagents, nested subagents, background turns, compaction, retries and resumes
+receive that same snapshot. Uncensored is an ordinary explicit selection and is
+not rejected or replaced when work becomes agentic.
+
+The selected model alias remains part of the durable identity, while the
+behavior profile is also persisted independently and validated on descendant
+runtime creation. A mismatch is rejected rather than rerouted. Session metadata
+and durable Run rows preserve the effective policy across process restart.
+Different top-level sessions can carry different snapshots without changing one
+another.
+
+MEASURED / PROVEN offline: deterministic runtime checks exercised Standard and
+Uncensored children and grandchildren, background priority, Uncensored durable
+work through compaction, restored behavior and VPN state, exact turn/status
+contracts, and simultaneous Direct and VPN execution scopes. Installed product
+acceptance is recorded in [the stable candidate receipt](installed-candidate-2026-09-07.md#phase-5-inherited-execution-policy-correction--stable-native-acceptance).
+
+## 21. Acceptance provenance and review
+
+MEASURED / PROVEN offline: before this fix a fabricated command-success report settled a real temporary SQLite task with zero tool operations, even with `complete:false`. A prose marker also satisfied a file criterion. Plan strings such as “npm run check exits zero” are assertions, not executable specifications.
+
+DECIDED / APPLIED in source: optional `evidenceSource` survives JSON persistence and checkpoints; missing legacy provenance remains unverified. Both model report paths write `model_report` regardless of extra input fields. A shared predicate requires `runtime_observation` for command/file/artifact criteria in settlement, readiness, scheduling, working context, progress fingerprints and plan evidence carryover. Revisions retain evidence only for the same kind and description, with provenance. Historical executable claims cannot unlock dependencies when an active run is reconciled.
+
+Unverifiable executable reports enter `WAITING_USER` with an explicit review/replan instruction; repeating a model claim cannot satisfy them. Assertion/review tasks retain autonomous completion and are labeled model-reported, not independently verified. Legacy acceptance is labeled unverified. Completed historical runs are not silently reopened.
+
+TARGET / NOT APPLIED: a runtime-owned verifier binding exact command/path expectations to observed results. No writer of `runtime_observation` is introduced, no arbitrary successful shell call counts as proof, and no executable criterion is inferred from English. Current planner strings remain model assertions, so task completion does not prove builds, files or tests actually succeeded. Product acceptance must still verify those externally.
+
+## 22. SDK context estimates are not backend measurements
+
+MEASURED / PROVEN through the installed candidate: a 600,000-character archive made the SDK report 161,820 context tokens while inference was pending. The completed backend response reported 146,523 input + 267 output = 146,790 tokens. SDK `getContextUsage()` combines prior assistant usage with estimated trailing messages; its positive number alone does not establish measurement.
+
+DECIDED / APPLIED in source: runtime context usage carries optional `estimated`; only a final successful assistant message, with no trailing message and an exact match to the public SDK `calculateContextTokens(usage)`, marks the count measured. Missing provenance is treated conservatively by the durable adapter. Unknown postcompaction context remains unknown. The budget endpoint places the hybrid count in `estimated.sdkContextTokens`, with measured tokens/percent null; full prompt component estimates remain separate. UI labels context estimates. Scheduling preserves the SDK's exact conservative number and thresholds rather than recounting it, while compaction effectiveness cannot claim measured improvement from hybrid counts.
+
+Installed acceptance of this provenance correction remains separate from the observed archive completion above.

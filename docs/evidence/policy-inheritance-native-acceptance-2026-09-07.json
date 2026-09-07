@@ -1,0 +1,56 @@
+{
+  "date": "2026-09-07",
+  "installedSourceCommit": "1462a09a",
+  "application": "/Applications/CRIAs AI.app",
+  "artifacts": {
+    "zipSha256": "f6fa00f6cfeaa15075f8664b07a9a4cf37e41eab8f15b544929dae16318086f3",
+    "dmgSha256": "405d3321ebed04f41006654cadae671924a78c327212ff59db846ce451d240e2",
+    "rollbackSha256": "0ed7e17aa78691830fce30f1ec8d808b0a9b066c78bdbfe305b58829dceecd6b"
+  },
+  "gates": {
+    "npmRunCheck": "pass",
+    "agentRuntimeTests": {
+      "passed": 390,
+      "failed": 0,
+      "assertions": 1271,
+      "files": 45
+    }
+  },
+  "ui": {
+    "standardIsGlobalDefault": true,
+    "uncensoredEnabled": true,
+    "uncensoredUnavailableLabelPresent": false,
+    "vpnPolicyVisible": true
+  },
+  "uncensoredVpnTree": {
+    "parentPiSessionId": "01a07c54-4a1f-7c0d-a60a-2346ebd0b1b0",
+    "childPiSessionId": "01a07c54-8295-701f-989c-b0e461a905ef",
+    "grandchildPiSessionId": "01a07c54-b385-7ba1-9f9c-4dd49df0716c",
+    "behaviorProfileAtEveryObservedRuntime": "uncensored",
+    "networkPolicyAtEveryObservedRuntime": "vpn_protected",
+    "childNonceVerified": true,
+    "grandchildNonceVerified": true,
+    "childAndGrandchildUsedSameVpnExit": true,
+    "vpnExitDifferedFromDirectExit": true
+  },
+  "restartAndContinuation": {
+    "sameParentPiSessionRestored": true,
+    "historyRowRestoredModelId": "local-studio-ai-node-3090-tail6146ef-ts-net/qwen-uncensored",
+    "historyRowRestoredNetworkPolicy": "vpn_protected",
+    "runtimeBehaviorProfile": "uncensored",
+    "runtimeNetworkPolicy": "vpn_protected",
+    "continuationNonceVerified": true,
+    "continuationUsedVpnExit": true
+  },
+  "simultaneousIsolation": {
+    "protectedParentRemainedResident": true,
+    "standardParentPiSessionId": "01a07c5c-e48a-75db-845d-dfac28ad0cdb",
+    "standardChildPiSessionId": "01a07c5d-1555-7849-8e40-5ddccb7f6cf0",
+    "standardBehaviorProfile": "standard",
+    "standardNetworkPolicy": "direct",
+    "directChildNonceVerified": true,
+    "directChildMatchedDirectExit": true,
+    "directChildDifferedFromVpnExit": true
+  },
+  "secretsOrExitAddressesRecorded": false
+}

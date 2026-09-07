@@ -1,12 +1,4 @@
-//
-// The durable agentic runtime's wire contract, defined once.
-//
-// The agent-runtime persists these records and the owner-facing view renders
-// them, so the shapes live here rather than in either. Nothing in this file
-// carries hidden reasoning: decisions, structured summaries, evidence and
-// externally observable state only.
-//
-
+import { OperationalCheckSchema, OperationalWitnessSchema } from "./operational-check";
 import { Schema } from "effect";
 import { NetworkPolicySchema } from "./network-policy";
 
@@ -75,6 +67,10 @@ export const AcceptanceCriterionSchema = Schema.Struct({
   kind: Schema.Literals(["command", "file", "artifact", "review", "assertion"]),
   satisfied: Schema.Boolean,
   evidence: nullableString,
+  evidenceSource: Schema.optional(Schema.Literals(["model_report", "runtime_observation"])),
+  check: Schema.optional(OperationalCheckSchema),
+  checkSource: Schema.optional(Schema.Literal("model_declared")),
+  witness: Schema.optional(OperationalWitnessSchema),
 });
 
 export const AgenticRunSchema = Schema.Struct({
@@ -155,6 +151,7 @@ export const AgenticWorkingSetSchema = Schema.Struct({
   planRevision: Schema.Number,
   taskId: nullableString,
   taskTitle: nullableString,
+  taskDescription: Schema.optional(nullableString),
   acceptance: Schema.Array(AcceptanceCriterionSchema),
   dependencyOutputs: Schema.Array(Schema.Struct({ taskId: Schema.String, summary: Schema.String })),
   decisions: Schema.Array(Schema.String),
@@ -181,6 +178,8 @@ export const AgenticCheckpointSchema = Schema.Struct({
   reason: Schema.String,
   tokensBefore: Schema.Number,
   tokensAfter: Schema.Number,
+  beforeMeasured: Schema.optional(Schema.Boolean),
+  afterMeasured: Schema.optional(Schema.Boolean),
   targetTokens: Schema.Number,
   usableLimit: Schema.Number,
   durationMs: Schema.Number,

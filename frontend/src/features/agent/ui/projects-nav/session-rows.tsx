@@ -24,6 +24,7 @@ import {
   mergeActiveSessionPref,
   patchActiveSessionPref,
   rememberAgentSessionNavTitle,
+  rememberAgentSessionNavState,
   setAgentSessionDragData,
   deleteSession,
   moveSessionToProject,
@@ -521,7 +522,11 @@ export function SessionRow({
           });
       }}
       onRememberTitle={() => {
-        rememberAgentSessionNavTitle(session.id, label);
+        rememberAgentSessionNavState(session.id, {
+          title: label,
+          modelId: session.modelId,
+          networkPolicy: session.executionPolicy?.networkPolicy ?? null,
+        });
         markSessionActivitySeen(session.id);
       }}
       onDragStart={(event) => {

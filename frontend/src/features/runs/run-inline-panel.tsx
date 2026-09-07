@@ -10,6 +10,7 @@ import { isProtectedPolicy } from "@shared/agent/network-policy";
 import { ComposerColumn } from "./composer-column";
 import { RunNetworkBadge } from "./run-network-badge";
 import { eventLabel, formatTokens, humanStatus, runTone } from "./run-formatters";
+import { representativeAgent } from "./run-context";
 import { useSessionRun } from "./use-session-run";
 
 //
@@ -200,11 +201,7 @@ function deriveRunInlineView(snapshot: AgenticRunSnapshot, expanded: boolean) {
   const activeAgent = active?.agentId
     ? agents.find((entry) => entry.id === active.agentId)
     : undefined;
-  const agent =
-    activeAgent ??
-    agents.find((entry) => entry.status === "COMPACTING") ??
-    agents.find((entry) => entry.status === "WORKING") ??
-    agents[0];
+  const agent = activeAgent ?? representativeAgent(snapshot) ?? undefined;
   const activeIndex = Math.max(
     0,
     tasks.findIndex((task) => task.id === run.activeTaskId),

@@ -44,16 +44,11 @@ var init_assert_release_main = __esm(() => {
 var exports_assert_standalone_build = {};
 import {
   existsSync as existsSync2,
-  lstatSync,
-  readFileSync as readFileSync2,
   readdirSync,
   readlinkSync,
   realpathSync
 } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { spawnSync } from "node:child_process";
-import { createRequire } from "node:module";
-import { pathToFileURL } from "node:url";
 function filesUnder(directory) {
   return readdirSync(directory, { recursive: !0, withFileTypes: !0 }).filter((entry) => entry.isFile()).map((entry) => resolve(entry.parentPath, entry.name));
 }
@@ -75,23 +70,14 @@ function isRuntimeFile(file) {
     "frontend/node_modules/"
   ].some((prefix) => path2 === prefix || path2.startsWith(prefix));
 }
-var projectRoot, standaloneBase, candidates, runtimeRoots, requiredRuntimeFiles, runtimeRoot, unsafeRuntimeLinks, tracedPackageDirectory, danglingTracedPackages, piCodingAgentRoot, piAiRoot, piRuntimeEntries, piAiManifestPath, piAiManifest, requireFromPiAi, unexpected;
+var projectRoot, standaloneBase, candidates, runtimeRoots, runtimeRoot, unsafeRuntimeLinks, unexpected;
 var init_assert_standalone_build = __esm(() => {
   projectRoot = resolve(import.meta.dirname, ".."), standaloneBase = resolve(projectRoot, ".next", "standalone"), candidates = [
     resolve(standaloneBase, "frontend", "server.js"),
     resolve(standaloneBase, "server.js")
-  ], runtimeRoots = [resolve(standaloneBase, "frontend"), standaloneBase], requiredRuntimeFiles = [
-    "node_modules/@earendil-works/pi-coding-agent/package.json",
-    "node_modules/@earendil-works/pi-coding-agent/dist/index.js",
-    "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/package.json",
-    "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/providers/data/amazon-bedrock.json",
-    "node_modules/@earendil-works/pi-coding-agent/node_modules/typebox/build/value/shared/union_priority_sort.mjs"
-  ];
+  ], runtimeRoots = [resolve(standaloneBase, "frontend"), standaloneBase];
   if (!candidates.some((candidate) => existsSync2(candidate)))
     throw Error(`Missing standalone server: ${candidates.join(", ")}`);
-  for (let file of requiredRuntimeFiles)
-    if (!runtimeRoots.some((root) => existsSync2(resolve(root, file))))
-      throw Error(`Missing standalone runtime dependency: ${file}`);
   runtimeRoot = runtimeRoots.find((root) => existsSync2(resolve(root, "server.js"))), unsafeRuntimeLinks = runtimeRoot ? symlinksUnder(runtimeRoot).filter((link) => {
     if (isAbsolute(readlinkSync(link)) || !existsSync2(link))
       return !0;
@@ -100,23 +86,8 @@ var init_assert_standalone_build = __esm(() => {
   }) : [];
   if (unsafeRuntimeLinks.length > 0)
     throw Error(`Unsafe standalone runtime links: ${unsafeRuntimeLinks.join(", ")}`);
-  tracedPackageDirectory = runtimeRoot ? resolve(runtimeRoot, ".next/node_modules/@earendil-works") : void 0, danglingTracedPackages = tracedPackageDirectory ? existsSync2(tracedPackageDirectory) ? readdirSync(tracedPackageDirectory).map((entry) => resolve(tracedPackageDirectory, entry)).filter((entry) => lstatSync(entry).isSymbolicLink() && !existsSync2(entry)) : [] : [];
-  if (danglingTracedPackages.length > 0)
-    throw Error(`Dangling traced runtime packages: ${danglingTracedPackages.join(", ")}`);
-  piCodingAgentRoot = runtimeRoot ? resolve(runtimeRoot, "node_modules/@earendil-works/pi-coding-agent") : null, piAiRoot = piCodingAgentRoot ? resolve(piCodingAgentRoot, "node_modules/@earendil-works/pi-ai") : null, piRuntimeEntries = piCodingAgentRoot && piAiRoot ? [resolve(piCodingAgentRoot, "dist/index.js"), resolve(piAiRoot, "dist/index.js")] : [];
-  if (piRuntimeEntries.length !== 2 || piRuntimeEntries.some((entry) => !existsSync2(entry)))
-    throw Error("Missing packaged Pi runtime entrypoints");
-  for (let entry of piRuntimeEntries) {
-    let importCheck = spawnSync(process.execPath, ["--input-type=module", "--eval", `import(${JSON.stringify(pathToFileURL(entry).href)})`], { cwd: runtimeRoot, encoding: "utf8" });
-    if (importCheck.status !== 0)
-      throw Error(`Standalone Pi runtime entrypoint is not importable: ${importCheck.stderr || importCheck.stdout}`);
-  }
-  piAiManifestPath = resolve(realpathSync(piAiRoot), "package.json"), piAiManifest = JSON.parse(readFileSync2(piAiManifestPath, "utf8")), requireFromPiAi = createRequire(piAiManifestPath);
-  for (let dependency of Object.keys(piAiManifest.dependencies ?? {})) {
-    let resolvedDependency = realpathSync(requireFromPiAi.resolve(dependency)), runtimeRelativePath = relative(runtimeRoot, resolvedDependency);
-    if (runtimeRelativePath === ".." || runtimeRelativePath.startsWith(`..${sep}`) || isAbsolute(runtimeRelativePath))
-      throw Error(`Pi AI dependency escaped standalone runtime: ${dependency}`);
-  }
+  const duplicatedPi = filesUnder(standaloneBase).filter((file) => file.split(sep).join("/").endsWith("/node_modules/@earendil-works/pi-coding-agent/package.json"));
+  if (duplicatedPi.length) throw Error("Next standalone must use the dedicated agent runtime instead of shipping another Pi tree");
   unexpected = filesUnder(standaloneBase).filter((file) => !isRuntimeFile(file));
   if (unexpected.length > 0)
     throw Error(`Standalone build contains non-runtime files:
@@ -205,12 +176,12 @@ function sleep(ms) {
 function timeoutAfter(ms, message) {
   return new Promise((_, reject) => setTimeout(() => reject(Error(message)), ms));
 }
-function connectToTarget(webSocketDebuggerUrl) {
+function connectToTarget(webSocketDebuggerUrl, onEvent = () => {}) {
   let websocket = new WebSocket(webSocketDebuggerUrl), id = 0, pending = new Map;
   return websocket.addEventListener("message", (message) => {
     let data = JSON.parse(message.data);
-    if (!data.id || !pending.has(data.id))
-      return;
+    if (!data.id) return onEvent(data);
+    if (!pending.has(data.id)) return;
     let { resolve: resolve2, reject } = pending.get(data.id);
     if (pending.delete(data.id), data.error)
       reject(Error(JSON.stringify(data.error)));
@@ -243,16 +214,16 @@ async function debugPortFor(userDataDir) {
 }
 async function pageTarget(debugPort) {
   for (let attempt = 0;attempt < 100; attempt += 1) {
-    let target = (await fetch(`http://127.0.0.1:${debugPort}/json/list`).then((response) => response.json())).find((entry) => entry.type === "page" && entry.url.startsWith(baseUrl));
+    let target = (await fetch(`http://127.0.0.1:${debugPort}/json/list`).then((response) => response.json())).find((entry) => entry.type === "page" && (entry.url === "about:blank" || entry.url.startsWith(baseUrl)));
     if (target)
       return target;
     await sleep(50);
   }
   throw Error("Chrome page target did not appear");
 }
-async function waitForComplete(page) {
+async function waitForComplete(page, expectedUrl) {
   for (let attempt = 0;attempt < 100; attempt += 1) {
-    if ((await page.send("Runtime.evaluate", { returnByValue: !0, expression: "document.readyState" })).result.value === "complete")
+    if ((await page.send("Runtime.evaluate", { returnByValue: !0, expression: `location.origin === ${JSON.stringify(new URL(expectedUrl).origin)} && document.readyState` })).result.value === "complete")
       return;
     await sleep(50);
   }
@@ -268,6 +239,9 @@ async function pageMetrics(page) {
       return {
         nav: nav ? nav.toJSON() : null,
         paints,
+        appDocument: Boolean(document.querySelector('script[src*="/_next/static/"]')),
+        busyIndicators: document.querySelectorAll('[aria-busy="true"], [role="progressbar"]').length,
+        stateLabels: ["Offline", "Unavailable", "Connecting", "Loading", "No models available", "No models", "Disconnected", "Retry", "Try again", "Indisponível", "Carregando"].filter((label) => (document.body?.innerText ?? "").toLowerCase().includes(label.toLowerCase())),
         resources: resources.length,
         scripts: resources.filter((entry) => entry.initiatorType === "script").length,
         css: resources.filter((entry) => entry.initiatorType === "link" || entry.name.endsWith(".css")).length,
@@ -277,6 +251,9 @@ async function pageMetrics(page) {
     })()`
   }), performanceMetrics = await page.send("Performance.getMetrics"), metric = Object.fromEntries(performanceMetrics.metrics.map((entry) => [entry.name, entry.value])), value = evaluated.result.value;
   return {
+    appDocument: value.appDocument,
+    busyIndicators: value.busyIndicators,
+    stateLabels: value.stateLabels,
     dclMs: value.nav.domContentLoadedEventEnd,
     loadMs: value.nav.loadEventEnd,
     fcpMs: value.paints["first-contentful-paint"] || 0,
@@ -299,24 +276,97 @@ async function routeResult(route) {
     "--disable-dev-shm-usage",
     "--window-size=1440,1000",
     `--user-data-dir=${userDataDir}`,
-    `${baseUrl}${route.path}`
+    "about:blank"
   ], { stdio: ["ignore", "ignore", "ignore"] });
   try {
-    let debugPort = await debugPortFor(userDataDir), target = await pageTarget(debugPort), page = await connectToTarget(target.webSocketDebuggerUrl);
+    let status = null, frameId = null, exceptions = 0, consoleErrors = 0;
+    const exceptionSites = [], consoleCategories = new Set(), httpErrors = new Map();
+    let page, blockedNavigation = false;
+    const onEvent = (event) => {
+      if (event.method === "Fetch.requestPaused") {
+        const allowed = new URL(event.params.request.url).origin === new URL(baseUrl).origin;
+        if (!allowed) blockedNavigation = true;
+        void page.send(allowed ? "Fetch.continueRequest" : "Fetch.failRequest", {
+          requestId: event.params.requestId, ...(allowed ? {} : { errorReason: "BlockedByClient" })
+        }).catch(() => undefined);
+      }
+      if (event.method === "Network.responseReceived" && event.params.response.status >= 400) {
+        const failedUrl = new URL(event.params.response.url);
+        if (failedUrl.origin === new URL(baseUrl).origin) {
+          const route = failedUrl.pathname.split("/").slice(0, 4).join("/");
+          const label = `${event.params.response.status} ${route}`;
+          httpErrors.set(label, (httpErrors.get(label) ?? 0) + 1);
+        }
+      }
+      if (event.method === "Runtime.exceptionThrown") {
+        exceptions += 1;
+        const details = event.params.exceptionDetails;
+        const frame = details.stackTrace?.callFrames?.[0];
+        const name = /^[A-Za-z]+Error$/.test(details.exception?.className ?? "") ? details.exception.className : "JavaScriptError";
+        const source = (frame?.url ?? details.url ?? "").split("?")[0].split("/").at(-1);
+        if (exceptionSites.length < 5) exceptionSites.push(`${name} ${source || "inline"}:${(frame?.lineNumber ?? details.lineNumber ?? 0) + 1}:${(frame?.columnNumber ?? details.columnNumber ?? 0) + 1} ${diagnosticErrorCategory(details.exception?.description ?? details.text ?? "")}`);
+      }
+      if (event.method === "Runtime.consoleAPICalled" && event.params.type === "error") {
+        consoleErrors += 1;
+        const message = event.params.args.map((value) => typeof value.value === "string" ? value.value : value.description ?? "").join(" ");
+        consoleCategories.add(diagnosticErrorCategory(message));
+      }
+      if (event.method === "Network.responseReceived" && event.params.type === "Document" && event.params.frameId === frameId) status = event.params.response.status;
+    };
+    let debugPort = await debugPortFor(userDataDir), target = await pageTarget(debugPort);
+    page = await connectToTarget(target.webSocketDebuggerUrl, onEvent);
     try {
-      return await page.send("Performance.enable"), await waitForComplete(page), await sleep(100), { path: route.path, ...await pageMetrics(page), budget: route };
+      await page.send("Page.enable");
+      await page.send("Network.enable");
+      await page.send("Fetch.enable", { patterns: [{ resourceType: "Document", requestStage: "Request" }] });
+      await page.send("Runtime.enable");
+      await page.send("Performance.enable");
+      frameId = (await page.send("Page.getFrameTree")).frameTree.frame.id;
+      if (browserToken) {
+        const cookie = await page.send("Network.setCookie", {
+          name: "local_studio_token", value: browserToken, url: baseUrl,
+          path: "/", httpOnly: true, secure: new URL(baseUrl).protocol === "https:", sameSite: "Strict"
+        });
+        if (!cookie.success) throw Error("Unable to seed profiler authentication cookie");
+      }
+      const url = `${baseUrl}${route.path}`;
+      await page.send("Page.navigate", { url });
+      await waitForComplete(page, url).catch((error) => {
+        if (blockedNavigation) throw Error("Cross-origin document navigation blocked");
+        throw error;
+      });
+      await sleep(Math.min(10000, Math.max(0, Number(process.env.LOCAL_STUDIO_PERF_OBSERVE_MS) || 1500)));
+      return { path: route.path, status, exceptions, consoleErrors, exceptionSites, consoleCategories: [...consoleCategories], httpErrors: [...httpErrors.entries()], ...await pageMetrics(page), budget: route };
     } finally {
       page.close();
     }
   } finally {
-    child.kill("SIGTERM"), await sleep(100), rmSync(userDataDir, { recursive: !0, force: !0, maxRetries: 5, retryDelay: 50 });
+    child.kill("SIGTERM");
+    for (let attempt = 0; attempt < 40 && child.exitCode === null && child.signalCode === null; attempt += 1) await sleep(50);
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    for (let attempt = 0; attempt < 20 && child.exitCode === null && child.signalCode === null; attempt += 1) await sleep(50);
+    rmSync(userDataDir, { recursive: !0, force: !0, maxRetries: 10, retryDelay: 100 });
   }
+}
+function diagnosticErrorCategory(message) {
+  if (/Cannot access .+ before initialization/.test(message)) return "access-before-initialization";
+  if (/Cannot read properties of (undefined|null)/.test(message)) return "missing-object-property";
+  if (/Minified React error #[0-9]+/.test(message)) return message.match(/Minified React error #[0-9]+/)[0];
+  if (/fetch failed|Failed to fetch/i.test(message)) return "fetch-failure";
+  if (/404|not found/i.test(message)) return "not-found";
+  if (/timeout|timed out/i.test(message)) return "timeout";
+  return "unclassified-message-redacted";
 }
 function formatNumber(value) {
   return value.toFixed(1).padStart(6, " ");
 }
 function violations(result) {
   let out = [];
+  for (const [label, count] of result.httpErrors) out.push(`HTTP resource error: ${label} (${count})`);
+  if (result.status !== 200) out.push(`document HTTP ${result.status ?? "unobserved"}`);
+  if (!result.appDocument) out.push("application scripts absent");
+  if (result.exceptions) out.push(`uncaught JavaScript exceptions: ${result.exceptions} (${result.exceptionSites.join("; ")})`);
+  if (result.consoleErrors) out.push(`console errors: ${result.consoleErrors} (${result.consoleCategories.join(", ")})`);
   if (result.dclMs > result.budget.dclMs)
     out.push(`dcl ${result.dclMs.toFixed(1)}ms > ${result.budget.dclMs}ms`);
   if (result.fcpMs > result.budget.fcpMs)
@@ -331,7 +381,7 @@ function violations(result) {
     out.push(`heap ${result.heapMiB.toFixed(1)}MiB > ${result.budget.heapMiB}MiB`);
   return out;
 }
-var defaultChromePaths, chromePath, baseUrl, routeTimeoutMs, routes, failures;
+var defaultChromePaths, chromePath, baseUrl, routeTimeoutMs, routes, failures, browserToken;
 var init_browser_perf_audit = __esm(async () => {
   init_perf_routes();
   defaultChromePaths = [
@@ -344,17 +394,37 @@ var init_browser_perf_audit = __esm(async () => {
   if (!chromePath)
     console.error("Chrome executable not found. Set LOCAL_STUDIO_PERF_CHROME."), process.exit(1);
   baseUrl = (process.env.LOCAL_STUDIO_PERF_URL || "http://127.0.0.1:3000").replace(/\/+$/, ""), routeTimeoutMs = Math.max(5000, Number.parseInt(process.env.LOCAL_STUDIO_PERF_BROWSER_TIMEOUT_MS || "15000", 10)), routes = browserRoutes();
+  const tokenFile = process.env.LOCAL_STUDIO_PERF_TOKEN_FILE;
+  const targetUrl = new URL(baseUrl);
+  if (!["http:", "https:"].includes(targetUrl.protocol) || targetUrl.username || targetUrl.password || targetUrl.search || targetUrl.hash) throw Error("Profiler URL must be an HTTP origin without credentials or query parameters");
+  if (tokenFile && !["127.0.0.1", "localhost", "[::1]"].includes(targetUrl.hostname)) throw Error("Profiler authentication is restricted to loopback");
+  browserToken = tokenFile ? readFileSync3(tokenFile, "utf8").trim() : "";
+  if (tokenFile && !browserToken) throw Error("Profiler token file is empty");
+  const requestedRoutes = process.env.LOCAL_STUDIO_PERF_ROUTES?.split(",").map((value) => value.trim());
+  if (requestedRoutes) {
+    routes = requestedRoutes.map((value) => {
+      const requested = new URL(value, baseUrl);
+      const known = routes.find((route) => route.path === requested.pathname);
+      if (!known || requested.origin !== targetUrl.origin || requested.username || requested.password) throw Error("Profiler route selection contains an unknown or external route");
+      return { ...known, path: `${requested.pathname}${requested.search}${requested.hash}` };
+    });
+  }
   console.log(`Local Studio browser perf audit: ${baseUrl}`);
-  console.log("route              dcl    load     fcp    task    heap nodes  text res scripts css");
+  console.log("route              dcl    load     fcp    task    heap nodes  text res scripts css HTTP exceptions consoleErrors busy states");
   failures = [];
   for (let route of routes) {
-    let result = await Promise.race([
-      routeResult(route).catch((error) => {
-        throw Error(`${route.path}: ${error instanceof Error ? error.message : String(error)}`);
-      }),
-      timeoutAfter(routeTimeoutMs, `${route.path} timed out after ${routeTimeoutMs}ms`)
-    ]), bad = violations(result);
-    if (console.log(`${result.path.padEnd(16)} ${formatNumber(result.dclMs)}ms ${formatNumber(result.loadMs)}ms ${formatNumber(result.fcpMs)}ms ${formatNumber(result.taskMs)}ms ${formatNumber(result.heapMiB)}MiB ${String(result.nodes).padStart(5, " ")} ${String(result.textChars).padStart(5, " ")} ${String(result.resources).padStart(3, " ")} ${String(result.scripts).padStart(7, " ")} ${String(result.css).padStart(3, " ")}`), bad.length > 0)
+    let result;
+    try {
+      result = await Promise.race([
+        routeResult(route),
+        timeoutAfter(routeTimeoutMs, `route timed out after ${routeTimeoutMs}ms`)
+      ]);
+    } catch (error) {
+      failures.push(`${route.path}: ${error instanceof Error ? error.message : "profiling failed"}`);
+      continue;
+    }
+    const bad = violations(result);
+    if (console.log(`${result.path.padEnd(16)} ${formatNumber(result.dclMs)}ms ${formatNumber(result.loadMs)}ms ${formatNumber(result.fcpMs)}ms ${formatNumber(result.taskMs)}ms ${formatNumber(result.heapMiB)}MiB ${String(result.nodes).padStart(5, " ")} ${String(result.textChars).padStart(5, " ")} ${String(result.resources).padStart(3, " ")} ${String(result.scripts).padStart(7, " ")} ${String(result.css).padStart(3, " ")} ${result.status} ${result.exceptions} ${result.consoleErrors} ${result.busyIndicators} ${result.stateLabels.join("|") || "none"}`), bad.length > 0)
       failures.push(`${result.path}: ${bad.join(", ")}`);
   }
   if (failures.length > 0) {
@@ -523,7 +593,11 @@ var init_check_conventional_commits = __esm(() => {
     if (!range)
       fail("Usage: check-conventional-commits.mjs --message-file <path> | --range <base..head>");
     else {
-      let output2 = execFileSync2("git", ["log", "--format=%s", range], { encoding: "utf8" }).trim();
+      const excludeIndex = args.indexOf("--exclude-remote");
+      const remote = excludeIndex === -1 ? undefined : args[excludeIndex + 1];
+      if (excludeIndex !== -1 && !remote) throw Error("--exclude-remote requires a remote name");
+      const exclusions = remote ? ["--not", `--remotes=${remote}`] : [];
+      let output2 = execFileSync2("git", ["log", "--format=%s", range, ...exclusions], { encoding: "utf8" }).trim();
       (output2 ? output2.split(/\r?\n/) : []).forEach((subject, index) => validateSubject(subject, `commit ${index + 1}`));
     }
   }
@@ -534,18 +608,14 @@ Allowed types: ` + [...allowedTypes].join(", "));
 
 var exports_complete_standalone_build = {};
 import {
-  cpSync as cpSync2,
   existsSync as existsSync5,
-  lstatSync as lstatSync2,
   readdirSync as readdirSync4,
   readFileSync as readFileSync7,
   rmdirSync,
-  rmSync as rmSync3,
   statSync as statSync2,
-  symlinkSync,
   unlinkSync
 } from "node:fs";
-import { dirname as dirname2, relative as relative3, resolve as resolve2 } from "node:path";
+import { relative as relative3, resolve as resolve2 } from "node:path";
 function isRuntimeFile2(file2) {
   let path3 = relative3(standaloneBase2, file2).replaceAll("\\", "/");
   return [
@@ -582,47 +652,11 @@ function removeEmptyDirectories(directory) {
   if (directory !== standaloneBase2 && readdirSync4(directory).length === 0)
     rmdirSync(directory);
 }
-var projectRoot2, repoRoot, standaloneBase2, standaloneRoots, standaloneRoot, runtimeDependencyPaths, tracedPiPackageDirectory, unverified, pruned = 0;
+var projectRoot2, repoRoot, standaloneBase2, standaloneRoots, standaloneRoot, unverified, pruned = 0;
 var init_complete_standalone_build = __esm(() => {
   projectRoot2 = resolve2(import.meta.dirname, ".."), repoRoot = resolve2(projectRoot2, ".."), standaloneBase2 = resolve2(projectRoot2, ".next", "standalone"), standaloneRoots = [resolve2(standaloneBase2, "frontend"), standaloneBase2], standaloneRoot = standaloneRoots.find((root) => existsSync5(resolve2(root, "server.js")));
   if (!standaloneRoot)
     throw Error(`Missing standalone server under: ${standaloneBase2}`);
-  runtimeDependencyPaths = [
-    "node_modules/typebox",
-    "node_modules/@earendil-works/pi-coding-agent"
-  ];
-  for (let dependencyPath of runtimeDependencyPaths) {
-    let source = resolve2(projectRoot2, dependencyPath);
-    if (!existsSync5(source))
-      throw Error(`Missing runtime dependency source: ${dependencyPath}`);
-    let destination = resolve2(standaloneRoot, dependencyPath);
-    cpSync2(source, destination, { recursive: !0 });
-    let executableShimDirectories = readdirSync4(destination, {
-      recursive: !0,
-      withFileTypes: !0
-    }).filter((entry) => entry.isDirectory() && entry.name === ".bin").map((entry) => resolve2(entry.parentPath, entry.name));
-    for (let directory of executableShimDirectories)
-      rmSync3(directory, { recursive: !0, force: !0 });
-  }
-  tracedPiPackageDirectory = resolve2(standaloneRoot, ".next/node_modules/@earendil-works");
-  if (existsSync5(tracedPiPackageDirectory)) {
-    let packageTargets = new Map([
-      [
-        "pi-ai-",
-        resolve2(standaloneRoot, "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai")
-      ],
-      ["pi-coding-agent-", resolve2(standaloneRoot, "node_modules/@earendil-works/pi-coding-agent")]
-    ]);
-    for (let entry of readdirSync4(tracedPiPackageDirectory)) {
-      let target = [...packageTargets].find(([prefix]) => entry.startsWith(prefix))?.[1];
-      if (!target)
-        continue;
-      let link = resolve2(tracedPiPackageDirectory, entry);
-      if (!lstatSync2(link).isSymbolicLink())
-        throw Error(`Expected traced Pi package alias to be a symlink: ${link}`);
-      unlinkSync(link), symlinkSync(relative3(dirname2(link), target), link, "dir");
-    }
-  }
   unverified = [];
   for (let file2 of filesUnder2(standaloneBase2)) {
     if (isRuntimeFile2(file2))
@@ -639,7 +673,7 @@ var init_complete_standalone_build = __esm(() => {
 ${unverified.join(`
 `)}`);
   removeEmptyDirectories(standaloneBase2);
-  console.log(`  standalone repaired: +${runtimeDependencyPaths.length} runtime dependency trees, -${pruned} traced non-runtime files`);
+  console.log(`  standalone repaired: -${pruned} traced non-runtime files`);
 });
 
 var exports_controller_standards_audit = {};
@@ -1765,13 +1799,6 @@ async function afterPack(context) {
       "Re-run the build (run `npm run build` first if .next/standalone is absent)."
     ].join(`
   `));
-  let standaloneRoot = path.dirname(standaloneServer), missingRuntimeFile = [
-    path.join(standaloneRoot, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "index.js"),
-    path.join(standaloneRoot, "node_modules", "@earendil-works", "pi-coding-agent", "node_modules", "@earendil-works", "pi-ai", "package.json"),
-    path.join(standaloneRoot, "node_modules", "@earendil-works", "pi-coding-agent", "node_modules", "@earendil-works", "pi-ai", "dist", "providers", "data", "amazon-bedrock.json")
-  ].find((file) => !existsSync(file));
-  if (missingRuntimeFile)
-    throw Error(`Packaged app is missing a Pi runtime dependency: ${missingRuntimeFile}`);
   let agentRuntimeRoot = path.join(resourcesDir, "app", "agent-runtime"), agentRuntime = path.join(agentRuntimeRoot, "standalone.mjs"), missingAgentRuntimeFile = [
     agentRuntime,
     path.join(agentRuntimeRoot, "node_modules", "playwright-core", "package.json"),
@@ -1809,26 +1836,13 @@ async function afterPack(context) {
     if (!existsSync(helperExecutable))
       throw Error(`Packaged app is missing its Pi helper executable: ${helperExecutable}`);
   }
-  let packagedPiCli = path.join(resourcesDir, "app", "frontend", ".next", "standalone", "frontend", "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js");
+  let packagedPiCli = path.join(agentRuntimeRoot, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js");
   if (!existsSync(packagedPiCli))
     throw Error(`Packaged app is missing its Pi CLI: ${packagedPiCli}`);
   console.log(`  afterPack: embedded frontend and agent runtime present (${electronPlatformName})`);
 }
 
 
-//
-// Remote access over the tailnet.
-//
-// `tailscale serve` publishes a loopback server to the owner's OWN tailnet and
-// nowhere else — it is not `funnel`, which is the public one and is never used
-// here. Tailnet membership is therefore the outer boundary.
-//
-// The token is the inner one, and it is not redundant: the desktop build answers
-// loopback requests unauthenticated on the assumption that loopback is the only
-// way in, and serve breaks exactly that assumption by connecting over loopback
-// itself. Creating the token file is what flips the frontend to demanding it —
-// see frontend/desktop/logic/frontend-token.ts.
-//
 async function remoteAccess(args3 = process.argv.slice(2)) {
   let os5 = await import("node:os");
   let fs5 = await import("node:fs");
@@ -1852,11 +1866,6 @@ async function remoteAccess(args3 = process.argv.slice(2)) {
     return;
   }
 
-  //
-  // Defaults to the port the app persisted for itself. Passing the wrong one is
-  // the difference between a working phone and a permanent 502, and the app
-  // already writes the right answer down.
-  //
   let port = valueAfter(args3, "--port");
   if (!port) {
     try {
@@ -2006,27 +2015,13 @@ function prePush() {
   let remote = process.argv[2], url = process.argv[3], updates = readFileSync17(0, "utf8").trim();
   for (let update of updates ? updates.split(`
 `) : []) {
-    let [localRef, localSha, remoteRef, remoteSha] = update.trim().split(/\s+/);
+    let [localRef, localSha, remoteRef] = update.trim().split(/\s+/);
     if (["refs/heads/main", "refs/heads/dev"].includes(remoteRef))
       throw Error(`pre-push: direct pushes to ${remoteRef} are blocked; merge through GitHub`);
-    if (/^0{40}$/.test(localSha))
-      continue;
-    let range2;
-    if (/^0{40}$/.test(remoteSha)) {
-      let defaultRef;
-      try {
-        defaultRef = git(["symbolic-ref", "--quiet", "--short", `refs/remotes/${remote}/HEAD`]);
-      } catch {
-        defaultRef = `${remote}/main`;
-      }
-      try {
-        range2 = `${git(["merge-base", defaultRef, localSha])}..${localSha}`;
-      } catch {
-        range2 = localSha;
-      }
-    } else
-      range2 = `${remoteSha}..${localSha}`;
-    console.log(`Checking conventional commits for ${localRef} -> ${remote}/${remoteRef} (${url})`), run3(process.execPath, [path11.join(root5, "scripts/project.mjs"), "check-commits", "--range", range2]);
+    if (/^0{40}$/.test(localSha)) continue;
+    git(["remote", "get-url", remote]);
+    console.log(`Checking outgoing conventional commits for ${localRef} -> ${remote}/${remoteRef} (${url})`);
+    run3(process.execPath, [path11.join(root5, "scripts/project.mjs"), "check-commits", "--range", localSha, "--exclude-remote", remote]);
   }
   run3("npm", ["run", "check:static"], path11.join(root5, "frontend")), run3("npm", ["run", "check:cleanup"], path11.join(root5, "frontend")), run3(process.execPath, [path11.join(root5, "scripts/project.mjs"), "assert-standalone"]);
 }

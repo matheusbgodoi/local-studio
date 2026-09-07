@@ -1,11 +1,4 @@
-//
-// What the agent claims, and what the runtime is willing to believe.
-//
-// "Done" is a candidate for validation and nothing more. A task succeeds when
-// every acceptance criterion carries evidence — the runtime reads the markers
-// out of the turn's final text and gates on the criteria, not on the word.
-//
-
+import { criterionIsSatisfied, acceptanceReviewReason } from "../../../../shared/agent/acceptance";
 import type { AcceptanceCriterion } from "./contract";
 
 export type TurnReport = {
@@ -59,38 +52,38 @@ export function applyEvidence(
   acceptance: readonly AcceptanceCriterion[],
   report: TurnReport,
 ): AcceptanceOutcome {
-  const byId = new Map(report.evidence.map((entry) => [entry.criterionId, entry.evidence] as const));
+  const byId = new Map(
+    report.evidence.map((entry) => [entry.criterionId, entry.evidence] as const),
+  );
   const newlySatisfied: string[] = [];
   const next = acceptance.map((criterion) => {
     const evidence = byId.get(criterion.id);
-    if (criterion.satisfied || evidence === undefined) return criterion;
-    newlySatisfied.push(criterion.id);
-    return { ...criterion, satisfied: true, evidence };
+    if (criterionIsSatisfied(criterion) || evidence === undefined) return criterion;
+    if (criterionIsSatisfied({ ...criterion, satisfied: true, evidenceSource: "model_report" }))
+      newlySatisfied.push(criterion.id);
+    return {
+      ...criterion,
+      satisfied: criterionIsSatisfied({
+        ...criterion,
+        satisfied: true,
+        evidenceSource: "model_report",
+      }),
+      evidence,
+      evidenceSource: "model_report" as const,
+    };
   });
-  const outstanding = next.filter((criterion) => !criterion.satisfied).map((criterion) => criterion.id);
-  //
-  // A task that declares no criteria has nothing to prove, so the claim is the
-  // gate. Requiring evidence that was never asked for made such a task
-  // impossible to finish: it could not succeed, it drew no rejection either,
-  // and the stall detector eventually failed the whole Run over it.
-  //
+  const outstanding = next
+    .filter((criterion) => !criterionIsSatisfied(criterion))
+    .map((criterion) => criterion.id);
   const satisfied = next.length === 0 ? report.claimedComplete : outstanding.length === 0;
   return { acceptance: next, satisfied, newlySatisfied, outstanding };
 }
 
-//
-// A claim of completion with criteria still owed is not a failure of the run,
-// it is a rejected candidate: the attempt ends, the task stays RUNNING, and
-// the missing evidence is what the next attempt is told about.
-//
 export function acceptanceRejection(outcome: AcceptanceOutcome, report: TurnReport): string | null {
   if (!report.claimedComplete || outcome.satisfied) return null;
+  const review = acceptanceReviewReason(outcome.acceptance);
+  if (review) return review;
   if (outcome.acceptance.length === 0) return null;
-  //
-  // Say exactly what is missing and exactly how to supply it. A gate that
-  // only announces a refusal invites the same refusal next turn, which the
-  // stall detector would then read as no progress.
-  //
   const lines = outcome.outstanding.map((id) => `TASK_EVIDENCE ${id}: <what proves it>`);
   return `claimed complete with unmet acceptance criteria: ${outcome.outstanding.join(", ")}. Emit one line per criterion, exactly: ${lines.join(" | ")}`;
 }

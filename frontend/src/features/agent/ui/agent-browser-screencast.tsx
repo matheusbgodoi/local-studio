@@ -1,20 +1,10 @@
 "use client";
 
+import { browserSessionPath } from "@shared/agent/browser-session";
 import { effectTimeout, type EffectTimer } from "@/lib/effect-timers";
 
-/**
- * Live surface for the agent browser pane: renders the server-side headless
- * Chromium (features/agent/browser-host) as a CDP screencast and forwards
- * pointer/keyboard/wheel input back to it. The user and the agent are looking
- * at — and driving — the same browser.
- *
- * Transport: polls /api/agent/browser/frame (~10fps) for the latest JPEG +
- * nav state — Next's standalone server buffers locally-built SSE streams, and
- * polling also survives a buffering proxy / Cloudflare for remote deploys.
- * Input POSTs to /api/agent/browser/input, viewport sync to .../viewport.
- */
-
 import {
+  useCallback,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -37,29 +27,40 @@ type FramePayload = {
 };
 
 type Props = {
-  /** Desired URL from the address bar; navigated server-side when it diverges. */
+  sessionId?: string;
+
   url: string;
   onState: (state: BrowserPaneState) => void;
-  /** Called once when the host reports no Chromium — the pane should fall back to reading mode. */
+
   onUnavailable: (error: string) => void;
-  /** Frame polling pauses entirely while the surface is hidden. */
+
   visible?: boolean;
 };
 
 const VIEWPORT_MIN = { width: 320, height: 240 };
 const VIEWPORT_MAX = { width: 1920, height: 1200 };
-const POLL_INTERVAL_MS = 110; // ~9fps
+const POLL_INTERVAL_MS = 110;
 const MOVE_THROTTLE_MS = 33;
 
-function postBrowser(path: string, body: unknown): void {
-  void fetch(`/api/agent/browser/${path}`, {
+function postBrowser(path: string, body: unknown, sessionId?: string): void {
+  void fetch(browserSessionPath(`/api/agent/browser/${path}`, sessionId), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   }).catch(() => undefined);
 }
 
-export function ScreencastSurface({ url, onState, onUnavailable, visible = true }: Props) {
+export function ScreencastSurface({
+  sessionId,
+  url,
+  onState,
+  onUnavailable,
+  visible = true,
+}: Props) {
+  const postScopedBrowser = useCallback(
+    (path: string, body: unknown) => postBrowser(path, body, sessionId),
+    [sessionId],
+  );
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
   const [frameSrc, setFrameSrc] = useState<string | null>(null);
   const [navError, setNavError] = useState<string | null>(null);
@@ -69,18 +70,11 @@ export function ScreencastSurface({ url, onState, onUnavailable, visible = true 
   const onStateRef = useRef(onState);
   const onUnavailableRef = useRef(onUnavailable);
 
-  // Mirror the latest callbacks into refs in the commit phase (never during
-  // render), so the long-lived poll loop always calls the current handlers
-  // without restarting.
   useMountSubscription(() => {
     onStateRef.current = onState;
     onUnavailableRef.current = onUnavailable;
   }, [onState, onUnavailable]);
 
-  // ── Frame poll loop: sequential (no overlap), backs off on transient error,
-  // surfaces 503 once as unavailable. Pauses while the pane is hidden (panel
-  // collapsed) and idles at 1s while the document itself is hidden, so a
-  // background browser tab doesn't burn ~9 fetches+JPEG decodes per second. ──
   useMountSubscription(() => {
     if (!visible) return;
     let disposed = false;
@@ -93,11 +87,13 @@ export function ScreencastSurface({ url, onState, onUnavailable, visible = true 
         return;
       }
       try {
-        const response = await fetch("/api/agent/browser/frame", { cache: "no-store" });
+        const response = await fetch(browserSessionPath("/api/agent/browser/frame", sessionId), {
+          cache: "no-store",
+        });
         if (response.status === 503) {
           const payload = (await response.json().catch(() => null)) as FramePayload | null;
           onUnavailableRef.current(payload?.error || "Browser unavailable");
-          return; // stop polling; pane switches to reading mode
+          return;
         }
         const payload = (await response.json()) as FramePayload;
         if (!disposed && payload.ok && payload.data) {
@@ -110,9 +106,7 @@ export function ScreencastSurface({ url, onState, onUnavailable, visible = true 
             canGoForward: payload.data.canGoForward,
           });
         }
-      } catch {
-        // transient — keep polling
-      }
+      } catch {}
       if (!disposed) timer = effectTimeout(() => void tick(), POLL_INTERVAL_MS);
     };
 
@@ -121,15 +115,13 @@ export function ScreencastSurface({ url, onState, onUnavailable, visible = true 
       disposed = true;
       if (timer) timer.cancel();
     };
-  }, [visible]);
+  }, [visible, sessionId]);
 
-  // ── Address-bar navigation: navigate server-side when the desired URL
-  // diverges from what the host last reported ────────────────────────────
   useMountSubscription(() => {
     const target = url.trim();
     if (!target || target === serverUrlRef.current) return;
     let cancelled = false;
-    void fetch("/api/agent/browser/navigate", {
+    void fetch(browserSessionPath("/api/agent/browser/navigate", sessionId), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url: target }),
@@ -147,9 +139,8 @@ export function ScreencastSurface({ url, onState, onUnavailable, visible = true 
     return () => {
       cancelled = true;
     };
-  }, [url]);
+  }, [url, sessionId]);
 
-  // ── Viewport sync: match the headless viewport to the pane size ────────
   useMountSubscription(() => {
     if (!container) return;
     let timer: EffectTimer | null = null;
@@ -163,7 +154,7 @@ export function ScreencastSurface({ url, onState, onUnavailable, visible = true 
       );
       if (width === viewportRef.current.width && height === viewportRef.current.height) return;
       viewportRef.current = { width, height };
-      postBrowser("viewport", { width, height });
+      postScopedBrowser("viewport", { width, height });
     };
     const observer = new ResizeObserver(() => {
       if (timer) timer.cancel();
@@ -175,9 +166,8 @@ export function ScreencastSurface({ url, onState, onUnavailable, visible = true 
       if (timer) timer.cancel();
       observer.disconnect();
     };
-  }, [container]);
+  }, [container, postScopedBrowser]);
 
-  // ── Input forwarding ────────────────────────────────────────────────────
   const toViewport = (event: { clientX: number; clientY: number }) => {
     const rect = container?.getBoundingClientRect();
     if (!rect || rect.width === 0 || rect.height === 0) return { x: 0, y: 0 };
@@ -194,7 +184,7 @@ export function ScreencastSurface({ url, onState, onUnavailable, visible = true 
     container?.focus();
     event.currentTarget.setPointerCapture(event.pointerId);
     const { x, y } = toViewport(event);
-    postBrowser("input", {
+    postScopedBrowser("input", {
       kind: "mouse",
       type: "down",
       x,
@@ -206,7 +196,7 @@ export function ScreencastSurface({ url, onState, onUnavailable, visible = true 
 
   const handlePointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
     const { x, y } = toViewport(event);
-    postBrowser("input", {
+    postScopedBrowser("input", {
       kind: "mouse",
       type: "up",
       x,
@@ -221,18 +211,18 @@ export function ScreencastSurface({ url, onState, onUnavailable, visible = true 
     if (now - lastMoveAtRef.current < MOVE_THROTTLE_MS) return;
     lastMoveAtRef.current = now;
     const { x, y } = toViewport(event);
-    postBrowser("input", { kind: "mouse", type: "move", x, y });
+    postScopedBrowser("input", { kind: "mouse", type: "move", x, y });
   };
 
   const handleWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
     const { x, y } = toViewport(event);
-    postBrowser("input", { kind: "wheel", x, y, deltaX: event.deltaX, deltaY: event.deltaY });
+    postScopedBrowser("input", { kind: "wheel", x, y, deltaX: event.deltaX, deltaY: event.deltaY });
   };
 
   const handleKey = (type: "down" | "up") => (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.metaKey) return;
     event.preventDefault();
-    postBrowser("input", { kind: "key", type, key: event.key, code: event.code });
+    postScopedBrowser("input", { kind: "key", type, key: event.key, code: event.code });
   };
 
   return (

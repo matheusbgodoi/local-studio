@@ -1,27 +1,13 @@
-//
-// The tool surface the served model drives the runtime through.
-//
-// Small on purpose. Four tools cover every structural transition, and each one
-// is a proposal the runtime validates before anything is persisted. There is
-// no tool that writes a row, sets a status or invents an id: those stay the
-// runtime's, which is what keeps a confused or adversarial model unable to
-// corrupt a Run.
-//
-// Routing is native tool-calling, not a keyword classifier. The model is told
-// the rule in the system prompt and decides for itself whether a request is a
-// question or a piece of durable work.
-//
-
+import { Schema } from "effect";
+import { ProposedAcceptanceSchema } from "../../../../shared/agent/operational-check";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { agenticControlHost } from "./control-host";
 import { validateProgress, validateProposal } from "./control-plane";
 import { createToolInterceptor } from "./tool-interceptor";
+import type { ExecutionPolicy } from "../../../../shared/agent/execution-policy";
 
 type ToolSchema = Parameters<ExtensionAPI["registerTool"]>[0]["parameters"];
 
-// TypeBox's Type.Unsafe(schema) is `{ ...schema, "~unsafe": null }`. Passing
-// JSON Schema through this way is what connector-session-tools already does,
-// and it keeps typebox out of this package.
 const schema = (value: Record<string, unknown>): ToolSchema =>
   ({ ...value, "~unsafe": null }) as unknown as ToolSchema;
 
@@ -40,9 +26,9 @@ const TASK_ITEM = {
     },
     acceptance: {
       type: "array",
-      items: { type: "string" },
+      items: Schema.toJsonSchemaDocument(ProposedAcceptanceSchema).schema,
       description:
-        "What observable evidence would prove this task done. One entry per check, stated so it can be verified by running something.",
+        "Assertions are model reports. Use {description, check:{kind:command, command, cwd}} for an exact command with exit code zero, or {description, check:{kind:file, path, sha256}} for exact bytes. Paths are workspace-relative; command cwd must be dot, with directory changes included in the command itself. These are model-declared operational checks, not independent proof of the goal.",
     },
   },
 } as const;
@@ -65,22 +51,17 @@ export const AGENTIC_ROUTING_INSTRUCTIONS = [
   "Durable work runtime:",
   "- When a request is substantial multi-step work that should survive this conversation — building, refactoring, migrating, investigating across many steps — call `plan_agentic_run` FIRST, with a plan, and then carry it out.",
   "- When a request is a question, an explanation, a lookup or a single small edit, just answer. Do NOT create a run for it.",
-  "- Inside a run, report through `report_task_progress` rather than by describing progress in prose. State the evidence that proves each acceptance criterion — the command you ran and what it printed.",
-  "- A task is finished when its acceptance criteria are met, not when you feel done. The runtime enforces that.",
+  "- Inside a run, report through `report_task_progress` rather than by describing progress in prose. Report what you observed; prose is model-reported evidence, never execution proof.",
+  "- Execute exact declared commands through bash; for file SHA-256 checks call verify_file_criterion with the criterion id. Executable criteria require runtime observations matching their declared specifications. Assertions remain model-reported; a passing model-declared check is not independent verification of the goal.",
   "- If the approach is not working, call `revise_agentic_plan` with what you learned instead of repeating the same attempt.",
 ].join("\n");
 
-export function createAgenticControlExtension(getSessionId: () => string | null) {
+export function createAgenticControlExtension(
+  getSessionId: () => string | null,
+  getModelId: () => string | null,
+  getExecutionPolicy: () => ExecutionPolicy,
+) {
   return (pi: ExtensionAPI): void => {
-    //
-    // The rule reaches the model as part of its system prompt, so the decision
-    // is native tool-calling rather than a classifier bolted on the outside.
-    //
-    //
-    // Large outputs and side effects are intercepted on the same session the
-    // tools live on, and both hooks stand down when this conversation is not
-    // driving a Run.
-    //
     createToolInterceptor({
       store: () => agenticControlHost()?.store ?? null,
       activeRun: () => {
@@ -135,7 +116,7 @@ export function createAgenticControlExtension(getSessionId: () => string | null)
         if (!validated.ok)
           return text(`The plan was rejected: ${validated.reason}. Propose a corrected plan.`);
 
-        const modelId = ctx.model?.id;
+        const modelId = getModelId();
         if (!modelId) return text("No model is selected; continue without a run.");
 
         const started = await host.startRun({
@@ -144,6 +125,7 @@ export function createAgenticControlExtension(getSessionId: () => string | null)
           sessionId,
           piSessionId,
           cwd: ctx.cwd,
+          executionPolicy: getExecutionPolicy(),
         });
         const lines = started.tasks.map(
           (task) =>
@@ -212,7 +194,7 @@ export function createAgenticControlExtension(getSessionId: () => string | null)
       name: "report_task_progress",
       label: "Report task progress",
       description:
-        "Report progress on a task of the run this conversation is driving. Supply the evidence that proves each acceptance criterion — the command you ran and what it printed. Say complete only when you believe every criterion is met; the runtime checks. Use blocked when you cannot proceed, and needsUser only when a human decision, credential or permission is genuinely required.",
+        "Report progress on a task of the run this conversation is driving. Supply your report for each acceptance criterion — the command you ran and what it printed. Reports are not independently verified. Command/file/artifact criteria require independent verification; model reports cannot satisfy them. Say complete only when you believe every criterion is met. Use blocked when you cannot proceed, and needsUser only when a human decision, credential or permission is genuinely required.",
       promptSnippet: "report_task_progress — record evidence against a task's acceptance criteria",
       parameters: schema({
         type: "object",
@@ -258,6 +240,7 @@ export function createAgenticControlExtension(getSessionId: () => string | null)
           report: validated as Exclude<typeof validated, { ok: false }>,
         });
         if (!outcome.ok) return text(`Rejected: ${outcome.reason}`);
+        if (outcome.reviewReason) return text(`Review required. ${outcome.reviewReason}`);
         if (outcome.unknownCriteria.length > 0) {
           return text(
             `Recorded, but these criterion ids are not on that task: ${outcome.unknownCriteria.join(", ")}. Outstanding: ${outcome.outstanding.join(", ") || "none"}.`,
@@ -266,16 +249,12 @@ export function createAgenticControlExtension(getSessionId: () => string | null)
         if (!outcome.satisfied) {
           return text(`Recorded. Still outstanding: ${outcome.outstanding.join(", ")}.`);
         }
-        //
-        // Say what actually moved. The model needs to see the plan advance
-        // while it is still working, or it will conclude the gate is stuck.
-        //
         const unblocked = outcome.unblocked ?? [];
         return text(
           [
             outcome.settled
-              ? "Recorded. Every criterion is satisfied, so the runtime has marked this task complete."
-              : "Recorded. Every acceptance criterion on this task is now satisfied.",
+              ? "Recorded as model-reported completion, not independently verified."
+              : "Recorded as model-reported acceptance, not independently verified.",
             unblocked.length > 0
               ? `Now ready to start: ${unblocked.join(", ")}.`
               : "Nothing else became ready; check the plan for what remains.",

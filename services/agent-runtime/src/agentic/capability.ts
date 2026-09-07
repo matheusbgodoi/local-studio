@@ -1,14 +1,3 @@
-//
-// The model capability contract the durable runtime consumes.
-//
-// Everything the scheduler and the context budget need to know about the
-// serving model is read from the wire record the gateway publishes
-// (`/v1/models` -> `AgentModel`). No alias, window size or inference strategy
-// is named here: a 32K model, a 176128 model and a future 1M model differ only
-// in the numbers this record carries, and speculative decoding (MTP, DFlash,
-// ngram) is invisible to a token budget.
-//
-
 import type { AgentModel } from "../../../../shared/agent/models";
 
 export type AgenticCapability = {
@@ -65,11 +54,6 @@ export function resolveAgenticCapability(model: AgentModel): AgenticCapability {
   };
 }
 
-//
-// The window the live session reports outranks the catalogue: a backend that
-// was restarted with a different `-c` is the authority on its own window, and
-// the budget must follow it inside one Run without a redeploy.
-//
 export function withRuntimeContextWindow(
   capability: AgenticCapability,
   runtimeContextWindow: number | null | undefined,

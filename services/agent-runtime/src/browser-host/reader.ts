@@ -12,6 +12,7 @@ import { request as httpRequest, type RequestOptions } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { sanitizePublicBrowserUrl } from "../../../../shared/agent/sanitize-embedded-browser-url";
 import { networkService } from "../network";
+import { executionNetworkPolicy } from "../network/execution-scope";
 
 const MAX_BYTES = 512 * 1024;
 const FETCH_TIMEOUT_MS = 12_000;
@@ -175,11 +176,7 @@ function normalizeResolvedAddress(input: ResolvedHostInput): ResolvedHostAddress
 }
 
 function pinnedLookup(address: ResolvedHostAddress): RequestOptions["lookup"] {
-  return ((
-    _hostname: string,
-    lookupOptions: unknown,
-    callback: (...args: unknown[]) => void,
-  ) => {
+  return ((_hostname: string, lookupOptions: unknown, callback: (...args: unknown[]) => void) => {
     const wantsAll = Boolean((lookupOptions as { all?: boolean } | undefined)?.all);
     if (wantsAll) callback(null, [address]);
     else callback(null, address.address, address.family);
@@ -192,8 +189,9 @@ function requestBoundedUrl(url: string, address: ResolvedHostAddress): Promise<B
   const parsed = new URL(url);
   const request = parsed.protocol === "https:" ? httpsRequest : httpRequest;
   const network = networkService();
-  const protectionOn = network.protectionDemanded();
-  if (protectionOn && !network.mayEgress()) {
+  const policy = executionNetworkPolicy();
+  const protectionOn = policy ? policy === "vpn_protected" : network.protectionDemanded();
+  if (protectionOn && !network.mayEgress(policy)) {
     //
     // Refused rather than attempted. This path runs inside the runtime process,
     // outside the jail, so nothing in the kernel would stop it from reaching the
@@ -201,7 +199,7 @@ function requestBoundedUrl(url: string, address: ResolvedHostAddress): Promise<B
     //
     return Promise.reject(new Error("protected network is unavailable; the request was not sent"));
   }
-  const agents = network.httpAgents();
+  const agents = network.httpAgents(policy);
   if (protectionOn && !agents) {
     //
     // Protection is on and this runtime cannot divert an in-process socket, so

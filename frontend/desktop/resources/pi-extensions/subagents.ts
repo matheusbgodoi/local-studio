@@ -1,13 +1,3 @@
-// Subagent tool for Local Studio.
-//
-// Registers a `subagent` tool that spawns an independent child agent session
-// in the runtime (same project, own context) and returns its final report as
-// the tool result. Multiple calls in one turn run in parallel. The runtime
-// enforces a concurrency cap and forbids subagents from spawning their own.
-//
-// Calls proxy through the frontend like the connectors bridge, so this file
-// stays a plain pi extension with no runtime imports.
-
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 

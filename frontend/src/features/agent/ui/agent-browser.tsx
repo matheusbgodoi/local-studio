@@ -1,5 +1,6 @@
 "use client";
 
+import { browserSessionPath } from "@shared/agent/browser-session";
 import { useCallback, useState, type FormEvent } from "react";
 import { ArrowLeftIcon, ArrowRightIcon, CloseIcon, ReloadIcon } from "@/ui/icons";
 import { DEFAULT_BROWSER_URL } from "@/features/agent/tools/persistence";
@@ -17,17 +18,19 @@ import { LocalhostStartPage } from "@/features/agent/ui/agent-browser-start-page
 import { ReadingView, type ReadablePage } from "@/features/agent/ui/agent-browser-reading-view";
 
 type Props = {
+  sessionId?: string;
   url: string;
   inputValue: string;
   onInputChange: (value: string) => void;
   onNavigate: (value: string) => void;
   onLocationChange: (value: string) => void;
   onClose: () => void;
-  /** Screencast polling pauses while the hosting panel is hidden. */
+
   visible?: boolean;
 };
 
 export function AgentBrowser({
+  sessionId,
   url,
   inputValue,
   onInputChange,
@@ -91,13 +94,19 @@ export function AgentBrowser({
     [onLocationChange],
   );
   useBrowserLiveStateSync({
+    sessionId,
     enabled: showStartPage && visible,
     onLiveUrl: adoptLiveUrl,
   });
 
-  const postLiveVerb = useCallback((verb: "back" | "forward" | "reload") => {
-    void fetch(`/api/agent/browser/${verb}`, { method: "POST" }).catch(() => undefined);
-  }, []);
+  const postLiveVerb = useCallback(
+    (verb: "back" | "forward" | "reload") => {
+      void fetch(browserSessionPath(`/api/agent/browser/${verb}`, sessionId), {
+        method: "POST",
+      }).catch(() => undefined);
+    },
+    [sessionId],
+  );
   const handleReload = () => {
     if (showStartPage) {
       setLocalSites([]);
@@ -236,6 +245,7 @@ export function AgentBrowser({
           />
         ) : (
           <ScreencastSurface
+            sessionId={sessionId}
             url={url}
             visible={visible}
             onState={(state) => {

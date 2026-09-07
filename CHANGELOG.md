@@ -9,6 +9,30 @@ Versioning is `<upstream base>-local.<n>` — see
 
 ## Unreleased
 
+- The RTX box is now a configured compute host. Settings → System shows its
+  power state, resident model, GPU memory and last-seen time, read from the
+  control server that already ran on it, and offers a Power on button. Status
+  prefers the tailnet address and falls back to the LAN address exactly once,
+  for the evening the internet is down and the power is not. Waking cannot go
+  over the tailnet — a powered-off machine runs no tailnet — so it tries the
+  HTTP bridge first and a Wake-on-LAN magic packet second. See
+  [`docs/compute-hosts-and-wake.md`](docs/compute-hosts-and-wake.md).
+- Runs report the context of the agent actually carrying the run rather than
+  whichever agent sorted first, which had a three-agent run showing 0 while
+  another agent held 173.9K, and the token figure now includes cache reads —
+  the same run moved 4.74M, not the 255.1K it claimed.
+
+- A long conversation no longer dies at the context limit. Compaction used to
+  trigger at 91.8% of the model window, so the first request past it already
+  carried ~185K tokens, and the agent runtime never configured an HTTP
+  dispatcher, so those requests inherited a 300s idle timeout and failed as
+  `Request timed out` or `terminated` — errors that classify as retryable
+  rather than as overflow, so the turn was retried at the same size and then
+  ended. Compaction now gets room proportional to the model (22% of the window,
+  trigger at 78%), inference runs on a 30 minute idle timeout, and a turn that
+  still hits the wall compacts once and continues instead of stopping. See
+  [`docs/durable-agentic-runtime.md`](docs/durable-agentic-runtime.md) §6.
+
 ## v2.1.0-local.15 — 2026-08-26
 
 The owner app is now **CRIAs AI**, with the owner's green infinity mark and the

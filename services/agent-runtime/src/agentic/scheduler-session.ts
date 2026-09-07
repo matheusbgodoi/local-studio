@@ -1,11 +1,3 @@
-//
-// The one thing the scheduler needs from an inference backend.
-//
-// Deliberately narrow: a real pi session and a deterministic offline backend
-// both satisfy it, so the compaction and resume behaviour can be exercised
-// thousands of times without a GPU and then run unchanged against the card.
-//
-
 export type AgenticTurnUsage = {
   input: number;
   output: number;
@@ -14,15 +6,11 @@ export type AgenticTurnUsage = {
 
 export type AgenticContextReading = {
   tokens: number;
+  measured?: boolean;
   contextWindow: number;
 };
 
 export type AgenticInferenceSession = {
-  //
-  // A monotonic count of turns this session has actually run. Identifying a
-  // turn by its text discarded a genuinely new turn whenever a model repeated
-  // itself, which is exactly what a stuck agent does.
-  //
   turnId(): number;
   readContext(): Promise<AgenticContextReading>;
   prompt(text: string): Promise<void>;
@@ -36,7 +24,9 @@ export type AgenticInferenceSession = {
 export type CompactionOutcome = {
   tokensBefore: number;
   tokensAfter: number;
-  effective: boolean;
+  beforeMeasured: boolean;
+  afterMeasured: boolean;
+  effective: boolean | null;
   durationMs: number;
 };
 
@@ -49,10 +39,36 @@ export async function runCompaction(
   const before = await session.readContext();
   await session.compact(instructions);
   const after = await session.readContext();
+  const beforeMeasured = before.measured ?? before.tokens > 0;
+  const afterMeasured = after.measured ?? after.tokens > 0;
   return {
     tokensBefore: before.tokens,
     tokensAfter: after.tokens,
-    effective: after.tokens < before.tokens,
+    beforeMeasured,
+    afterMeasured,
+    effective: beforeMeasured && afterMeasured ? after.tokens < before.tokens : null,
     durationMs: Math.max(0, nowMs() - startedAtMs),
   };
+}
+
+export function resolveContextReading(
+  reportedTokens: number | null | undefined,
+  contextWindow: number,
+  estimate: () => number | null,
+  reportedIsMeasured = true,
+): AgenticContextReading {
+  if (typeof reportedTokens === "number" && Number.isFinite(reportedTokens) && reportedTokens > 0) {
+    return { tokens: Math.ceil(reportedTokens), contextWindow, measured: reportedIsMeasured };
+  }
+  const estimatedTokens = estimate();
+  if (
+    typeof estimatedTokens !== "number" ||
+    !Number.isFinite(estimatedTokens) ||
+    estimatedTokens <= 0
+  ) {
+    throw new Error(
+      "Active context usage is unavailable and its retained messages, system prompt and tool schemas could not be estimated. Reload the session before resuming the run.",
+    );
+  }
+  return { tokens: Math.ceil(estimatedTokens), contextWindow, measured: false };
 }

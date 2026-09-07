@@ -16,23 +16,12 @@ import {
 import { homedir } from "node:os";
 import path from "node:path";
 import readline from "node:readline";
-import {
-  getAgentDir,
-  SessionManager,
-  SettingsManager,
-} from "@earendil-works/pi-coding-agent";
+import { getAgentDir, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { resolveDataDir } from "./data-dir";
-import {
-  cleanSessionTitle,
-  sessionTitleFromUserPrompt,
-} from "../../../shared/agent/session-title";
+import { cleanSessionTitle, sessionTitleFromUserPrompt } from "../../../shared/agent/session-title";
 import { readSessionListMetadata } from "./session-metadata-store";
 import type { SessionSummary } from "../../../shared/agent/session-summary";
-import {
-  emptyUsageTotals,
-  readSessionUsageTotals,
-  type SessionUsageTotals,
-} from "./session-usage";
+import { emptyUsageTotals, readSessionUsageTotals, type SessionUsageTotals } from "./session-usage";
 export type { SessionSummary } from "../../../shared/agent/session-summary";
 
 export type SessionEvent = Record<string, unknown> & { type?: string };
@@ -74,11 +63,12 @@ export function encodeCwdForPi(cwd: string): string {
 export function configuredPiSessionDir(cwd: string): string | undefined {
   const envSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR?.trim();
   if (envSessionDir) {
-    const expanded = envSessionDir === "~"
-      ? homedir()
-      : envSessionDir.startsWith(`~${path.sep}`)
-        ? path.join(homedir(), envSessionDir.slice(2))
-        : envSessionDir;
+    const expanded =
+      envSessionDir === "~"
+        ? homedir()
+        : envSessionDir.startsWith(`~${path.sep}`)
+          ? path.join(homedir(), envSessionDir.slice(2))
+          : envSessionDir;
     return path.resolve(expanded);
   }
   return SettingsManager.create(cwd, getAgentDir()).getSessionDir();
@@ -153,7 +143,7 @@ type SummaryCacheEntry = {
   complete: boolean;
   core: Omit<
     SessionSummary,
-    "updatedAt" | "archived" | "archivedAt" | "parentSessionId" | "subagentName"
+    "updatedAt" | "archived" | "archivedAt" | "parentSessionId" | "subagentName" | "executionPolicy"
   > | null;
 };
 const summaryCache = new Map<string, SummaryCacheEntry>();
@@ -168,6 +158,7 @@ function summaryFromCore(core: SummaryCacheEntry["core"], mtime: Date): SessionS
     archivedAt: null,
     parentSessionId: null,
     subagentName: null,
+    executionPolicy: null,
   };
 }
 
@@ -250,10 +241,12 @@ function applySessionMetadata(
   const metadata = metadataFor(summary.id);
   return {
     ...summary,
+    modelId: metadata.modelId ?? summary.modelId,
     archived: metadata.archived,
     archivedAt: metadata.archivedAt,
     parentSessionId: metadata.parentSessionId,
     subagentName: metadata.subagentName,
+    executionPolicy: metadata.executionPolicy,
   };
 }
 
@@ -493,7 +486,8 @@ export function moveSessionToWorkspace(
   const targetDir = sessionsDirsForCwd(targetCwd)[0];
   if (!targetDir) throw new Error("the destination project has no session directory");
   const destination = path.join(targetDir, path.basename(source));
-  if (existsSync(destination)) throw new Error("the destination already has a session by that name");
+  if (existsSync(destination))
+    throw new Error("the destination already has a session by that name");
 
   const raw = readFileSync(source, "utf8");
   const newline = raw.indexOf("\n");
@@ -534,6 +528,7 @@ export type LoadSessionMeta = {
   modelId: string | null;
   startedAt: string | null;
   piSessionId: string | null;
+  executionPolicy: import("../../../shared/agent/execution-policy").ExecutionPolicy | null;
   // Lifetime spend for the whole rollout, not just the returned page. A tail
   // load only returns recent events, but what the session cost includes every
   // turn that compaction has since discarded.
@@ -571,10 +566,13 @@ function parseEvent(line: string): SessionEvent | null {
 function activeBranchEvents(filepath: string, events: SessionEvent[]): SessionEvent[] {
   try {
     const activeIds = new Set(
-      SessionManager.open(filepath).buildContextEntries().map((entry) => entry.id),
+      SessionManager.open(filepath)
+        .buildContextEntries()
+        .map((entry) => entry.id),
     );
     return events.filter(
-      (event) => event.type === "session" || (typeof event.id === "string" && activeIds.has(event.id)),
+      (event) =>
+        event.type === "session" || (typeof event.id === "string" && activeIds.has(event.id)),
     );
   } catch {
     return events;
@@ -690,6 +688,7 @@ async function readSessionHead(
     startedAt: null,
     usage: emptyUsageTotals(),
     piSessionId: null,
+    executionPolicy: null,
   };
   const stream = createReadStream(filepath, { encoding: "utf-8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
@@ -837,6 +836,9 @@ export async function loadSession(
       readSessionHead(filepath),
       readSessionUsageTotals(filepath),
     ]);
+    const stored = readSessionListMetadata()(sessionId);
+    meta.modelId = stored.modelId ?? meta.modelId;
+    meta.executionPolicy = stored.executionPolicy;
     meta.usage = usage;
     const hasHeader = events.some((event) => event.type === "session");
     return {

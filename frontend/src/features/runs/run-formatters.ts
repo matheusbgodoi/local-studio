@@ -66,11 +66,6 @@ export const humanStatus = (status: string): string =>
     .replace(/_/g, " ")
     .replace(/^./, (first) => first.toUpperCase());
 
-//
-// The timeline shows what the runtime did, never why it thought it. Every
-// event type it can render is named here, so an unknown one degrades to its
-// own label rather than leaking an internal payload.
-//
 const EVENT_LABELS: Record<string, string> = {
   RUN_CREATED: "Run created",
   RUN_COMPLETED: "Run completed",
@@ -83,7 +78,7 @@ const EVENT_LABELS: Record<string, string> = {
   TASK_STARTED: "Task attempt started",
   TASK_SUCCEEDED: "Task completed",
   TASK_WAITING_USER: "Waiting for you",
-  ACCEPTANCE_SATISFIED: "Acceptance criterion met",
+  ACCEPTANCE_SATISFIED: "Acceptance reported",
   ACCEPTANCE_REJECTED: "Completion rejected",
   AGENT_SPAWNED: "Agent created",
   AGENT_STARTED: "Agent started",

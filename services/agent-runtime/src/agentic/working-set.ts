@@ -1,15 +1,4 @@
-//
-// Working-set reconstruction.
-//
-// Compaction is not "clear everything" and it is not a three-thousand-token
-// souvenir. It rebuilds, from the durable store rather than from the messages
-// being discarded, the smallest context in which the UNFINISHED task can still
-// be finished: the goal, the plan revision, the task, its acceptance criteria,
-// the dependency outputs it actually needs, the decisions taken, the artifact
-// pointers, any tool call still awaiting its result, the unresolved errors and
-// the next action.
-//
-
+import { criterionIsSatisfied } from "../../../../shared/agent/acceptance";
 import type {
   AgenticArtifact,
   AgenticEvent,
@@ -77,6 +66,7 @@ export function buildWorkingSet(input: WorkingSetInput): AgenticWorkingSet {
     planRevision: input.run.planRevision,
     taskId: input.activeTask?.id ?? null,
     taskTitle: input.activeTask?.title ?? null,
+    taskDescription: input.activeTask?.description ?? null,
     acceptance: input.activeTask?.acceptance ?? [],
     dependencyOutputs,
     decisions,
@@ -90,18 +80,13 @@ export function buildWorkingSet(input: WorkingSetInput): AgenticWorkingSet {
 
 function nextActionFor(task: AgenticTask | null): string {
   if (!task) return "Select the next ready task from the plan.";
-  const outstanding = task.acceptance.filter((criterion) => !criterion.satisfied);
+  const outstanding = task.acceptance.filter((criterion) => !criterionIsSatisfied(criterion));
   if (outstanding.length === 0) {
     return `Confirm the acceptance evidence for "${task.title}" and report TASK_COMPLETE.`;
   }
   return `Continue "${task.title}" until this is satisfied: ${outstanding[0]?.description ?? ""}`;
 }
 
-//
-// The rendered working set is the resume prompt. It states the task, the
-// evidence still owed and the next action, so the model never has to infer
-// from a truncated transcript what it was in the middle of doing.
-//
 export function renderWorkingSet(workingSet: AgenticWorkingSet): string {
   const lines: string[] = [];
   lines.push(`GOAL: ${workingSet.goal}`);
@@ -109,12 +94,23 @@ export function renderWorkingSet(workingSet: AgenticWorkingSet): string {
   if (workingSet.taskTitle) {
     lines.push(`CURRENT TASK: ${workingSet.taskTitle}`);
   }
+  if (workingSet.taskDescription) {
+    lines.push(`TASK INSTRUCTIONS: ${workingSet.taskDescription}`);
+  }
   if (workingSet.acceptance.length > 0) {
     lines.push("ACCEPTANCE CRITERIA:");
     for (const criterion of workingSet.acceptance) {
-      const mark = criterion.satisfied ? "satisfied" : "outstanding";
+      const mark = criterionIsSatisfied(criterion)
+        ? criterion.evidenceSource === "runtime_observation"
+          ? "runtime-observed"
+          : "model-reported, not independently verified"
+        : "outstanding";
       const evidence = criterion.evidence ? ` — evidence: ${criterion.evidence}` : "";
       lines.push(`  - [${criterion.id}] ${criterion.description} (${mark})${evidence}`);
+      if (criterion.check)
+        lines.push(
+          `    Model-declared operational check: ${JSON.stringify(criterion.check)}. ${criterion.check.kind === "command" ? "Execute this exact command through bash." : "Call verify_file_criterion with this criterion id."}`,
+        );
     }
   }
   if (workingSet.dependencyOutputs.length > 0) {

@@ -1,3 +1,4 @@
+import { filterOmlxAgentCatalog } from "./omlx-agent-catalog";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
@@ -14,6 +15,7 @@ import {
   type ThinkingContractInput,
 } from "../../../shared/agent/models";
 import { AGENT_THINKING_LEVELS, type AgentThinkingLevel } from "../../../shared/agent/agent-turn";
+import { CONTROL_PLANE_TIMEOUT_MS } from "../../../shared/agent/context-headroom";
 import { resolveModelVision } from "../../../controller/contracts/model-capabilities";
 
 const PROVIDER_ID = "local-studio";
@@ -51,17 +53,6 @@ type PiProviderConfig = {
 
 type UserPiProviders = Record<string, PiProviderConfig>;
 
-/** Strip any prefixes this writer has already applied.
- *
- *  When PI_CODING_AGENT_DIR points at Local Studio's own data dir — which it
- *  does for the desktop app — the file we read here is the file we write. Every
- *  pass therefore re-prefixed providers that were already prefixed, so
- *  "vibeproxy-claude" became "user-pi-vibeproxy-claude", then
- *  "user-pi-user-pi-vibeproxy-claude", growing by one hop per launch. Observed
- *  in the wild at 26 nested hops and a 466 KB models.json.
- *
- *  Collapsing on read makes the merge idempotent and self-heals files that have
- *  already grown. */
 function baseProviderName(name: string): string {
   let base = name;
   while (base.startsWith(USER_PI_PREFIX)) base = base.slice(USER_PI_PREFIX.length);
@@ -79,11 +70,7 @@ async function loadUserPiProviders(): Promise<UserPiProviders> {
     const collapsed: UserPiProviders = {};
     for (const [name, config] of Object.entries(providers as UserPiProviders)) {
       const base = baseProviderName(name);
-      // Our own controller providers are regenerated from the live controller
-      // every pass; reading them back would duplicate them under a user-pi name
-      // the moment the controller went away. Test the COLLAPSED name — a prior
-      // pass has already produced "user-pi-local-studio" in the wild, which is
-      // our own provider wearing a user-pi hat.
+
       if (!base || base === PROVIDER_ID || base.startsWith(`${PROVIDER_ID}-`)) continue;
       collapsed[base] = config;
     }
@@ -142,17 +129,10 @@ function isInklingModelId(modelId: string): boolean {
   return modelId.toLowerCase().includes("inkling");
 }
 
-/** The physical checkpoint as its OWN controller names it.
- *
- *  `physicalModelId` is qualified with the provider for every controller after
- *  the first, exactly as `id` is, while the declaration table is keyed by the
- *  bare alias. This is the same unqualification `resolvePiModelSelection` does
- *  for a model id, applied to the grouping key. */
 function barePhysicalModelId(model: AgentModel): string {
   return resolvePiModelSelection(model.physicalModelId ?? "").modelId;
 }
 
-/** What a model row states about its thinking contract, server first. */
 function modelThinkingContract(model: AgentModel) {
   return resolveThinkingContract({
     modelId: model.rawId ?? model.id,
@@ -161,11 +141,8 @@ function modelThinkingContract(model: AgentModel) {
   });
 }
 
-/** One entry, so the picker renders a FIXED state instead of a ladder. */
 const NATIVE_ALWAYS_ON_THINKING_LEVELS: readonly AgentThinkingLevel[] = ["high"];
 
-/** Off / Low / Medium / XHigh — the only efforts the chat template accepts.
- *  Minimal, High and Max are deliberately absent, and XHigh is never Max. */
 const CHAT_TEMPLATE_THINKING_LEVELS: readonly AgentThinkingLevel[] = [
   "off",
   "low",
@@ -173,28 +150,17 @@ const CHAT_TEMPLATE_THINKING_LEVELS: readonly AgentThinkingLevel[] = [
   "xhigh",
 ];
 
-/**
- * The ladder an alias may offer.
- *
- * `source` is what the SERVER said about this row — its physical model and its
- * `nativeReasoning` flag. Passing it is what makes two aliases of one checkpoint
- * resolve to one ladder; omitting it falls back to the name table alone, which
- * is all a caller holding a bare id can do.
- */
 export function controllerModelThinkingLevels(
   reasoning: boolean,
   modelId = "",
   source: Omit<ThinkingContractInput, "modelId"> = {},
 ): AgentThinkingLevel[] {
   const contract = resolveThinkingContract({ ...source, modelId });
-  // Gated on `reasoning` because that IS the server's statement about the
-  // request contract: a checkpoint served with thinking off takes no effort.
+
   if (reasoning && contract === "chat-template-effort") {
     return [...CHAT_TEMPLATE_THINKING_LEVELS];
   }
-  // Deliberately NOT gated on `reasoning`: the gateway reports reasoning:false
-  // for this contract because it accepts no effort contract, which is a
-  // different statement from "does not think".
+
   if (contract === "native-always-on") {
     return [...NATIVE_ALWAYS_ON_THINKING_LEVELS];
   }
@@ -210,12 +176,14 @@ export type PiControllerModelsRequest = {
   url: string;
   apiKey?: string;
   name?: string;
+  modelNames?: Record<string, string>;
 };
 
 type PiControllerConfig = {
   url: string;
   apiKey: string;
   name?: string;
+  modelNames?: Record<string, string>;
 };
 
 type ControllerModels = {
@@ -226,6 +194,88 @@ type ControllerModels = {
 
 function controllersPath(agentDir: string): string {
   return path.join(agentDir, "controllers.json");
+}
+
+function modelCachePath(agentDir: string): string {
+  return path.join(agentDir, "controller-models.cache.json");
+}
+
+const OFFLINE_CONTROLLER_TIMEOUT_MS = 2_500;
+const OFFLINE_MEMORY_MS = 15 * 60_000;
+const offlineControllers = new Map<string, number>();
+let offlineControllersDir: string | null = null;
+
+function offlinePath(agentDir: string): string {
+  return path.join(agentDir, "controller-offline.json");
+}
+
+async function loadOfflineControllers(agentDir: string): Promise<void> {
+  offlineControllersDir = agentDir;
+  if (offlineControllers.size > 0) return;
+  try {
+    const parsed = JSON.parse(await readFile(offlinePath(agentDir), "utf-8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+    for (const [url, since] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof since === "number") offlineControllers.set(url, since);
+    }
+  } catch {}
+}
+
+function persistOfflineControllers(): void {
+  const agentDir = offlineControllersDir;
+  if (!agentDir) return;
+  void writeFile(
+    offlinePath(agentDir),
+    JSON.stringify(Object.fromEntries(offlineControllers)),
+    "utf-8",
+  ).catch(() => undefined);
+}
+
+function controllerTimeoutMs(url: string): number {
+  const since = offlineControllers.get(url);
+  if (since === undefined) return CONTROL_PLANE_TIMEOUT_MS;
+  if (Date.now() - since > OFFLINE_MEMORY_MS) {
+    offlineControllers.delete(url);
+    persistOfflineControllers();
+    return CONTROL_PLANE_TIMEOUT_MS;
+  }
+  return OFFLINE_CONTROLLER_TIMEOUT_MS;
+}
+
+function markControllerReachable(url: string): void {
+  if (offlineControllers.delete(url)) persistOfflineControllers();
+}
+
+function markControllerUnreachable(url: string): void {
+  if (offlineControllers.has(url)) return;
+  offlineControllers.set(url, Date.now());
+  persistOfflineControllers();
+}
+
+type ModelCache = Record<string, AgentModel[]>;
+
+async function readModelCache(agentDir: string): Promise<ModelCache> {
+  try {
+    const parsed = JSON.parse(await readFile(modelCachePath(agentDir), "utf-8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const cache: ModelCache = {};
+    for (const [url, models] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!Array.isArray(models)) continue;
+      cache[url] = models.filter((entry): entry is AgentModel =>
+        Boolean(entry && typeof entry === "object" && typeof (entry as AgentModel).id === "string"),
+      );
+    }
+    return cache;
+  } catch {
+    return {};
+  }
+}
+
+async function writeModelCache(agentDir: string, cache: ModelCache): Promise<void> {
+  try {
+    await writeFile(modelCachePath(agentDir), JSON.stringify(cache), "utf-8");
+    await chmod(modelCachePath(agentDir), 0o600).catch(() => undefined);
+  } catch {}
 }
 
 function controllerLabel(controller: PiControllerConfig, index: number): string {
@@ -260,10 +310,12 @@ function normalizeControllerInput(input: PiControllerModelsRequest): PiControlle
   if (!url) return null;
   const apiKey = input.apiKey?.trim() ?? "";
   const name = input.name?.trim();
+  const modelNames = input.modelNames;
   return {
     url,
     apiKey,
     ...(name ? { name } : {}),
+    ...(modelNames && Object.keys(modelNames).length > 0 ? { modelNames } : {}),
   };
 }
 
@@ -305,6 +357,9 @@ async function loadPersistedControllers(agentDir: string): Promise<PiControllerM
                 url: record.url,
                 ...(typeof record.apiKey === "string" ? { apiKey: record.apiKey } : {}),
                 ...(typeof record.name === "string" ? { name: record.name } : {}),
+                ...(record.modelNames && typeof record.modelNames === "object"
+                  ? { modelNames: record.modelNames as Record<string, string> }
+                  : {}),
               },
             ]
           : [];
@@ -330,49 +385,91 @@ async function fetchModelsFromController(
   const backendUrl = normalizeBackendUrl(controller.url);
   const headers: HeadersInit = { Accept: "application/json" };
   if (controller.apiKey) headers.Authorization = `Bearer ${controller.apiKey}`;
-  const response = await fetch(`${backendUrl}/v1/models`, { headers, cache: "no-store" });
+  let response: Response;
+  try {
+    response = await fetch(`${backendUrl}/v1/models`, {
+      headers,
+      cache: "no-store",
+      signal: AbortSignal.timeout(controllerTimeoutMs(backendUrl)),
+    });
+  } catch (error) {
+    markControllerUnreachable(backendUrl);
+    throw error;
+  }
   if (!response.ok) {
+    markControllerReachable(backendUrl);
     throw new Error(`${backendUrl}/v1/models failed with HTTP ${response.status}`);
   }
+  markControllerReachable(backendUrl);
   const payload = (await response.json()) as unknown;
   const providerId = providerIdForController(controller, index);
   const label = controllerLabel(controller, index);
-  const models = normalizeOpenAIModels(payload && typeof payload === "object" ? payload : {}).map(
-    (model) => ({
-      ...model,
-      reasoning: model.reasoning,
-      id: qualifyModelId(providerId, model.id),
-      physicalModelId: qualifyModelId(providerId, model.physicalModelId),
-      rawId: model.id,
-      providerId,
-      controllerUrl: backendUrl,
-      controllerName: label,
-      // The row is still unqualified here, so its `physicalModelId` is the bare
-      // alias the declaration table is keyed by.
-      thinkingLevels: controllerModelThinkingLevels(model.reasoning, model.rawId ?? model.id, {
-        physicalModelId: model.physicalModelId,
-        nativeReasoning: model.nativeReasoning,
-      }),
-      name: multipleControllers ? `${model.name} · ${label}` : model.name,
-    }),
+  const chatModels = await filterOmlxAgentCatalog(
+    normalizeOpenAIModels(payload && typeof payload === "object" ? payload : {}),
+    payload,
+    backendUrl,
+    headers,
   );
+  const models = chatModels.map((model) => ({
+    ...model,
+    reasoning: model.reasoning,
+    id: qualifyModelId(providerId, model.id),
+    physicalModelId: qualifyModelId(providerId, model.physicalModelId),
+    rawId: model.id,
+    providerId,
+    controllerUrl: backendUrl,
+    controllerName: label,
+
+    thinkingLevels: controllerModelThinkingLevels(model.reasoning, model.rawId ?? model.id, {
+      physicalModelId: model.physicalModelId,
+      nativeReasoning: model.nativeReasoning,
+    }),
+
+    ...(controller.modelNames?.[model.rawId ?? model.id]
+      ? { displayName: controller.modelNames[model.rawId ?? model.id] }
+      : {}),
+    name: (() => {
+      const base = controller.modelNames?.[model.rawId ?? model.id] ?? model.name;
+      return multipleControllers ? `${base} · ${label}` : base;
+    })(),
+  }));
   return { controller: { ...controller, url: backendUrl }, models, providerId };
 }
 
-async function fetchModelsFromControllers(controllers: PiControllerConfig[]): Promise<{
+async function fetchModelsFromControllers(
+  controllers: PiControllerConfig[],
+  cache: ModelCache,
+): Promise<{
   models: AgentModel[];
   controllerModels: ControllerModels[];
+  offlineControllerUrls: string[];
 }> {
   const settled = await Promise.allSettled(
     controllers.map((controller, index) =>
       fetchModelsFromController(controller, index, controllers.length > 1),
     ),
   );
-  const controllerModels = settled
-    .filter(
-      (result): result is PromiseFulfilledResult<ControllerModels> => result.status === "fulfilled",
-    )
-    .map((result) => result.value);
+  const controllerModels: ControllerModels[] = [];
+  const offlineControllerUrls: string[] = [];
+  settled.forEach((result, index) => {
+    const controller = controllers[index];
+    if (result.status === "fulfilled") {
+      controllerModels.push(result.value);
+      return;
+    }
+    if (!controller) return;
+
+    const url = normalizeBackendUrl(controller.url);
+    const cached = cache[url];
+    if (cached && cached.length > 0) {
+      offlineControllerUrls.push(url);
+      controllerModels.push({
+        controller: { ...controller, url },
+        models: cached,
+        providerId: providerIdForController(controller, index),
+      });
+    }
+  });
   if (controllerModels.length === 0) {
     const firstError = settled.find(
       (result): result is PromiseRejectedResult => result.status === "rejected",
@@ -390,7 +487,11 @@ async function fetchModelsFromControllers(controllers: PiControllerConfig[]): Pr
       models.push(model);
     }
   }
-  return { models: models.sort((a, b) => a.name.localeCompare(b.name)), controllerModels };
+  return {
+    models: models.sort((a, b) => a.name.localeCompare(b.name)),
+    controllerModels,
+    offlineControllerUrls,
+  };
 }
 
 async function writePiModelsConfig(
@@ -450,12 +551,13 @@ export function resolvePiModelSelection(modelId: string): { providerId: string; 
 
 export async function refreshPiModels(
   requestedControllers?: PiControllerModelsRequest[],
-): Promise<{ models: AgentModel[]; agentDir: string }> {
+): Promise<{ models: AgentModel[]; agentDir: string; stale: boolean }> {
   const settings = await getApiSettings();
   const dataDir = resolveDataDir();
   const agentDir = path.join(dataDir, "pi-agent");
   await mkdir(agentDir, { recursive: true });
   await chmod(agentDir, 0o700).catch(() => undefined);
+  await loadOfflineControllers(agentDir);
   const persisted =
     requestedControllers && requestedControllers.length > 0
       ? requestedControllers
@@ -463,13 +565,17 @@ export async function refreshPiModels(
   const ownerControllers = settings.controllers.length > 0 ? settings.controllers : persisted;
   const controllers = mergeControllers(settings, ownerControllers);
   await savePersistedControllers(agentDir, controllers);
-  // A dead controller must not hide signed-in cloud providers: collect the
-  // failure and only surface it when nothing else can serve models.
+
   let models: AgentModel[] = [];
   let controllerModels: ControllerModels[] = [];
   let controllerError: unknown = null;
+  let offlineControllerUrls: string[] = [];
+  const cache = await readModelCache(agentDir);
   try {
-    ({ models, controllerModels } = await fetchModelsFromControllers(controllers));
+    ({ models, controllerModels, offlineControllerUrls } = await fetchModelsFromControllers(
+      controllers,
+      cache,
+    ));
   } catch (error) {
     controllerError = error;
   }
@@ -484,22 +590,28 @@ export async function refreshPiModels(
   const writtenAgentDir = await writePiModelsConfig(controllerModels, userPiProviders);
   const providerModels = await collectProviderAgentModels();
 
+  const offline = new Set(offlineControllerUrls);
+  let cacheChanged = false;
+  for (const entry of controllerModels) {
+    if (offline.has(entry.controller.url) || entry.models.length === 0) continue;
+    cache[entry.controller.url] = entry.models;
+    cacheChanged = true;
+  }
+  if (cacheChanged) await writeModelCache(agentDir, cache);
+
   const allModels = [...models, ...userPiModels, ...providerModels];
   if (allModels.length === 0 && controllerError) {
     throw controllerError instanceof Error
       ? controllerError
       : new Error("No controllers returned models.");
   }
-  return { models: allModels, agentDir: writtenAgentDir };
+  return { models: allModels, agentDir: writtenAgentDir, stale: offline.size > 0 };
 }
 async function collectProviderAgentModels(): Promise<AgentModel[]> {
   await refreshProviderHub().catch(() => undefined);
   return listProviderAgentModels();
 }
 
-// Moved here from the shared models module: only the runtime needs the
-// pi-model mapping, and the OpenAICompletionsCompat type must resolve against
-// the SDK install.
 function isDeepSeekReasoningModel(model: AgentModel): boolean {
   const id = `${model.id} ${model.rawId ?? ""} ${model.name}`.toLowerCase();
   return model.reasoning && id.includes("deepseek");
@@ -515,8 +627,6 @@ function isInklingReasoningModel(model: AgentModel): boolean {
 }
 
 function isChatTemplateReasoningModel(model: AgentModel): boolean {
-  // Same resolution as the ladder, so the levels the picker offers and the wire
-  // shape those levels travel in cannot come apart for a new alias.
   return model.reasoning && modelThinkingContract(model) === "chat-template-effort";
 }
 
@@ -525,16 +635,9 @@ type PiThinkingContract = {
   compat?: Partial<OpenAICompletionsCompat>;
 };
 
-/** The reasoning half of a model's pi contract. pi-ai consumes this as DATA —
- *  it builds the request body itself — so this is the only place the wire shape
- *  is decided, and it reaches main chat, the Computer side-chat, compaction,
- *  automations and subagents through pi-agent/models.json. */
 function piThinkingContract(model: AgentModel): PiThinkingContract {
   if (isChatTemplateReasoningModel(model)) {
     return {
-      // `null` marks a level UNSUPPORTED — that is what keeps Minimal, High and
-      // Max out of the picker. `off` stays unmapped on purpose: this template
-      // turns thinking off through enable_thinking, not through an effort value.
       thinkingLevelMap: {
         minimal: null,
         low: "low",
@@ -552,11 +655,7 @@ function piThinkingContract(model: AgentModel): PiThinkingContract {
       },
     };
   }
-  // The hosted DeepSeek API uses a `thinking` object and requires an empty
-  // `reasoning_content` field on replayed assistant messages. Our vLLM
-  // controller exposes DeepSeek V4 through the standard OpenAI-compatible
-  // surface instead, where that hosted-only dialect corrupts tool-history
-  // turns. Keep the ordinary `reasoning_effort` mapping for controller models.
+
   if (isDeepSeekReasoningModel(model) && !isControllerBackedModel(model)) {
     return {
       thinkingLevelMap: {

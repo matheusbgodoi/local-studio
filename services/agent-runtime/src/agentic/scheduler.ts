@@ -1,14 +1,4 @@
-//
-// The durable scheduler.
-//
-// This is the module that fixes the defect the P0 handoff measured: compaction
-// is a memory operation, and its return value was being used as the answer to
-// "should the agent keep working?". Here the answer comes from the durable
-// task ledger instead. A compaction checkpoints, rewrites the active context,
-// rebuilds the working set and schedules the next inference itself — the same
-// task stays RUNNING, and nobody types "continue".
-//
-
+import { criterionIsSatisfied, acceptanceReviewReason } from "../../../../shared/agent/acceptance";
 import {
   computeContextBudget,
   preflightContext,
@@ -66,12 +56,6 @@ export type ReplanInput = {
 
 export type InferenceGate = <T>(task: () => Promise<T>) => Promise<T>;
 
-//
-// The real serialisation happens inside the runtime's own prompt path, where
-// every caller funnels through one gate. Gating again here would have the inner
-// wait for a slot the outer already holds, so the scheduler's default is a
-// pass-through and the option exists for tests that drive a fake backend.
-//
 export function createSerialGate(): InferenceGate {
   return <T>(task: () => Promise<T>): Promise<T> => task();
 }
@@ -144,18 +128,6 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
   const sessions = new Map<string, AgenticInferenceSession>();
   const consumedTurns = new Map<string, number>();
 
-  //
-  // Exactly one session object per Run. The adapter that fronts a real backend
-  // is stateful — it derives a turn's spend as a delta against what it saw
-  // last — so asking the factory again on every step would hand back an object
-  // with no memory, and every turn would report zero tokens.
-  //
-  //
-  // One session object per LOGICAL AGENT. Two agents on one Run hold genuinely
-  // independent working contexts, so compacting one must not touch the other;
-  // and the adapter that fronts a real backend is stateful, deriving a turn's
-  // spend as a delta against what it saw last.
-  //
   const sessionFor = (run: AgenticRun, agent: AgenticAgent | null): AgenticInferenceSession => {
     const key = agent ? `${run.id}#${agent.id}` : run.id;
     const existing = sessions.get(key);
@@ -165,18 +137,8 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     return created;
   };
 
-  //
-  // One local card decodes one thing at a time. Tools, builds and waits may
-  // overlap freely; inference may not, and the gate is what makes that true
-  // rather than merely intended.
-  //
   const gate = options.inferenceGate ?? createSerialGate();
 
-  //
-  // The agent a task belongs to, falling back to the Run's first agent. The
-  // assignment is made when a plan is committed, so routing a turn to the
-  // right working context is a lookup rather than a guess.
-  //
   const agentForTask = (runId: string, task: AgenticTask | null): AgenticAgent | null => {
     const agents = store.listAgents(runId);
     if (task?.agentId) {
@@ -219,7 +181,7 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     reason: string,
     tail: string[],
     errors: string[],
-  ): Promise<{ prompt: string; effective: boolean; recorded: boolean }> => {
+  ): Promise<{ prompt: string; effective: boolean | null; recorded: boolean }> => {
     const workingSet = currentWorkingSet(run, task, tail, errors);
     const rendered = renderWorkingSet(workingSet);
     const required = workingSetTokens(workingSet);
@@ -245,12 +207,6 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     try {
       outcome = await runCompaction(session, rendered, store.now(), store.now);
     } catch (error) {
-      //
-      // A backend may refuse to compact a session it considers too short,
-      // whatever its token count. That means no headroom can be created here,
-      // not that the goal is over: the rebuilt working set is still the right
-      // prompt, and the loop guard is what stops a refusal repeating forever.
-      //
       const message = error instanceof Error ? error.message : String(error);
       store.appendEvent({
         runId: run.id,
@@ -278,6 +234,8 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
       reason,
       tokensBefore: outcome.tokensBefore,
       tokensAfter: outcome.tokensAfter,
+      beforeMeasured: outcome.beforeMeasured,
+      afterMeasured: outcome.afterMeasured,
       targetTokens: target.target,
       usableLimit: budget.usableLimit,
       durationMs: outcome.durationMs,
@@ -287,25 +245,25 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
       compactionCount: run.compactionCount + 1,
       latestCheckpointId: checkpoint.id,
     });
-    //
-    // A backend reports no context usage until the next turn produces some, so
-    // immediately after a compaction the reading is often absent rather than
-    // zero. Publishing it as zero would be a measurement nobody took; the
-    // working set that was just rebuilt is the honest estimate, and the flag
-    // says which of the two the reader is looking at.
-    //
-    const measuredAfter = outcome.tokensAfter > 0;
+    const measuredAfter = outcome.afterMeasured;
+    const estimatedAfter = !measuredAfter && outcome.tokensAfter > 0 ? outcome.tokensAfter : null;
+    const beforeLabel = `${outcome.beforeMeasured ? "" : "~"}${outcome.tokensBefore}`;
+    const afterLabel = measuredAfter
+      ? String(outcome.tokensAfter)
+      : estimatedAfter === null
+        ? "unknown"
+        : `~${estimatedAfter}`;
     store.appendEvent({
       runId: run.id,
       taskId: task?.id ?? null,
       type: "COMPACTED",
-      summary: measuredAfter
-        ? `${outcome.tokensBefore} -> ${outcome.tokensAfter} tokens · checkpoint #${checkpoint.sequence}`
-        : `${outcome.tokensBefore} -> ~${required} tokens · checkpoint #${checkpoint.sequence}`,
+      summary: `${beforeLabel} -> ${afterLabel} tokens · checkpoint #${checkpoint.sequence}`,
       detail: {
         tokensBefore: outcome.tokensBefore,
-        tokensAfter: outcome.tokensAfter,
-        tokensAfterEstimated: measuredAfter ? null : required,
+        tokensAfter: measuredAfter ? outcome.tokensAfter : null,
+        tokensAfterEstimated: estimatedAfter,
+        beforeMeasured: outcome.beforeMeasured,
+        effectiveness: outcome.effective,
         afterMeasured: measuredAfter,
         targetTokens: target.target,
         usableLimit: budget.usableLimit,
@@ -332,12 +290,6 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     let prompt = renderWorkingSet(workingSet);
     const reading = await session.readContext();
     const required = workingSetTokens(workingSet);
-    //
-    // The usable limit already has the output reserve subtracted out of it, so
-    // the expected next operation is the prompt alone. Adding the reserve back
-    // here counted it twice and made a narrow budget look overflowed before
-    // the session held anything at all.
-    //
     const decision = preflightContext({
       budget,
       activeTokens: reading.tokens,
@@ -346,12 +298,6 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
 
     let compacted = false;
     let compactionRecorded = false;
-    //
-    // Compaction can only remove what is NOT the working set. A session
-    // already at or below what the task needs has nothing to gain from one,
-    // and asking the backend to compact it is how a fresh Run under a narrow
-    // budget ended up refused before its first turn.
-    //
     if (decision.action !== "proceed" && reading.tokens <= required) {
       store.appendEvent({
         runId: run.id,
@@ -379,15 +325,11 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
       prompt = result.prompt;
       compacted = true;
       compactionRecorded = result.recorded;
-      const strikes = result.effective ? 0 : (ineffectiveCompactions.get(run.id) ?? 0) + 1;
+      const previousStrikes = ineffectiveCompactions.get(run.id) ?? 0;
+      const strikes =
+        result.effective === null ? previousStrikes : result.effective ? 0 : previousStrikes + 1;
       ineffectiveCompactions.set(run.id, strikes);
       if (strikes >= MAX_INEFFECTIVE_COMPACTIONS) {
-        //
-        // Name both numbers. "Cannot create headroom" on its own sends the
-        // reader looking for a bug; what actually happened is that the usable
-        // budget sits below the floor this backend can reach, and the fix is
-        // to raise the budget, not to compact harder.
-        //
         const reason = `compaction cannot create headroom: the usable budget is ${budget.usableLimit} tokens and the session will not go below ${reading.tokens}; refusing to compact in a circle`;
         store.transaction(() => {
           settleTerminalWork(store, run.id, "FAILED", reason);
@@ -403,12 +345,6 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
       }
     }
 
-    //
-    // Everything above this point awaited the backend, and a cancel that
-    // landed during one of those awaits has already written the terminal
-    // status. Writing RUNNING now would resurrect the Run into a state with
-    // no loop driving it, and nothing would ever settle it again.
-    //
     if (options.isCancelled?.(run.id)) return { kind: "idle", reason: "run is cancelling" };
     const refreshed = store.requireRun(run.id);
     if (TERMINAL_RUN_STATUSES.includes(refreshed.status)) {
@@ -434,11 +370,6 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
         activeContextTokens: reading.tokens,
         contextLimit: budget.usableLimit,
         lastHeartbeatMs: store.now(),
-        //
-        // Count compactions performed, not compactions attempted. A refusal
-        // leaves the Run's counter alone, and an agent counting one more than
-        // its own Run reads as a bug in whichever number you trust less.
-        //
         compactionCount: compactionRecorded ? agent.compactionCount + 1 : agent.compactionCount,
       });
     }
@@ -453,11 +384,6 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     try {
       await gate(() => session.prompt(prompt));
     } catch (error) {
-      //
-      // A rejected turn is still a settled attempt. Leaving the rows RUNNING
-      // under a Run the driver is about to fail would hide the work from both
-      // the view and the restart reconciliation.
-      //
       const message = error instanceof Error ? error.message : String(error);
       for (const open of store
         .listAttempts(task.id)
@@ -481,20 +407,11 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     return { kind: "resumed", taskId: task.id, compacted };
   };
 
-  //
-  // One durable step. Called after every settled turn; it is the only place
-  // allowed to move a Run or a Task, and it never asks the owner anything the
-  // ledger can answer.
-  //
   const advance = async (runId: string, capability: AgenticCapability): Promise<SchedulerStep> => {
     const run = store.requireRun(runId);
     if (TERMINAL_RUN_STATUSES.includes(run.status)) {
       return { kind: "idle", reason: `run is ${run.status.toLowerCase()}` };
     }
-    //
-    // Adjudicate against the working context that just ran: the agent that
-    // owns the active task, not whichever agent happens to be first.
-    //
     const settledTask = run.activeTaskId ? store.getTask(run.activeTaskId) : null;
     const agent = agentForTask(run.id, settledTask);
     const session = sessionFor(run, agent);
@@ -502,17 +419,6 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     const lastError = session.lastError();
     const errors = lastError ? [lastError] : [];
     const finalText = session.lastAssistantText();
-    //
-    // A step that ends without launching — a replan, for one — leaves the
-    // previous turn in place. Reading it again would charge a second attempt
-    // for one piece of work, count its tokens twice, and could attribute its
-    // evidence to whichever task the revision made current.
-    //
-    //
-    // Keyed by agent: turnId() counts an agent's own turns, so keying by Run
-    // made a second agent's first turn look like one already read, and its work
-    // was discarded and repeated.
-    //
     const turnKey = `${run.id}#${agent?.id ?? "-"}`;
     const turnId = session.turnId();
     const alreadyConsumed = consumedTurns.get(turnKey) === turnId;
@@ -524,12 +430,6 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
       if (agent) store.addAgentUsage(agent.id, usage);
     }
 
-    //
-    // Structured signals are the protocol. A turn that called the reporting
-    // tool has already had its evidence validated and committed by the control
-    // plane; parsing prose is only the fallback for a turn that reported in
-    // words, and it can no longer be the thing a state transition depends on.
-    //
     const signals = alreadyConsumed ? [] : store.takePendingSignals(run.id);
     const report = alreadyConsumed
       ? {
@@ -545,14 +445,8 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     const tail: string[] = [];
 
     let tasks = store.listTasks(run.id);
-    // Re-read: the reporting tool wrote to this row during the turn.
     const activeTask = run.activeTaskId ? (store.getTask(run.activeTaskId) ?? null) : null;
 
-    //
-    // With no new turn there is nothing to adjudicate. Re-running the
-    // judgement on a turn already read would settle its attempt a second time
-    // and knock a task that is legitimately WAITING_USER back to PENDING.
-    //
     if (activeTask && !alreadyConsumed) {
       const outcome = applyEvidence(activeTask.acceptance, report);
       store.updateTask(activeTask.id, { acceptance: outcome.acceptance });
@@ -573,13 +467,16 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
             status,
             outcome: status,
             evidence: outcome.acceptance
-              .filter((c) => c.satisfied)
+              .filter(criterionIsSatisfied)
               .map((c) => `${c.id}: ${c.evidence ?? ""}`),
             error,
           });
         }
       };
 
+      const review = acceptanceReviewReason(outcome.acceptance);
+      if (review && (report.claimedComplete || report.evidence.length > 0))
+        report.userQuestion = review;
       if (report.userQuestion) {
         settle("ABANDONED", null);
         store.updateTask(activeTask.id, { status: "WAITING_USER", blocker: report.userQuestion });
@@ -703,11 +600,6 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
     const nextTaskId = selectNextTask(nodesOf(tasks));
     if (!nextTaskId) {
       const settledRun = store.requireRun(run.id);
-      //
-      // A task genuinely waiting on a human is not a dead end. Failing the Run
-      // over it would throw away work the owner is one answer away from
-      // finishing, and a restart would do it again.
-      //
       const waiting = tasks.filter((task) => task.status === "WAITING_USER");
       if (waiting.length > 0) {
         store.updateRun(settledRun.id, {
@@ -788,11 +680,6 @@ export function createAgenticScheduler(options: AgenticSchedulerOptions) {
   };
 }
 
-//
-// One turn's signals collapse into the same shape the prose parser produces,
-// so everything downstream adjudicates identically whichever way the turn
-// chose to report.
-//
 export function reportFromSignals(
   signals: readonly AgenticTurnSignal[],
   activeTaskId: string | null,
@@ -805,11 +692,6 @@ export function reportFromSignals(
     errors: [],
   };
   for (const signal of signals) {
-    //
-    // A report the model filed against another task settles that task, not
-    // whichever one happens to be active. Without this, naming a sibling id
-    // could halt the Run on a question the active task never asked.
-    //
     if (signal.taskId && activeTaskId && signal.taskId !== activeTaskId) continue;
     if (signal.kind === "evidence" && signal.detail.criterion) {
       report.evidence.push({
@@ -832,11 +714,6 @@ const firstLine = (text: string): string => {
   return (line ?? "").trim().slice(0, 400);
 };
 
-//
-// A revision names dependencies in whichever space the caller had available —
-// a carried task by id, a brand new one by title. Validation happens in that
-// mixed space, because the store is what resolves titles to ids on write.
-//
 export function seedNodes(seeds: readonly TaskSeed[]): TaskNode[] {
   const keyByTitle = new Map(seeds.map((seed, index) => [seed.title, seed.id ?? `seed_${index}`]));
   return seeds.map((seed, index) => ({

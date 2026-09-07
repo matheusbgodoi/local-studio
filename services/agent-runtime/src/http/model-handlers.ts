@@ -23,8 +23,8 @@ export async function handleAgentModels(request?: Request): Promise<Response> {
     const body = request
       ? ((await request.json().catch(() => ({}))) as Record<string, unknown>)
       : {};
-    const { models } = await refreshPiModels(parseControllers(body.controllers));
-    return Response.json({ provider: "local-studio", models });
+    const { models, stale } = await refreshPiModels(parseControllers(body.controllers));
+    return Response.json({ provider: "local-studio", models, stale });
   } catch (error) {
     return jsonError(errorMessage(error, "Failed to load /v1/models"), 502);
   }

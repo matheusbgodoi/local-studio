@@ -3,12 +3,8 @@ import type { AgentImageInput } from "../../../shared/agent/agent-image-input";
 import type { AgentQueueAction } from "../../../shared/agent/agent-turn";
 import type { RuntimeStartOptions } from "./pi-runtime-helpers";
 import type { InferenceActivityObserver } from "./agentic/inference-activity";
+import type { NetworkPolicy } from "../../../shared/agent/network-policy";
 
-// Pi event surface seen by the rest of the app. Upstream consumers
-// (`sessions/engine.ts`, `pane-controller.ts`, etc.) duck-type on string event
-// names, so we keep the loose index signature for back-compat while widening
-// the type to include the SDK's typed union so newer call sites get
-// autocompletion and discriminated narrowing where they ask for it.
 type PiEvent = (Record<string, unknown> & { type?: string }) | AgentSessionEvent;
 
 export type { AgentSessionEvent };
@@ -30,11 +26,8 @@ export type PiPromptOptions = {
   inferenceObserver?: InferenceActivityObserver;
 };
 
-/** Outcome of applying a personal-MCP selection to one agent session. */
 export type ConnectorSelectionResult = {
-  /** Connectors whose tools are registered and active on the live runtime. */
   active: string[];
-  /** What the session asked for; re-applied after a runtime rebuild. */
   pending: string[];
   errors: Record<string, string>;
 };
@@ -53,17 +46,19 @@ export type PiDurablePromptBoundary = {
   sessionFile: string;
   cwd: string;
   modelId: string;
+  behaviorProfile: string | null;
+  networkPolicy: NetworkPolicy;
   acceptedAt: string;
 };
 
-// Re-exported from the canonical Effect-schema-derived type in runtime-schema.ts
-// so all context-usage shapes resolve to one source of truth.
 export type { RuntimeContextUsage as PiContextUsage } from "../../../shared/agent/context-usage";
 
 export type PiAgentStatus = {
   running: boolean;
   active: boolean;
   modelId: string;
+  behaviorProfile: string | null;
+  networkPolicy: NetworkPolicy;
   cwd: string;
   piSessionId: string | null;
   agentDir: string;
@@ -73,6 +68,7 @@ export type PiAgentStatus = {
 };
 
 export interface PiAgentSession {
+  getStartOptions(): RuntimeStartOptions;
   ensureStarted(
     modelId: string,
     cwd?: string,
@@ -98,20 +94,15 @@ export interface PiAgentSession {
     images?: AgentImageInput[],
   ): Promise<void>;
   followUp(message: string, images?: AgentImageInput[]): Promise<void>;
-  /** Resolves with the messages that were still queued, so the caller can
-   *  restore them rather than losing them to the stop. */
   abort(): Promise<{ steering: string[]; followUp: string[] }>;
-  /** Abort for durable runtime cancellation. Rejects unless the session is confirmed idle. */
   abortStrict(): Promise<void>;
   compact(
     customInstructions?: string,
     inferenceObserver?: InferenceActivityObserver,
   ): Promise<unknown>;
-  /** Activate/deactivate personal MCP connectors for this session only. Never
-   *  restarts the runtime and never writes connectors.json. */
+  contextBudget(): import("./context-budget").ContextBudgetReport | null;
   setConnectorSelection(connectorIds: string[]): Promise<ConnectorSelectionResult>;
   getConnectorSelection(): string[];
-  /** Tool schemas that will be sent on the next model turn. */
   getActiveToolNames(): string[];
   stop(): Promise<void>;
   readonly status: PiAgentStatus;

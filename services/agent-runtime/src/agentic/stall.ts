@@ -1,12 +1,4 @@
-//
-// Stall detection.
-//
-// Progress is not "the agent said something". It is a fingerprint of what
-// actually changed: satisfied criteria, committed operations, new artifacts
-// and the error signature. Bounded attempts that move none of it are a stall,
-// and a stall triggers a plan revision rather than another identical attempt.
-//
-
+import { criterionIsSatisfied } from "../../../../shared/agent/acceptance";
 import { createHash } from "node:crypto";
 
 import type { AgenticArtifact, AgenticTask, AgenticToolOperation } from "./contract";
@@ -24,7 +16,7 @@ export function progressFingerprint(input: {
   errorSignature: string | null;
 }): ProgressFingerprint {
   const satisfied = input.task.acceptance
-    .filter((criterion) => criterion.satisfied)
+    .filter(criterionIsSatisfied)
     .map((criterion) => criterion.id)
     .sort()
     .join(",");
@@ -33,7 +25,10 @@ export function progressFingerprint(input: {
     .map((operation) => operation.idempotencyKey)
     .sort()
     .join(",");
-  const artifactIds = input.artifacts.map((artifact) => artifact.digest).sort().join(",");
+  const artifactIds = input.artifacts
+    .map((artifact) => artifact.digest)
+    .sort()
+    .join(",");
   return createHash("sha256")
     .update([satisfied, committed, artifactIds, input.errorSignature ?? ""].join("|"))
     .digest("hex")

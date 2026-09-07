@@ -13,17 +13,6 @@ files:
   - package.json
   - node_modules/@lydell/node-pty/**
   - node_modules/@lydell/node-pty-${platform}-${arch}/**
-  # electron-builder auto-includes EVERY production dependency, but the Electron
-  # main process only requires electron, electron-updater, effect and node-pty
-  # (verified: those are the only non-relative requires in desktop/dist). The web
-  # app is NOT loaded from the asar — app-server.ts forks
-  # .next/standalone/server.js, which ships separately under extraResources with
-  # its own output-traced node_modules. Dropping the framework and its build-time
-  # toolchain from the asar takes it from 494 MB to 336 MB.
-  #
-  # NB: a stricter "!node_modules/** + re-add the transitive closure" inversion
-  # gets the asar to 40 MB but the packaged app then hangs before its first log
-  # line, so it is deliberately not used.
   - "!node_modules/next/**"
   - "!node_modules/@next/**"
   - "!node_modules/react/**"
@@ -33,6 +22,12 @@ files:
   - "!node_modules/sharp/**"
   - "!node_modules/playwright-core/**"
   - "!node_modules/@playwright/**"
+  - "!node_modules/@earendil-works/**"
+  - "!node_modules/**/@earendil-works/**"
+  - "!node_modules/undici/**"
+  - "!node_modules/**/undici/**"
+  - "!node_modules/brace-expansion/**"
+  - "!node_modules/**/brace-expansion/**"
 
 extraResources:
   - from: desktop/speech
@@ -45,16 +40,6 @@ extraResources:
     to: app-update.yml
   - from: ../services/agent-runtime/dist/standalone.mjs
     to: app/agent-runtime/standalone.mjs
-  # Everything bundle-agent-runtime decided to keep outside standalone.mjs, in
-  # one copy: the portable browser runtime, node-pty (native addon, dynamically
-  # required by pty-service) and the Pi packages.
-  #
-  # The Pi packages MUST stay real directories here. pi's extension loader
-  # builds its jiti alias table from the loader module's own import.meta.url
-  # (typebox, @earendil-works/pi-agent-core, pi-tui, pi-ai, pi-coding-agent).
-  # Bundled into standalone.mjs that URL is Resources/app/agent-runtime/, which
-  # resolves none of them, getAliases() throws and EVERY extension fails to
-  # load — ours and any the user installs.
   - from: ../services/agent-runtime/dist/node_modules
     to: app/agent-runtime/node_modules
   - from: .next/standalone
@@ -107,52 +92,6 @@ directories:
 mac:
   icon: desktop/resources/icon.icns
   category: public.app-category.developer-tools
-  # NO IDENTITY. This fork inherited upstream's Developer ID name here and kept it, which was
-  # wrong twice over.
-  #
-  # It broke the build: with that certificate absent from this keychain, electron-builder
-  # SKIPS signing entirely rather than falling back, so the bundle carried only the ad-hoc
-  # signature Electron's own binary ships with — `Identifier=Electron`, `Info.plist=not bound`
-  # — and `codesign --verify` failed with "code has no resources but signature indicates they
-  # must be present". scripts/install-desktop-app.sh refuses such a bundle, correctly, so the
-  # repo could build an app it would not install.
-  #
-  # And it was an identity claim this project is not entitled to make. RELEASING.md: the fork
-  # "is not upstream and must never present itself as one". Had that certificate ever been
-  # present, every build would have shipped signed as upstream's developer.
-  #
-  # NO IDENTITY, and the signing happens at INSTALL time instead. Three values were tried here
-  # and only the third is workable:
-  #
-  #   "sherif cherfa (TZ447KHNZL)"  upstream's Developer ID, inherited and never changed. Absent
-  #                                 from this keychain, so electron-builder SKIPS signing rather
-  #                                 than falling back, leaving the bundle wearing only the
-  #                                 linker-signed ad-hoc signature Electron's own binary ships
-  #                                 with (Identifier=Electron, Info.plist not bound). The
-  #                                 installer refuses that, correctly — so the repo could build
-  #                                 an app it would not install.
-  #   "-"                           codesign's ad-hoc identity. It DOES sign correctly, and the
-  #                                 result verifies. But electron-builder then runs its own
-  #                                 `codesign --verify --deep --strict` over the result, and
-  #                                 that check CANNOT pass for any Electron bundle — it objects
-  #                                 to the ordinary Versions/Current symlinks inside
-  #                                 Electron Framework.framework. See the long note in
-  #                                 scripts/install-desktop-app.sh, which measured all four
-  #                                 verify variants. So the build fails after producing a
-  #                                 perfectly good app.
-  #   null                          electron-builder skips signing AND skips that impossible
-  #                                 verification. The bundle is unsigned, honestly, and
-  #                                 install-desktop-app.sh ad-hoc signs it as it stages it.
-  #
-  # Signing at install time is not a workaround, it is where the fact lives: this Mac has no
-  # Developer ID, so ad-hoc is the only signature available, and the installer is the step that
-  # knows whether it is handling an owner build or a notarised release (which it must never
-  # re-sign — that would strip the notarisation).
-  #
-  # Naming upstream's certificate was also an identity claim this project is not entitled to
-  # make. RELEASING.md: the fork "is not upstream and must never present itself as one". Had
-  # that certificate ever been present, every build would have shipped signed as its developer.
-  # Someone with their OWN Developer ID sets CSC_NAME or CSC_LINK in the environment.
   identity: null
   target:
     - target: dmg
@@ -167,16 +106,9 @@ mac:
   entitlementsInherit: desktop/resources/entitlements.mac.plist
   extendInfo:
     NSMicrophoneUsageDescription: Record your own voice to create a private, local voice profile.
-    # WITHOUT THIS KEY A NATIVE SPEECH PATH HARD-CRASHES ON FIRST AUTHORIZATION. macOS kills the
-    # process outright rather than returning a denial, so the symptom is the app vanishing, not
-    # a permission prompt. It was absent while the dictation helper was being written, which is
-    # precisely the order in which that bug reaches a user.
     NSSpeechRecognitionUsageDescription: Transcribe your speech into the composer. Everything stays on this Mac — no audio ever leaves the machine.
 
 dmg:
-  # Nothing to sign it WITH, now that no identity is named. `true` here asked electron-builder
-  # to sign the disk image with a certificate the build has already established it does not
-  # have.
   sign: false
 
 win:

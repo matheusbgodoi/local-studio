@@ -321,11 +321,12 @@ export function useSessionEngine(deps: UseSessionEngineDeps): SessionEngine {
               // own title would be the tail slice's first user message, not the
               // session's first prompt.
               modelId:
-                session.modelId ||
                 meta?.modelId ||
+                session.modelId ||
                 replayModelId ||
                 runtimeStatus?.modelId ||
                 modelId,
+              networkPolicy: meta?.executionPolicy?.networkPolicy ?? session.networkPolicy,
               title: meta?.title ?? title ?? session.title,
               startedAt: meta?.startedAt ?? startedAt ?? session.startedAt,
               tokenStats: tokenStats ?? undefined,

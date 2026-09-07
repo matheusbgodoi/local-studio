@@ -35,12 +35,8 @@ import {
 } from "./stream-order";
 import { sitegeistRelayUrl } from "../pi-runtime-helpers";
 import { networkService } from "../network";
-import {
-  DEFAULT_NETWORK_POLICY,
-  parseNetworkPolicy,
-} from "../../../../shared/agent/network-policy";
-
-// ─── POST /api/agent/turn ─────────────────────────────────────────────────
+import { parseNetworkPolicy } from "../../../../shared/agent/network-policy";
+import { readSessionExecutionPolicy } from "../session-metadata-store";
 
 function adoptRuntimePiSessionId(session: unknown, piSessionId: string | null | undefined) {
   const next = piSessionId?.trim();
@@ -101,17 +97,17 @@ function ensurePromptRuntimeEffect(
 ): Effect.Effect<void, unknown> {
   return Effect.tryPromise({
     try: () => {
-      //
-      // The conversation's preference is registered BEFORE the runtime starts,
-      // so the boundary is already up by the time anything the runtime spawns
-      // could reach the network. Registering it afterwards would leave a window
-      // in which a protected turn ran unprotected.
-      //
-      networkService().setSessionPolicy(turn.sessionId, turn.networkPolicy);
+      const networkPolicy =
+        turn.networkPolicy ??
+        (resolved.effectivePiSessionId
+          ? readSessionExecutionPolicy(resolved.effectivePiSessionId)?.networkPolicy
+          : undefined) ??
+        resolved.session.status.networkPolicy;
+      networkService().setSessionPolicy(turn.sessionId, networkPolicy);
       return resolved.session.ensureStarted(turn.modelId, turn.cwd, resolved.effectivePiSessionId, {
         thinkingLevel: turn.thinkingLevel,
         toolAccess: turn.toolAccess,
-        networkPolicy: turn.networkPolicy,
+        networkPolicy,
         browserSessionId: turn.browserSessionId,
         browserBackend: turn.browserBackend,
         skills: turn.skills,
@@ -127,11 +123,6 @@ function launchPrompt(
   resolved: ResolvedTurnSession,
   commandImages: AgentImageInput[] | undefined,
 ) {
-  //
-  // The shared inference gate lives in the runtime's prompt path, so a chat
-  // turn is serialised against every other decode without this call site
-  // knowing about it — and without the session reporting idle while it waits.
-  //
   void Effect.runPromise(
     Effect.tryPromise({
       try: () =>
@@ -281,28 +272,22 @@ function turnRouteEffect(request: Request): Effect.Effect<Response, unknown> {
   });
 }
 
-// ─── POST /api/agent/abort ────────────────────────────────────────────────
-
 export async function handleAgentAbort(request: Request): Promise<Response> {
   const body = (await request.json().catch(() => ({}))) as { sessionId?: string };
   const sessionId =
     typeof body.sessionId === "string" && body.sessionId.trim() ? body.sessionId.trim() : "default";
-  // Surface what the stop cleared so the client can put those messages back in
-  // front of the user instead of dropping them on the floor.
   const cleared = await piRuntimeManager.getSession(sessionId).abort();
   return Response.json({ ok: true, cleared });
 }
 
 export async function handleExtensionUiResponse(request: Request): Promise<Response> {
-  const body = (await request.json().catch(() => null)) as
-    | {
-        sessionId?: unknown;
-        requestId?: unknown;
-        value?: unknown;
-        confirmed?: unknown;
-        cancelled?: unknown;
-      }
-    | null;
+  const body = (await request.json().catch(() => null)) as {
+    sessionId?: unknown;
+    requestId?: unknown;
+    value?: unknown;
+    confirmed?: unknown;
+    cancelled?: unknown;
+  } | null;
   const sessionId = typeof body?.sessionId === "string" ? body.sessionId.trim() : "";
   const requestId = typeof body?.requestId === "string" ? body.requestId.trim() : "";
   if (!sessionId || !requestId) return jsonError("sessionId and requestId are required");
@@ -313,10 +298,10 @@ export async function handleExtensionUiResponse(request: Request): Promise<Respo
     ...(typeof body?.confirmed === "boolean" ? { confirmed: body.confirmed } : {}),
     cancelled: body?.cancelled === true,
   });
-  return accepted ? Response.json({ ok: true }) : jsonError("Extension request is no longer active", 409);
+  return accepted
+    ? Response.json({ ok: true })
+    : jsonError("Extension request is no longer active", 409);
 }
-
-// ─── POST /api/agent/compact ──────────────────────────────────────────────
 
 type CompactRequest = {
   sessionId?: string;
@@ -364,6 +349,10 @@ function compactRouteEffect(request: Request): Effect.Effect<Response, unknown> 
     if (body.thinkingLevel != null && !isAgentThinkingLevel(body.thinkingLevel)) {
       return jsonError("thinkingLevel must be a supported reasoning level");
     }
+    const networkPolicy = parseNetworkPolicy(body.networkPolicy);
+    if (body.networkPolicy != null && !networkPolicy) {
+      return jsonError("networkPolicy must be direct or vpn_protected");
+    }
 
     return yield* Effect.gen(function* () {
       const session = piRuntimeManager.getSession(sessionId);
@@ -374,14 +363,7 @@ function compactRouteEffect(request: Request): Effect.Effect<Response, unknown> 
           session.ensureStarted(modelId, cwd, piSessionId, {
             thinkingLevel: body.thinkingLevel,
             toolAccess: body.toolAccess === "full" ? "full" : "read_only",
-            //
-            // A compaction restarts the runtime if the fingerprint moved, so it
-            // has to carry the same policy the turns do — otherwise compacting a
-            // protected conversation would rebuild it unprotected. This body is
-            // cast rather than parsed, so the value goes through the shared
-            // validator instead of being trusted.
-            //
-            networkPolicy: parseNetworkPolicy(body.networkPolicy) ?? DEFAULT_NETWORK_POLICY,
+            ...(networkPolicy ? { networkPolicy } : {}),
             browserSessionId:
               typeof body.browserSessionId === "string" ? body.browserSessionId.trim() : undefined,
             browserBackend: body.browserBackend === "sitegeist" ? "sitegeist" : "embedded",
@@ -403,8 +385,6 @@ function compactRouteEffect(request: Request): Effect.Effect<Response, unknown> 
   });
 }
 
-// ─── GET /api/agent/runtime/sessions ──────────────────────────────────────
-
 export function handleRuntimeSessions(): Response {
   return Response.json({
     sessions: piRuntimeManager
@@ -412,8 +392,6 @@ export function handleRuntimeSessions(): Response {
       .map(({ sessionId, session }) => ({ sessionId, status: session.status })),
   });
 }
-
-// ─── GET /api/agent/runtime/status ────────────────────────────────────────
 
 export function handleRuntimeStatus(request: Request): Response {
   const searchParams = new URL(request.url).searchParams;
@@ -435,7 +413,23 @@ export function handleRuntimeStatus(request: Request): Response {
   });
 }
 
-// ─── GET /api/agent/runtime/events (SSE) ──────────────────────────────────
+export function handleRuntimeContextBudget(request: Request): Response {
+  const searchParams = new URL(request.url).searchParams;
+  const sessionId = searchParams.get("sessionId")?.trim() || "default";
+  const piSessionId = searchParams.get("piSessionId")?.trim() || null;
+  const resolved = piRuntimeManager.findSessionForLookup(sessionId, piSessionId);
+  if (!resolved) {
+    return Response.json(
+      { error: "No live runtime for that session; open a chat first." },
+      { status: 404 },
+    );
+  }
+  const budget = resolved.session.contextBudget();
+  if (!budget) {
+    return Response.json({ error: "The runtime is not started." }, { status: 409 });
+  }
+  return Response.json(budget);
+}
 
 function parseSeq(value: string | null): number {
   const parsed = Number(value ?? 0);
@@ -485,9 +479,7 @@ export function handleRuntimeEvents(request: Request): Response {
         if (ping) clearInterval(ping);
         try {
           controller.close();
-        } catch {
-          // client already closed
-        }
+        } catch {}
       };
 
       const sendLogged = (logged: LoggedPiEvent) => {
@@ -563,8 +555,6 @@ export function handleRuntimeEvents(request: Request): Response {
     },
   });
 }
-
-// ─── GET /api/agent/setup-checks ──────────────────────────────────────────
 
 export function handleSetupChecks(): Response {
   const codexDir = path.join(homedir(), ".codex");

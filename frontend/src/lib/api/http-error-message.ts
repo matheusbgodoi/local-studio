@@ -126,3 +126,16 @@ export function formatHttpErrorMessage(status: number, body: unknown, endpoint?:
 
   return text ? `${status} — ${text}` : `HTTP ${status}`;
 }
+
+/**
+ * Set by the app's own proxy on a 504 it produced because the controller did
+ * not answer in time — as opposed to a 504 relayed from a real upstream.
+ *
+ * A host that is asleep is a steady state, not a transient fault, so retrying
+ * that answer buys nothing and costs the whole timeout ladder again.
+ */
+export const UPSTREAM_TIMEOUT_HEADER = "x-local-studio-upstream-timeout";
+
+export function isUpstreamTimeoutResponse(response: Response): boolean {
+  return response.status === 504 && response.headers.get(UPSTREAM_TIMEOUT_HEADER) === "1";
+}

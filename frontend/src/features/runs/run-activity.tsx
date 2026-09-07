@@ -20,10 +20,6 @@ const TONE_BY_TYPE: Record<string, "good" | "warning" | "danger" | "info" | "def
 
 const MAX_EVENTS = 200;
 
-//
-// Observable execution only: what happened and what continued. A compaction is
-// a divider that states its own numbers, never a gap in the record.
-//
 export function RunActivity({ snapshot }: { snapshot: AgenticRunSnapshot }) {
   const events = [...snapshot.events].slice(-MAX_EVENTS).reverse();
   if (events.length === 0) {
@@ -64,12 +60,15 @@ function compactionDetail(event: AgenticEvent) {
   const before = Number(record.tokensBefore);
   const limit = Number(record.usableLimit);
   const measured = record.afterMeasured !== false;
-  const after = Number(measured ? record.tokensAfter : record.tokensAfterEstimated);
-  if (!Number.isFinite(before) || !Number.isFinite(after)) return null;
+  const afterValue = measured ? record.tokensAfter : record.tokensAfterEstimated;
+  const after = typeof afterValue === "number" && Number.isFinite(afterValue) ? afterValue : null;
+  if (!Number.isFinite(before)) return null;
   return (
     <RowDetailLine mono>
-      {formatTokens(before)} → {measured ? "" : "≈"}
-      {formatTokens(after)} of {formatTokens(limit)} usable · the task resumed automatically
+      {record.beforeMeasured === false ? "≈" : ""}
+      {formatTokens(before)} →{" "}
+      {after === null ? "unknown" : `${measured ? "" : "≈"}${formatTokens(after)}`} of{" "}
+      {formatTokens(limit)} usable · the task resumed automatically
     </RowDetailLine>
   );
 }

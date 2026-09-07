@@ -19,6 +19,7 @@ import { ArchivedChatsSettings, SetupChecksSettings } from "./agent-settings-sec
 import { AppearanceSettings } from "./appearance-settings";
 import { ShortcutsSettings } from "./terminal-settings";
 import { EnginesSection } from "./engines-section";
+import { ComputeHostsSection } from "./compute-hosts-section";
 import { ServicesSettings, SystemDetails, SystemOverview } from "./system-settings-section";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 import { ProfileSettings } from "./profile-settings";
@@ -155,6 +156,7 @@ export function SettingsView({
             runtime={data?.runtime ?? null}
             capability={runtimeManagementCapability}
           />
+          <ComputeHostsSection />
           {configCapability === "supported" ? (
             <ServicesSettings
               data={data}

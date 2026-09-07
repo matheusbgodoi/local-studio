@@ -1,3 +1,7 @@
+import { createOperationalTools } from "./agentic/operational-tools";
+import { contextUsageIsMeasured } from "./context-usage-provenance";
+import { installRuntimeStartupEnvironment } from "./runtime-startup-environment";
+import { releaseBrowserSession } from "./browser-host/browser-host";
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { closeSync, constants, fsyncSync, openSync, readSync, statSync } from "node:fs";
@@ -16,7 +20,12 @@ import { Effect } from "effect";
 import type { AgentImageInput } from "../../../shared/agent/agent-image-input";
 import type { AgentQueueAction } from "../../../shared/agent/agent-turn";
 import {
-  applyRuntimeEnvInjections,
+  assertBehaviorProfile,
+  executionPolicyForModel,
+  type ExecutionPolicy,
+} from "../../../shared/agent/execution-policy";
+import { DEFAULT_NETWORK_POLICY } from "../../../shared/agent/network-policy";
+import {
   buildAgentSessionOptionsSync,
   personalSkillsOverride,
   runtimeOptionsFingerprint,
@@ -24,6 +33,19 @@ import {
   type RuntimeStartOptions,
 } from "./pi-runtime-helpers";
 import { refreshPiModels, resolvePiModelSelection } from "./pi-runtime-models";
+import { applyContextHeadroomSettings, applySessionContextHeadroom } from "./pi-agent-settings";
+import {
+  CONTEXT_RECOVERY_MESSAGE,
+  observePiTurn,
+  PiTurnCancelled,
+  PiTurnFailure,
+} from "./pi-turn-lifecycle";
+import { createBoundedCompactionExtension } from "./bounded-compaction";
+import { describeContextBudget, type ContextBudgetReport } from "./context-budget";
+import {
+  isContextWallFailure,
+  shouldRecoverByCompaction,
+} from "../../../shared/agent/context-headroom";
 import { getProviderHub } from "./provider-hub";
 import { attachGoalDriver } from "./goal-driver";
 import { createGoalPromptExtension } from "./goal-prompt";
@@ -32,11 +54,13 @@ import { readPersonalMemorySync } from "./personal-memory-store";
 import { createAgenticControlExtension } from "./agentic/control-tools";
 import { networkService } from "./network";
 import { applyAgentShell } from "./network/agent-shell";
+import { withExecutionNetworkPolicy } from "./network/execution-scope";
 import { installInferenceBoundary, withInferenceContext } from "./agentic/inference-boundary";
 import { findRuntimeSessionForLookup, piStatusFromEvents } from "./pi-runtime-state";
 import { configuredPiSessionDir, findSessionFile } from "./sessions-store";
 import { getGlobalSingleton } from "./instances";
 import { connectorsRevisionSync } from "./connectors-service";
+import { readSessionExecutionPolicy, setSessionExecutionPolicy } from "./session-metadata-store";
 import { closePooledConnection } from "./connector-pool";
 import {
   activatableConnectorIds,
@@ -131,8 +155,6 @@ type DurableSessionManager = Pick<
   "appendCustomEntry" | "getCwd" | "getEntries" | "getSessionFile" | "getSessionId"
 >;
 
-/** Appended to the system prompt for vision-capable models. Kept as an extra
- *  section rather than a replacement so first-party extensions still apply. */
 const VISION_GUIDANCE =
   "When an image is attached, inspect it carefully before answering. State only details visible in the image. Never invent labels, UI elements, text, or facts. Say when details are too small or uncertain. Give a concise answer. Use available tools to inspect supplied files when helpful.";
 
@@ -157,6 +179,8 @@ export function persistLitterPromptBoundary(input: {
   message: string;
   marker: PiDurablePromptMarker;
   modelId: string;
+  behaviorProfile: string | null;
+  networkPolicy: import("../../../shared/agent/network-policy").NetworkPolicy;
 }): PiDurablePromptBoundary {
   const beforeMarker = input.sessionManager.getEntries();
   const matches = beforeMarker.slice(input.startEntryCount).filter((entry) => {
@@ -220,6 +244,8 @@ export function persistLitterPromptBoundary(input: {
     sessionFile,
     cwd,
     modelId: input.modelId,
+    behaviorProfile: input.behaviorProfile,
+    networkPolicy: input.networkPolicy,
     acceptedAt: markerEntry.timestamp,
   };
 }
@@ -254,6 +280,15 @@ export function resolvePiRuntimeStartOptions(
   requested?: RuntimeStartOptions,
 ): RuntimeStartOptions {
   return structuredClone(requested ?? (running ? current : {}));
+}
+
+function executionPolicyOf(options: RuntimeStartOptions): ExecutionPolicy {
+  return (
+    options.executionPolicy ?? {
+      behaviorProfile: null,
+      networkPolicy: options.networkPolicy ?? DEFAULT_NETWORK_POLICY,
+    }
+  );
 }
 
 function runtimeFingerprint(
@@ -297,10 +332,6 @@ export function piResourceDiagnostics(agentDir?: string): PiResourceDiagnostic[]
 }
 
 class PiSdkSession extends EventEmitter implements PiAgentSession {
-  //
-  // The manager keys its map by this id; the session needs it too, because the
-  // control tools resolve which Run a conversation is driving from it.
-  //
   constructor(private readonly runtimeSessionId: string) {
     super();
   }
@@ -324,12 +355,6 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     string,
     { method: "select" | "confirm" | "input" | "editor"; resolve: (value: unknown) => void }
   >();
-  // --- personal MCP connectors, per session -------------------------------
-  // `desiredConnectors` is what the user asked THIS session for; it outlives a
-  // runtime rebuild so a model/cwd change re-activates instead of silently
-  // dropping the tools. `registeredConnectorTools` is what the CURRENT runtime
-  // actually has registered, and dies with it. Neither feeds
-  // runtimeFingerprint — activation must never restart a runtime.
   private readonly connectorHolderKey = randomUUID();
   private connectorApi: ExtensionAPI | null = null;
   private desiredConnectors: string[] = [];
@@ -356,28 +381,13 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
           this.desiredConnectors = ["personal-knowledge-mcp"];
         }
       }
-      return (
-        // Re-apply the session's connector selection after every start: a runtime
-        // rebuild (model, cwd, thinking level) drops the registrations, and the
-        // user's `/mcp` choice must survive it. A connector that cannot be
-        // reached must never fail the turn.
-        this.syncConnectorTools().then(
-          () => undefined,
-          () => undefined,
-        )
+      return this.syncConnectorTools().then(
+        () => undefined,
+        () => undefined,
       );
     });
   }
 
-  /**
-   * Personal MCP connectors active for THIS session.
-   *
-   * Deliberately not part of runtimeFingerprint: activating a connector must
-   * never tear down the runtime or re-spawn every MCP client, and it must not
-   * write connectors.json. It only moves names in and out of
-   * `agent.state.tools`, which is the single place tool schemas are serialised
-   * from.
-   */
   setConnectorSelection(connectorIds: string[]): Promise<ConnectorSelectionResult> {
     this.connectorSelectionInitialized = true;
     this.desiredConnectors = normalizePersonalConnectorIds(connectorIds);
@@ -392,7 +402,14 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     return this.runtime?.session.getActiveToolNames() ?? [];
   }
 
-  private async syncConnectorTools(): Promise<ConnectorSelectionResult> {
+  private syncConnectorTools(): Promise<ConnectorSelectionResult> {
+    return withExecutionNetworkPolicy(
+      executionPolicyOf(this.currentStartOptions).networkPolicy,
+      () => this.syncConnectorToolsForPolicy(),
+    );
+  }
+
+  private async syncConnectorToolsForPolicy(): Promise<ConnectorSelectionResult> {
     const errors: Record<string, string> = {};
     const plan = planConnectorSelection(
       this.registeredConnectorTools.keys(),
@@ -405,8 +422,6 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
       const names = this.registeredConnectorTools.get(connectorId) ?? [];
       this.registeredConnectorTools.delete(connectorId);
       if (session) deactivateConnectorTools(session, names);
-      // Only the last holder closes the pooled connection; another session may
-      // still be mid-turn on the same server.
       if (releaseConnector(connectorId, this.connectorHolderKey)) {
         closePooledConnection(connectorId);
       }
@@ -422,8 +437,6 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
         }
         const label = resolvePersonalConnector(connectorId)?.label ?? connectorId;
         try {
-          // First spawn of this connector's process happens here — lazily, on
-          // the session that asked for it.
           const names = await registerConnectorTools(api, connectorId, label);
           this.registeredConnectorTools.set(connectorId, names);
           holdConnector(connectorId, this.connectorHolderKey);
@@ -455,15 +468,6 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
       function* (this: PiSdkSession) {
         const resolvedCwd = yield* resolveAgentCwdEffect(cwd);
         const desiredSessionId = piSessionId ?? null;
-        const fingerprint = runtimeFingerprint(modelId, resolvedCwd, desiredSessionId, options);
-        if (this.runtime && this.currentFingerprint === fingerprint) return;
-
-        yield* this.stopEffect();
-        this.eventSeq = 0;
-        this.eventLog = [];
-        this.activePromptCount = 0;
-        this.lastError = null;
-
         const { models } = yield* Effect.tryPromise({
           try: () => refreshPiModels(),
           catch: (error) => error,
@@ -474,23 +478,52 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
             new Error(`Model '${modelId}' is not available from /v1/models.`),
           );
         }
+        const persistedPolicy = desiredSessionId
+          ? readSessionExecutionPolicy(desiredSessionId)
+          : null;
+        if (options.executionPolicy) {
+          assertBehaviorProfile(options.executionPolicy.behaviorProfile, selectedModel);
+        }
+        const executionPolicy = executionPolicyForModel(
+          selectedModel,
+          options.executionPolicy?.networkPolicy ??
+            options.networkPolicy ??
+            persistedPolicy?.networkPolicy ??
+            DEFAULT_NETWORK_POLICY,
+        );
+        const effectiveOptions = {
+          ...options,
+          networkPolicy: executionPolicy.networkPolicy,
+          executionPolicy,
+        };
+        const fingerprint = runtimeFingerprint(
+          modelId,
+          resolvedCwd,
+          desiredSessionId,
+          effectiveOptions,
+        );
+        if (this.runtime && this.currentFingerprint === fingerprint) return;
+
+        yield* this.stopEffect();
+        this.eventSeq = 0;
+        this.eventLog = [];
+        this.activePromptCount = 0;
+        this.lastError = null;
         const resolvedSelection = resolvePiModelSelection(selectedModel.id);
         const providerId = selectedModel.providerId ?? resolvedSelection.providerId;
         const backendModelId = selectedModel.rawId ?? resolvedSelection.modelId;
 
-        // One shared ModelRuntime across sessions and the provider hub: a
-        // sign-in completed in settings is live for the next turn.
         const sharedModelRuntime = yield* Effect.tryPromise({
           try: () => getProviderHub(),
           catch: (error) => error,
         });
         installInferenceBoundary(sharedModelRuntime);
 
-        const sessionOptions = buildAgentSessionOptionsSync({ options });
-        applyRuntimeEnvInjections(sessionOptions.envInjections);
-        // Expose the current session's model so the automations extension can
-        // default a scheduled run to the same model the user is talking to.
-        applyRuntimeEnvInjections({ LOCAL_STUDIO_MODEL_ID: modelId });
+        const sessionOptions = buildAgentSessionOptionsSync({ options: effectiveOptions });
+        yield* installRuntimeStartupEnvironment({
+          ...sessionOptions.envInjections,
+          LOCAL_STUDIO_MODEL_ID: modelId,
+        });
         const sessionDir = configuredPiSessionDir(resolvedCwd);
         const resumeFile = desiredSessionId ? findSessionFile(resolvedCwd, desiredSessionId) : null;
         const sessionManager = resumeFile
@@ -498,24 +531,23 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
           : SessionManager.create(resolvedCwd, sessionDir);
         const resuming = Boolean(resumeFile);
         const agentDir = getAgentDir();
-        //
-        // The agent's shell is pointed at the jail shim here, before the session
-        // exists, so the first bash call of a protected turn is already inside
-        // the boundary. `networkPolicy` is in the runtime fingerprint, so
-        // flipping the toggle rebuilds the runtime rather than leaving a live
-        // session on the shell it started with.
-        //
-        //
-        // Applied before the session exists, so the first bash call of a
-        // protected turn is already inside the boundary. If the write did not
-        // take, the runtime does NOT start: a session whose shell is the bare
-        // /bin/bash would run every command the model writes outside the jail
-        // while the owner is being shown a padlock, and failing to start is the
-        // only answer to that which is not a lie.
-        //
+        yield* Effect.tryPromise({
+          try: () => applyContextHeadroomSettings(agentDir, selectedModel.contextWindow),
+          catch: (error) => error,
+        }).pipe(Effect.catch(() => Effect.succeed(null)));
         {
           const network = networkService();
-          const shim = network.shellShimPath();
+          const networkTransition = network.setSessionPolicy(
+            this.runtimeSessionId,
+            executionPolicy.networkPolicy,
+          );
+          if (executionPolicy.networkPolicy === "vpn_protected") {
+            yield* Effect.tryPromise({
+              try: () => networkTransition,
+              catch: (error) => error,
+            });
+          }
+          const shim = network.shellShimPath(executionPolicy.networkPolicy);
           const applied = applyAgentShell(agentDir, shim);
           if (shim !== null && !applied) {
             throw new Error(
@@ -529,6 +561,7 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
           this.connectorApi = api;
         };
         const runtimeSessionId = this.runtimeSessionId;
+        const compactionExtension = createBoundedCompactionExtension(() => this.requireSession());
         const runtime = yield* Effect.tryPromise({
           try: () =>
             createAgentSessionRuntime(
@@ -545,19 +578,12 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
                             additionalSkillPaths: sessionOptions.skills,
                             additionalExtensionPaths: sessionOptions.extensionPaths,
                             additionalPromptTemplatePaths: sessionOptions.promptTemplatePaths,
-                            // Personal skills are discoverable by /skill:<name>
-                            // but must never reach the system prompt: this marks
-                            // them model-invocation-disabled at runtime, so
-                            // formatSkillsForPrompt drops them while
-                            // _expandSkillCommand still resolves them. No
-                            // SKILL.md frontmatter is touched.
                             skillsOverride: personalSkillsOverride(),
-                            // In-process: the goal section is injected per turn
-                            // via before_agent_start, keyed by the canonical
-                            // piSessionId this SessionManager owns. Runs here so
-                            // it never depends on the RPC extension's session id
-                            // (which differs and left the goal unread — #284).
                             extensionFactories: [
+                              {
+                                name: "local-studio-bounded-compaction",
+                                factory: compactionExtension,
+                              },
                               {
                                 name: "local-studio-goal",
                                 factory: createGoalPromptExtension(() =>
@@ -568,19 +594,13 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
                                 name: "local-studio-personal-memory",
                                 factory: createPersonalMemoryExtension(selectedModel.controllerUrl),
                               },
-                              // Registers NO tools at load: a fresh session must
-                              // carry zero personal MCP schemas and must not
-                              // spawn a single MCP process. It only captures the
-                              // live ExtensionAPI so `/mcp <name>` can register
-                              // that one connector's tools later, in-place.
-                              // The durable-work control surface. Present on
-                              // EVERY chat session, because deciding that a
-                              // request is durable work is the model's to make
-                              // — a session that could not reach the tools
-                              // could never make it.
                               {
                                 name: "local-studio-agentic",
-                                factory: createAgenticControlExtension(() => runtimeSessionId),
+                                factory: createAgenticControlExtension(
+                                  () => runtimeSessionId,
+                                  () => selectedModel.id,
+                                  () => executionPolicy,
+                                ),
                               },
                               {
                                 name: "local-studio-connectors",
@@ -589,11 +609,6 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
                                 }),
                               },
                             ],
-                            // Vision guidance is APPENDED, not substituted. This branch used to
-                            // set noExtensions/noSkills/noContextFiles and replace the whole
-                            // system prompt, which silently disabled every first-party extension
-                            // (session goal, artifact policy, subagents) on any
-                            // vision-capable model — i.e. on the primary model.
                             ...(selectedModel.vision
                               ? {
                                   appendSystemPromptOverride: (base: string[]) => [
@@ -606,6 +621,10 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
                         }),
                       catch: (error) => error,
                     });
+                    applySessionContextHeadroom(
+                      services.settingsManager,
+                      selectedModel.contextWindow,
+                    );
                     const model = services.modelRuntime.getModel(providerId, backendModelId);
                     if (!model) {
                       return yield* Effect.fail(
@@ -620,15 +639,21 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
                           services,
                           sessionManager,
                           sessionStartEvent,
+                          customTools: createOperationalTools({
+                            cwd: resolvedCwd,
+                            runtimeSessionId,
+                            shellPath: services.settingsManager.getShellPath(),
+                            commandPrefix: services.settingsManager.getShellCommandPrefix(),
+                          }),
                           model,
                           thinkingLevel: selectedModel.reasoning
-                            ? (options.thinkingLevel ?? "high")
+                            ? (effectiveOptions.thinkingLevel ?? "high")
                             : undefined,
                         }),
                       catch: (error) => error,
                     });
                     const activeToolNames =
-                      options.toolAccess === "read_only"
+                      effectiveOptions.toolAccess === "read_only"
                         ? ["read", "grep", "find", "ls"]
                         : created.session.getAllTools().map((tool) => tool.name);
                     created.session.setActiveToolsByName(activeToolNames);
@@ -690,10 +715,17 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
         this.currentCwd = resolvedCwd;
         this.currentPiSessionId = runtime.session.sessionId || desiredSessionId;
         this.currentFingerprint = fingerprint;
-        this.currentStartOptions = options;
+        this.currentStartOptions = effectiveOptions;
         this.unsubscribe = runtime.session.subscribe((event) => this.recordEvent(event));
+        if (this.currentPiSessionId) {
+          yield* Effect.tryPromise({
+            try: () =>
+              setSessionExecutionPolicy(this.currentPiSessionId!, executionPolicy, modelId),
+            catch: (error) => error,
+          });
+        }
       }.bind(this),
-    );
+    ).pipe(Effect.scoped);
   }
 
   prompt(
@@ -719,6 +751,9 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
       message,
       marker,
       modelId: this.currentModelId,
+      behaviorProfile: this.currentStartOptions.executionPolicy?.behaviorProfile ?? null,
+      networkPolicy:
+        this.currentStartOptions.executionPolicy?.networkPolicy ?? DEFAULT_NETWORK_POLICY,
     });
   }
 
@@ -734,24 +769,47 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     const priority = options.inferencePriority ?? "interactive";
     const controller = new AbortController();
     this.promptAbortControllers.add(controller);
+    let compactionRecoveryUsed = false;
     return Effect.tryPromise({
-      try: () =>
-        withInferenceContext(
-          priority,
-          controller.signal,
-          () => this.promptSession(message, options),
-          options.inferenceObserver,
-        ),
-      catch: (error) => error,
+      try: async () => {
+        await withExecutionNetworkPolicy(
+          executionPolicyOf(this.currentStartOptions).networkPolicy,
+          () =>
+            withInferenceContext(
+              priority,
+              controller.signal,
+              () => this.promptSession(message, options),
+              options.inferenceObserver,
+            ),
+        );
+        if (controller.signal.aborted) throw new PiTurnCancelled();
+      },
+      catch: (error) => (controller.signal.aborted ? new PiTurnCancelled() : error),
     }).pipe(
       Effect.catch((error) =>
         options.restartOnContinuationError !== false && shouldRestartAfterPromptError(error)
           ? this.restartPromptEffect(message, options, priority, controller.signal)
           : Effect.fail(error),
       ),
+      Effect.catch((error) => {
+        if (compactionRecoveryUsed || controller.signal.aborted) return Effect.fail(error);
+        if (!this.shouldCompactAfterPromptError(error)) return Effect.fail(error);
+        compactionRecoveryUsed = true;
+        return this.compactAndRetryPromptEffect(
+          options,
+          priority,
+          controller.signal,
+          error instanceof PiTurnFailure && error.compaction === "succeeded",
+        );
+      }),
       Effect.catch((error) =>
         Effect.sync(() => {
-          this.lastError = error instanceof Error ? error.message : String(error);
+          this.lastError =
+            error instanceof PiTurnCancelled
+              ? null
+              : error instanceof Error
+                ? error.message
+                : String(error);
         }).pipe(Effect.andThen(Effect.fail(error))),
       ),
       Effect.ensuring(
@@ -765,13 +823,81 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
   }
 
   private promptSession(message: string, options: PiPromptOptions): Promise<void> {
-    return this.requireSession().prompt(message, {
-      streamingBehavior: options.streamingBehavior,
-      images: options.images,
-      expandPromptTemplates: options.expandPromptTemplates,
-      source: options.source,
-      preflightResult: options.preflightResult,
-    });
+    const session = this.requireSession();
+    return observePiTurn(session, () =>
+      session.prompt(message, {
+        streamingBehavior: options.streamingBehavior,
+        images: options.images,
+        expandPromptTemplates: options.expandPromptTemplates,
+        source: options.source,
+        preflightResult: options.preflightResult,
+      }),
+    );
+  }
+
+  private shouldCompactAfterPromptError(error: unknown): boolean {
+    if (!this.runtime) return false;
+    if (error instanceof PiTurnFailure && error.compaction === "failed") return false;
+    if (error instanceof PiTurnFailure && error.compaction === "succeeded")
+      return isContextWallFailure(error.message);
+    const detail = error instanceof Error ? error.message : String(error ?? "");
+    const usage = this.computeContextUsage();
+    return shouldRecoverByCompaction(detail, usage?.tokens ?? null, usage?.contextWindow ?? null);
+  }
+
+  private compactAndRetryPromptEffect(
+    options: PiPromptOptions,
+    priority: "interactive" | "background",
+    signal: AbortSignal,
+    alreadyCompacted = false,
+  ): Effect.Effect<void, unknown> {
+    return Effect.tryPromise({
+      try: async () => {
+        if (alreadyCompacted) return;
+        const session = this.requireSession();
+        await session.waitForIdle();
+        signal.throwIfAborted();
+        this.recordEvent({
+          type: "notice",
+          level: "info",
+          message: "Context limit reached — compacting the conversation and continuing.",
+        });
+        await withExecutionNetworkPolicy(
+          executionPolicyOf(this.currentStartOptions).networkPolicy,
+          () =>
+            withInferenceContext(
+              "background",
+              signal,
+              () => Promise.resolve(session.compact()),
+              options.inferenceObserver,
+            ),
+        );
+      },
+      catch: (error) => error,
+    }).pipe(
+      Effect.andThen(
+        Effect.tryPromise({
+          try: () =>
+            withExecutionNetworkPolicy(
+              executionPolicyOf(this.currentStartOptions).networkPolicy,
+              () =>
+                withInferenceContext(
+                  priority,
+                  signal,
+                  () => {
+                    signal.throwIfAborted();
+                    const session = this.requireSession();
+                    return observePiTurn(session, () =>
+                      session.sendCustomMessage(CONTEXT_RECOVERY_MESSAGE, { triggerTurn: true }),
+                    );
+                  },
+                  options.inferenceObserver,
+                ),
+            ),
+          catch: (error) => error,
+        }),
+      ),
+    );
   }
 
   private restartPromptEffect(
@@ -789,11 +915,15 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
       Effect.andThen(
         Effect.tryPromise({
           try: () =>
-            withInferenceContext(
-              priority,
-              signal,
-              () => this.promptSession(message, options),
-              options.inferenceObserver,
+            withExecutionNetworkPolicy(
+              executionPolicyOf(this.currentStartOptions).networkPolicy,
+              () =>
+                withInferenceContext(
+                  priority,
+                  signal,
+                  () => this.promptSession(message, options),
+                  options.inferenceObserver,
+                ),
             ),
           catch: (error) => error,
         }),
@@ -873,21 +1003,18 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     }
     return Effect.tryPromise({
       try: () =>
-        withInferenceContext(
-          "background",
-          undefined,
-          () => Promise.resolve(this.requireSession().compact(customInstructions)),
-          inferenceObserver,
+        withExecutionNetworkPolicy(executionPolicyOf(this.currentStartOptions).networkPolicy, () =>
+          withInferenceContext(
+            "background",
+            undefined,
+            () => Promise.resolve(this.requireSession().compact(customInstructions)),
+            inferenceObserver,
+          ),
         ),
       catch: (error) => error,
     });
   }
 
-  /** Stop the current run and hand back whatever was still queued.
-   *
-   *  clearQueue() returns the texts precisely so they are not lost — pi's own
-   *  TUI puts them back in the editor. Discarding them meant a stop silently
-   *  destroyed every message the user had lined up. */
   abort(): Promise<{ steering: string[]; followUp: string[] }> {
     return Effect.runPromise(
       Effect.tryPromise({
@@ -914,18 +1041,14 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     if (!session) return Promise.resolve();
     try {
       session.clearQueue();
-    } catch {
-      // Queue restoration belongs to interactive Stop; durable cancel only needs idle confirmation.
-    }
+    } catch {}
     return (async () => {
       try {
         session.abortCompaction();
       } catch {}
       try {
         await session.abort();
-      } catch {
-        // waitForIdle is the authoritative postcondition even if abort reports an error.
-      }
+      } catch {}
       await session.waitForIdle();
     })();
   }
@@ -952,8 +1075,6 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
   private stopEffect(): Effect.Effect<void> {
     this.unsubscribe?.();
     this.unsubscribe = null;
-    // Tool registrations live in the runtime being disposed; the DESIRED set
-    // survives so the next ensureStarted re-activates the same connectors.
     this.connectorApi = null;
     for (const connectorId of this.registeredConnectorTools.keys()) {
       if (releaseConnector(connectorId, this.connectorHolderKey)) {
@@ -967,9 +1088,13 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
       pending.resolve(pending.method === "confirm" ? false : undefined);
     }
     this.extensionUiPending.clear();
-    if (!runtime) return Effect.void;
+    const browserSessionId = this.currentStartOptions.browserSessionId;
+    networkService().releaseSession(this.runtimeSessionId);
     return Effect.tryPromise({
-      try: () => runtime.dispose(),
+      try: async () => {
+        await releaseBrowserSession(browserSessionId);
+        await runtime?.dispose();
+      },
       catch: () => undefined,
     }).pipe(Effect.catch(() => Effect.void));
   }
@@ -984,6 +1109,8 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
         Boolean(sdkSession?.isCompacting) ||
         (sdkSession?.pendingMessageCount ?? 0) > 0,
       modelId: this.currentModelId,
+      behaviorProfile: executionPolicyOf(this.currentStartOptions).behaviorProfile,
+      networkPolicy: executionPolicyOf(this.currentStartOptions).networkPolicy,
       cwd: this.currentCwd,
       piSessionId: this.currentPiSessionId,
       agentDir: this.agentDir,
@@ -992,6 +1119,16 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
       eventLog: this.eventLog,
       contextUsage: this.computeContextUsage(),
     });
+  }
+
+  getStartOptions(): RuntimeStartOptions {
+    return structuredClone(this.currentStartOptions);
+  }
+
+  contextBudget(): ContextBudgetReport | null {
+    const session = this.runtime?.session;
+    if (!session) return null;
+    return describeContextBudget(session);
   }
 
   private computeContextUsage() {
@@ -1003,6 +1140,7 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     const tokens = typeof usage.tokens === "number" ? usage.tokens : null;
     return {
       tokens,
+      estimated: !contextUsageIsMeasured(tokens, session.messages),
       contextWindow: usage.contextWindow,
       percent: typeof usage.percent === "number" ? usage.percent : null,
       shouldCompact:

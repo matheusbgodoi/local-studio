@@ -1,6 +1,6 @@
 import { getGlobalSingleton } from "../instances";
 import { HostedPage, type PageState, type ScreencastFrame } from "./hosted-page";
-import { playwrightManager } from "./playwright";
+import { PlaywrightManager, playwrightManager } from "./playwright";
 
 export type { PageState, ScreencastFrame };
 
@@ -14,12 +14,16 @@ const normalizeUrl = (value: string): string =>
 const capString = (value: string, maximum: number): string =>
   value.length > maximum ? value.slice(0, maximum) : value;
 
-class BrowserHost {
+export class BrowserHost {
+  constructor(private readonly manager = playwrightManager) {}
+
+  private creating: Promise<HostedPage> | null = null;
+  private generation = 0;
   private pages = new Map<string, HostedPage>();
   private activeId: string | null = null;
 
   isAvailable(): boolean {
-    return playwrightManager.isAvailable();
+    return this.manager.isAvailable();
   }
 
   async page(pageId?: string): Promise<HostedPage> {
@@ -31,30 +35,36 @@ class BrowserHost {
     }
     if (cached) this.pages.delete(cached.id);
 
-    const context = await playwrightManager.ensure();
-    const rawPage =
-      context
-        .pages()
-        .find((candidate) =>
-          Array.from(this.pages.values()).every((hosted) => !hosted.matches(candidate)),
-        ) ?? (await context.newPage());
-    const hosted = HostedPage.attach(rawPage);
-    this.pages.set(hosted.id, hosted);
-    this.activeId = hosted.id;
-    return hosted;
+    if (!pageId && this.creating) return this.creating;
+    const generation = this.generation;
+    const create = async () => {
+      const context = await this.manager.ensure();
+      const rawPage =
+        context
+          .pages()
+          .find((candidate) =>
+            Array.from(this.pages.values()).every((hosted) => !hosted.matches(candidate)),
+          ) ?? (await context.newPage());
+      if (generation !== this.generation) throw new Error("Browser closed while creating a page");
+      const hosted = HostedPage.attach(rawPage);
+      this.pages.set(hosted.id, hosted);
+      this.activeId = hosted.id;
+      return hosted;
+    };
+    this.creating = create().finally(() => {
+      this.creating = null;
+    });
+    return this.creating;
   }
 
-  // Hand the CURRENT profile to the owner in a visible window so they can pass a
-  // challenge or sign in themselves. The hosted pages are dropped first because
-  // switching modes closes the context they wrap; the cookies they earned live
-  // in the profile directory and survive the swap, which is the entire reason
-  // this is a relaunch rather than a second browser.
-  async openForVerification(url?: string): Promise<{ url: string; title: string; headful: boolean }> {
+  async openForVerification(
+    url?: string,
+  ): Promise<{ url: string; title: string; headful: boolean }> {
     const target = url ?? (await this.peekState())?.url ?? "";
     for (const page of this.pages.values()) page.close();
     this.pages.clear();
     this.activeId = null;
-    await playwrightManager.setInteractive(true);
+    await this.manager.setInteractive(true);
     if (!target) {
       const page = await this.page();
       const state = await page.readState();
@@ -65,7 +75,7 @@ class BrowserHost {
   }
 
   isInteractive(): boolean {
-    return playwrightManager.isHeadful();
+    return this.manager.isHeadful();
   }
 
   async navigate(url: string, pageId?: string): Promise<{ url: string; title: string }> {
@@ -156,11 +166,11 @@ class BrowserHost {
     await (await this.page(pageId)).dispatchKey(args);
   }
 
-  stop(): void {
-    for (const page of this.pages.values()) page.close();
+  async stop(): Promise<void> {
+    this.generation += 1;
     this.pages.clear();
     this.activeId = null;
-    playwrightManager.stop();
+    await this.manager.stop();
   }
 }
 
@@ -182,3 +192,26 @@ const clampDelta = (value: number): number => {
 };
 
 export const browserHost = getGlobalSingleton("browserHost", () => new BrowserHost());
+
+const sessionHosts = getGlobalSingleton(
+  "sessionBrowserHosts",
+  () => new Map<string, BrowserHost>(),
+);
+
+export function browserHostForSession(sessionId?: string): BrowserHost {
+  if (!sessionId) return browserHost;
+  let host = sessionHosts.get(sessionId);
+  if (!host) {
+    host = new BrowserHost(new PlaywrightManager(sessionId));
+    sessionHosts.set(sessionId, host);
+  }
+  return host;
+}
+
+export async function releaseBrowserSession(sessionId?: string): Promise<void> {
+  if (!sessionId) return;
+  const host = sessionHosts.get(sessionId);
+  if (!host) return;
+  sessionHosts.delete(sessionId);
+  await host.stop();
+}

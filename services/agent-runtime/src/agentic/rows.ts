@@ -1,8 +1,3 @@
-//
-// Row decoding for the durable store. SQLite hands back `unknown`; every
-// record crosses this boundary exactly once so no caller has to guess.
-//
-
 import type {
   AcceptanceCriterion,
   AgenticAgent,
@@ -196,6 +191,9 @@ export const toCheckpoint = (row: Row): AgenticCheckpoint => ({
   reason: text(row.reason),
   tokensBefore: int(row.tokens_before),
   tokensAfter: int(row.tokens_after),
+  beforeMeasured:
+    row.before_measured == null ? int(row.tokens_before) > 0 : row.before_measured === 1,
+  afterMeasured: row.after_measured == null ? int(row.tokens_after) > 0 : row.after_measured === 1,
   targetTokens: int(row.target_tokens),
   usableLimit: int(row.usable_limit),
   durationMs: int(row.duration_ms),

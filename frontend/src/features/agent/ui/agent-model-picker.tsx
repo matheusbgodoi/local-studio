@@ -9,6 +9,7 @@ import {
   type PointerEvent,
 } from "react";
 import Link from "next/link";
+import { isUncensoredBehaviorProfile } from "@shared/agent/behavior-profile";
 import { Check, ChevronDown, ChevronLeft, ChevronRight, Pin } from "@/ui/icon-registry";
 import { AGENT_THINKING_LEVELS, type AgentThinkingLevel } from "@/features/agent/contracts";
 import type { AgentModel } from "@/features/agent/workspace/types";
@@ -38,13 +39,11 @@ type AgentModelPickerProps = {
 };
 
 type ModelGroup = { key: string; name: string; physicalModels: PhysicalModel[] };
-/** Every list in this popover emits a pick AND what that pick means, so a list
- *  added later cannot quietly reintroduce a profile switch that reads as a model
- *  switch. */
+
 type SelectModel = (modelId: string, physicalModel: AgentModelSelection["physicalModel"]) => void;
 type ModelSelection = {
   active: AgentModel | null;
-  /** The physical model's one label — the same string the Model list renders. */
+
   label: string | undefined;
   profiles: AgentModel[];
   behaviorLabel: string | undefined;
@@ -61,16 +60,10 @@ const REASONING_LABELS: Record<AgentThinkingLevel, string> = {
   max: "Max",
 };
 
-/** A model whose template opens the reasoning block itself has exactly one state,
- *  and it is not a rung on a ladder. Naming it "High" would invite the user to
- *  look for the level below it. */
 function reasoningTriggerLabel(
   active: AgentModel | null,
   effectiveReasoning: AgentThinkingLevel,
 ): string {
-  // Resolved from what the row states, not from its name alone, so a new alias
-  // of an always-on checkpoint reads "Native" here for the same reason the
-  // runtime gives it one fixed level.
   const nativeAlwaysOn = isNativeAlwaysOnThinkingModel({
     modelId: active?.rawId ?? active?.id,
     physicalModelId: active?.physicalModelId,
@@ -109,17 +102,8 @@ export function AgentModelPicker({
     [visible.visibleModels],
   );
   const disabled = loading;
-  const modelLabel = modelTriggerLabel(selection, visible.controllerModels.length);
-  // ONE TURN LOCK, TWO LISTS. `reasoningDisabled` is Boolean(running) at the call
-  // site, and the Behavior list freezes with it. No longer because picking a
-  // profile moves the reasoning level — the pick now states that the checkpoint is
-  // unchanged and the level is carried across — but because the alias is read
-  // again while the turn runs: the queued send, a steer, a follow-up, a retry and
-  // a compaction all send with the session's current modelId, so flipping Standard
-  // to Uncensored mid-turn answers the rest of that turn with the ablated weights
-  // and splits one turn across two rows in Usage, which attributes per alias. The
-  // Model list carries the same hazard and is not locked; that gap is older and
-  // wider than this control and is not narrowed here.
+  const baseModelLabel = modelTriggerLabel(selection, visible.controllerModels.length);
+  const modelLabel = baseModelLabel;
   const turnRunning = reasoningDisabled;
   const supportsReasoning = Boolean(reasoningLevel && onSelectReasoning);
   const requestedReasoning = reasoningLevel ?? "off";
@@ -134,13 +118,6 @@ export function AgentModelPicker({
     setOpen(false);
     setView("root");
   }, []);
-  // ONE FUNNEL, TWO MEANINGS, AND THE ROW KNOWS WHICH. The Behavior list and the
-  // Model list both end here, so the callee cannot tell a behaviour switch from a
-  // model switch unless the row says. The Behavior list knows it structurally —
-  // every row it draws is a profile of the group that owns the selection — and
-  // the Model list already computed it for its checkmark. `effectiveReasoning` is
-  // attached here because this is the level the trigger is displaying; the lists
-  // never see it.
   const select = useCallback(
     (modelId: string, physicalModel: AgentModelSelection["physicalModel"]) => {
       onSelect({ modelId, physicalModel, thinkingLevel: effectiveReasoning });
@@ -472,11 +449,7 @@ function ReasoningList({
           />
         ))}
       </div>
-      {/* The level is not a runtime switch: the chat template renders it as a
-          sentence at the very top of the prompt, so changing it moves every
-          token after it and the server has no cached prefix left to reuse. On a
-          long conversation that is a full re-read before the next reply starts,
-          and the wait is otherwise indistinguishable from the app hanging. */}
+      {}
       <p className="border-t border-(--border) px-2.5 pb-1 pt-2 text-[length:var(--fs-sm)] leading-snug text-(--dim)">
         Changing this rewrites the start of the prompt, so the model re-reads the conversation
         before the next reply. Long chats take a while.
@@ -537,8 +510,6 @@ function ModelPickerTrigger({
       onClick={onToggle}
       disabled={disabled}
       className={cx(
-        // Codex: the model control sits at the shared chat size (16px) with
-        // primary-strength text; only the chevron reads dim.
         "group/model inline-flex !h-[30px] !min-h-[30px] !min-w-0 max-w-full items-center justify-between gap-1 rounded-lg bg-transparent pl-2 pr-1.5 text-[length:var(--fs-base)] whitespace-nowrap text-(--fg)/85 transition-colors hover:bg-(--hover) hover:text-(--fg) active:translate-y-px disabled:opacity-60",
         open && "bg-(--hover) text-(--fg)",
       )}
@@ -592,11 +563,10 @@ function ModelOption({
   onSelect: SelectModel;
   onSetDefault?: (modelId: string) => void;
 }) {
-  // The label the shared layer computed. Recomputing it here is how the popover
-  // root came to read "qwen-daily" over a list reading "Qwen3.8-27B".
   const label = officialPhysicalLabel(physical) ?? "Model identity unavailable";
   const selected = ownsProfile(physical, selectedModel);
   const targetId = resolveProfileId(physical, selectedModel, defaultModel);
+  const target = physical.profiles.find((profile) => profile.id === targetId) ?? physical.primary;
   return (
     <div
       className={cx(
@@ -608,11 +578,6 @@ function ModelOption({
         type="button"
         role="menuitemradio"
         aria-checked={selected}
-        // `selected` is the same binding that draws the checkmark, so the arm cannot disagree
-        // with what the row shows. Clicking the row that is ALREADY checked reports
-        // "unchanged" and therefore files the displayed level under the alias it is already
-        // on — a write on a visual no-op, and deliberate: the level shown is the level in
-        // use, and pinning it is the same thing the pane does when the level itself changes.
         onClick={() => onSelect(targetId, selected ? "unchanged" : "changed")}
         className="flex min-h-8 min-w-0 flex-1 items-center gap-2 rounded-lg pl-2.5 text-left focus-visible:outline-none active:translate-y-px"
       >
@@ -632,22 +597,6 @@ function ModelOption({
   );
 }
 
-/**
- * The pin states what IS, and does exactly what it says.
- *
- * It used to disagree with itself twice over. `isDefault` was true if ANY alias
- * in the group held the default, while the click emitted an id derived from the
- * SELECTION — so with the default on one profile and the pane on another model,
- * the row rendered a filled pin reading "… is the default model" and clicking
- * it MOVED the default to a different profile, leaving the pin filled so that
- * nothing on screen changed.
- *
- * Both halves now name the same profile. A group that already owns the default
- * renders an inert pin that says WHICH profile holds it; a group that does not
- * offers to set the model's declared default profile, and says so — the row is
- * the physical model, so pinning it can never store an alias the product says
- * is never a default.
- */
 function DefaultModelPin({
   physical,
   defaultModel,
@@ -658,27 +607,33 @@ function DefaultModelPin({
   onSetDefault: (modelId: string) => void;
 }) {
   const multiProfile = physical.profiles.length > 1;
-  // "Qwen3.8-27B is the default" does not say which Qwen3.8-27B, and the two
-  // differ in exactly the way that matters.
   const nameOf = (profile: AgentModel) =>
     multiProfile
       ? `${officialPhysicalLabel(physical) ?? "Model"} · ${behaviorProfileLabel(profile)}`
       : (officialPhysicalLabel(physical) ?? "Model");
   const current = physical.profiles.find((profile) => profile.id === defaultModel);
+  const validCurrent = current && !isUncensoredBehaviorProfile(current);
+  const repairingRestrictedDefault = Boolean(current && !validCurrent);
   return (
     <button
       type="button"
-      disabled={Boolean(current)}
+      disabled={Boolean(validCurrent) || isUncensoredBehaviorProfile(physical.primary)}
       onClick={() => onSetDefault(physical.primary.id)}
       aria-label={
-        current
+        validCurrent
           ? `${nameOf(current)} is the default model`
           : `Set ${nameOf(physical.primary)} as default model`
       }
-      title={current ? `Default model: ${nameOf(current)}` : "Set as default"}
+      title={
+        repairingRestrictedDefault
+          ? `Replace restricted default with ${nameOf(physical.primary)}`
+          : validCurrent
+            ? `Default model: ${nameOf(current)}`
+            : "Set as default"
+      }
       className={cx(
         "mr-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-(--dim) transition-colors focus-visible:outline-none",
-        current ? "cursor-default text-(--fg)" : "hover:bg-(--active) hover:text-(--fg)",
+        validCurrent ? "cursor-default text-(--fg)" : "hover:bg-(--active) hover:text-(--fg)",
       )}
     >
       <Pin className={cx("h-3.5 w-3.5", current && "fill-current")} strokeWidth={1.5} />
@@ -698,8 +653,6 @@ function handleMenuKeyDown(
   else setView("root");
 }
 
-/** ONE LABEL. The trigger names the physical model with the very string the
- *  Model list renders, so the two halves of the same popover cannot disagree. */
 function modelTriggerLabel(selection: ModelSelection, modelCount: number): string {
   return selection.label ?? (modelCount === 0 ? "No models" : "Model identity unavailable");
 }
@@ -710,17 +663,16 @@ function behaviorProfileLabel(model: AgentModel): string {
     (model.behaviorProfileDefault ? "Standard" : "Alternate behavior")
   );
 }
-
 function officialPhysicalLabel(physical: PhysicalModel): string | undefined {
-  return physical.profiles
+  const declared = physical.profiles
     .map((profile) => profile.displayName?.trim())
     .find((label): label is string => Boolean(label));
+  return declared ?? physical.primary.name?.trim() ?? undefined;
 }
 
 function resolveModelSelection(models: AgentModel[], selectedModel: string): ModelSelection {
   const active = models.find((model) => model.id === selectedModel) ?? null;
   const physical = groupByPhysicalModel(models).find((group) => ownsProfile(group, selectedModel));
-  // A single-profile model still has a label — it just has no behaviour to pick.
   const multiProfile = (physical?.profiles.length ?? 0) > 1;
   return {
     active,

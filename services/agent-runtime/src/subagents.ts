@@ -1,16 +1,18 @@
-//
-// Subagents: child pi sessions a parent session's model spawns through the
-// `subagent` tool. Each subagent runs headless in this runtime with its own
-// context and canonical session file (so the UI can open it like any other
-// session), reports its final text back as the tool result, and shows up in
-// the parent's chips via the registry here.
-//
-
+import { PiTurnCancelled } from "./pi-turn-lifecycle";
 import { randomUUID } from "node:crypto";
+import { Effect } from "effect";
+import {
+  SUBAGENT_RUN_TIMEOUT_MS,
+  type SubagentRunInput,
+  type SubagentRun,
+} from "../../../shared/agent/subagent";
+import { resolveDataDir } from "./data-dir";
 import { getGlobalSingleton } from "./instances";
 import { piRuntimeManager } from "./pi-runtime";
 import { lastAssistantText } from "./session-text";
-import { sessionSubagentLink, setSubagentLink } from "./session-metadata-store";
+import { readSubagentRuns, saveSubagentRun } from "./session-metadata-store";
+import type { ExecutionPolicy } from "../../../shared/agent/execution-policy";
+import { DEFAULT_NETWORK_POLICY } from "../../../shared/agent/network-policy";
 
 const NICKNAMES = [
   "Euclid",
@@ -39,34 +41,35 @@ const MAX_CONCURRENT_PER_PARENT = 4;
 const MAX_RESULT_CHARS = 8000;
 const SUBAGENT_SESSION_PREFIX = "subagent:";
 
-export type SubagentRun = {
-  id: string;
-  parentPiSessionId: string;
-  name: string;
-  task: string;
-  piSessionId: string | null;
-  status: "running" | "done" | "error";
-  startedAt: string;
-  finishedAt: string | null;
-  error?: string;
-};
+export type { SubagentRun } from "../../../shared/agent/subagent";
 
 type SubagentState = {
-  /** parent pi session id -> runs, newest last */
   byParent: Map<string, SubagentRun[]>;
-  /** pi session ids that ARE subagents — they may not spawn their own */
-  childPiSessionIds: Set<string>;
 };
 
 function state(): SubagentState {
-  return getGlobalSingleton("subagentRegistry", () => ({
+  return getGlobalSingleton(`subagentRegistry:${resolveDataDir()}`, () => ({
     byParent: new Map<string, SubagentRun[]>(),
-    childPiSessionIds: new Set<string>(),
   }));
 }
 
 export function listSubagents(parentPiSessionId: string): SubagentRun[] {
-  return state().byParent.get(parentPiSessionId) ?? [];
+  const restored = readSubagentRuns(parentPiSessionId).map(
+    (run): SubagentRun =>
+      run.status === "running"
+        ? {
+            ...run,
+            status: "interrupted",
+            error:
+              "Runtime ended before this subagent settled. Inspect its transcript and partial work before starting a replacement; it was not automatically resumed.",
+          }
+        : run,
+  );
+  const byId = new Map(restored.map((run) => [run.id, run]));
+  for (const run of state().byParent.get(parentPiSessionId) ?? []) {
+    if (run.status === "running" || byId.has(run.id)) byId.set(run.id, { ...run });
+  }
+  return [...byId.values()];
 }
 
 function findParentRuntime(parentPiSessionId: string) {
@@ -85,27 +88,33 @@ function taskPrompt(name: string, task: string): string {
   ].join("\n");
 }
 
-export async function runSubagent(input: {
-  parentPiSessionId: string;
-  name: string;
-  task: string;
-  modelId?: string;
-}): Promise<{ piSessionId: string | null; result: string }> {
+export function runSubagent(
+  input: SubagentRunInput,
+  requestSignal?: AbortSignal,
+): Promise<{ piSessionId: string | null; result: string }> {
+  const signal = AbortSignal.any([
+    AbortSignal.timeout(SUBAGENT_RUN_TIMEOUT_MS),
+    ...(requestSignal ? [requestSignal] : []),
+  ]);
+  return Effect.runPromise(
+    Effect.tryPromise({
+      try: () => executeSubagent(input, signal),
+      catch: (error) => error,
+    }),
+  );
+}
+
+async function executeSubagent(
+  input: SubagentRunInput,
+  signal: AbortSignal,
+): Promise<{ piSessionId: string | null; result: string }> {
+  signal.throwIfAborted();
   const registry = state();
   const { parentPiSessionId } = input;
 
-  if (
-    registry.childPiSessionIds.has(parentPiSessionId) ||
-    sessionSubagentLink(parentPiSessionId) !== null
-  ) {
-    throw new Error("Subagents cannot spawn their own subagents.");
-  }
   const parent = findParentRuntime(parentPiSessionId);
   if (!parent) {
     throw new Error("No running session found for this conversation.");
-  }
-  if (parent.sessionId.startsWith(SUBAGENT_SESSION_PREFIX)) {
-    throw new Error("Subagents cannot spawn their own subagents.");
   }
   const running = listSubagents(parentPiSessionId).filter((run) => run.status === "running");
   if (running.length >= MAX_CONCURRENT_PER_PARENT) {
@@ -115,8 +124,14 @@ export async function runSubagent(input: {
   }
 
   const siblingCount = listSubagents(parentPiSessionId).length;
+  const parentOptions = parent.session.getStartOptions();
+  const executionPolicy: ExecutionPolicy = parentOptions.executionPolicy ?? {
+    behaviorProfile: parent.session.status.behaviorProfile,
+    networkPolicy:
+      parentOptions.networkPolicy ?? parent.session.status.networkPolicy ?? DEFAULT_NETWORK_POLICY,
+  };
   const run: SubagentRun = {
-    id: randomUUID().slice(0, 8),
+    id: randomUUID(),
     parentPiSessionId,
     name: input.name.trim() || NICKNAMES[siblingCount % NICKNAMES.length],
     task: input.task,
@@ -124,47 +139,74 @@ export async function runSubagent(input: {
     status: "running",
     startedAt: new Date().toISOString(),
     finishedAt: null,
+    cwd: parent.session.status.cwd,
+    modelId: parent.session.status.modelId,
+    executionPolicy,
   };
   const runs = registry.byParent.get(parentPiSessionId) ?? [];
   runs.push(run);
   registry.byParent.set(parentPiSessionId, runs);
 
-  const modelId = input.modelId?.trim() || parent.session.status.modelId;
+  const modelId = parent.session.status.modelId;
   const cwd = parent.session.status.cwd;
   const runtimeSessionId = `${SUBAGENT_SESSION_PREFIX}${parentPiSessionId}:${run.id}`;
 
+  const { session } = piRuntimeManager.getSessionForLookup(runtimeSessionId, null);
+  const cancel = () => {
+    void session.abortStrict().catch(() => undefined);
+  };
+  signal.addEventListener("abort", cancel, { once: true });
   try {
-    const { session } = piRuntimeManager.getSessionForLookup(runtimeSessionId, null);
-    await session.ensureStarted(modelId, cwd || undefined, null, {});
+    await saveSubagentRun(run);
+    signal.throwIfAborted();
+    await session.ensureStarted(modelId, cwd || undefined, null, {
+      ...parentOptions,
+      networkPolicy: executionPolicy.networkPolicy,
+      executionPolicy,
+      browserSessionId: runtimeSessionId,
+    });
+    signal.throwIfAborted();
+    run.piSessionId = session.status.piSessionId;
+    if (!run.piSessionId) throw new Error("Subagent session was not persisted.");
+    await saveSubagentRun(run);
+    signal.throwIfAborted();
     await session.prompt(taskPrompt(run.name, input.task), () => {}, {
       inferencePriority: "background",
     });
+    signal.throwIfAborted();
     const status = session.status;
-    run.piSessionId = status.piSessionId;
-    if (status.piSessionId) {
-      registry.childPiSessionIds.add(status.piSessionId);
-      await setSubagentLink(status.piSessionId, parentPiSessionId, run.name).catch(() => undefined);
-    }
     const text = status.piSessionId ? lastAssistantText(status.cwd, status.piSessionId) : "";
-    void session.stop().catch(() => undefined);
     if (status.lastError) {
       run.status = "error";
       run.error = status.lastError;
       run.finishedAt = new Date().toISOString();
       throw new Error(`Subagent "${run.name}" failed: ${status.lastError}`);
     }
+    run.result = text.slice(0, MAX_RESULT_CHARS) || "(the subagent produced no final text)";
     run.status = "done";
     run.finishedAt = new Date().toISOString();
     return {
       piSessionId: status.piSessionId,
-      result: text.slice(0, MAX_RESULT_CHARS) || "(the subagent produced no final text)",
+      result: run.result,
     };
   } catch (error) {
     if (run.status === "running") {
-      run.status = "error";
+      run.status = signal.aborted || error instanceof PiTurnCancelled ? "interrupted" : "error";
       run.error = error instanceof Error ? error.message : "Subagent run failed";
       run.finishedAt = new Date().toISOString();
     }
     throw error;
+  } finally {
+    signal.removeEventListener("abort", cancel);
+    try {
+      await saveSubagentRun(run);
+    } finally {
+      try {
+        await session.abortStrict();
+      } finally {
+        await session.stop();
+        piRuntimeManager.releaseSession(runtimeSessionId, session);
+      }
+    }
   }
 }

@@ -1,11 +1,14 @@
-//
-// HTTP surface for subagents. The pi `subagent` tool extension calls the run
-// endpoint through the frontend proxy (the connectors-bridge pattern); the
-// chips UI polls the list endpoint.
-//
-
+import { PiTurnCancelled } from "../pi-turn-lifecycle";
+import { Schema } from "effect";
+import { readJsonRequestWithinLimit } from "../../../../shared/agent/agent-turn-body";
+import {
+  SUBAGENT_BODY_LIMIT_BYTES,
+  SubagentRunInputSchema,
+} from "../../../../shared/agent/subagent";
 import { listSubagents, runSubagent } from "../subagents";
 import { errorMessage, jsonError } from "./helpers";
+
+const decodeRun = Schema.decodeUnknownOption(SubagentRunInputSchema);
 
 export async function handleSubagentsList(request: Request): Promise<Response> {
   const parent = new URL(request.url).searchParams.get("piSessionId")?.trim();
@@ -14,30 +17,23 @@ export async function handleSubagentsList(request: Request): Promise<Response> {
 }
 
 export async function handleSubagentRun(request: Request): Promise<Response> {
-  let body: Record<string, unknown> | null = null;
-  try {
-    const parsed = (await request.json()) as unknown;
-    body = parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    body = null;
-  }
-  const parentPiSessionId = typeof body?.parentPiSessionId === "string" ? body.parentPiSessionId : "";
-  const name = typeof body?.name === "string" ? body.name : "";
-  const task = typeof body?.task === "string" ? body.task : "";
-  if (!parentPiSessionId || !task.trim()) {
-    return jsonError("Body must include parentPiSessionId and task.");
+  const body = await readJsonRequestWithinLimit(request, SUBAGENT_BODY_LIMIT_BYTES);
+  if (!body.ok) return jsonError(body.error, body.status);
+  const decoded = decodeRun(body.value);
+  if (
+    decoded._tag === "None" ||
+    !decoded.value.parentPiSessionId.trim() ||
+    !decoded.value.task.trim()
+  ) {
+    return jsonError("Body must include parentPiSessionId, name and task.");
   }
   try {
-    const result = await runSubagent({
-      parentPiSessionId,
-      name,
-      task,
-      ...(typeof body?.modelId === "string" ? { modelId: body.modelId } : {}),
-    });
+    const result = await runSubagent(decoded.value, request.signal);
     return Response.json({ ok: true, ...result });
   } catch (error) {
-    return jsonError(errorMessage(error, "Subagent run failed."), 500);
+    return jsonError(
+      errorMessage(error, "Subagent run failed."),
+      request.signal.aborted || error instanceof PiTurnCancelled ? 499 : 500,
+    );
   }
 }

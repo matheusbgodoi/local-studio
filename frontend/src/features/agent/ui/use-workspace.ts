@@ -286,18 +286,7 @@ export function useWorkspace({ ephemeral = false }: UseWorkspaceOptions = {}): U
       selectPaneModel: (paneId: PaneId, selection: AgentModelSelection) => {
         const { modelId } = selection;
         const storage = ephemeral ? createMemoryStorage() : window.localStorage;
-        // LAST USED IS THE DEFAULT. Picking a model in any pane also records it as the
-        // workspace default, so a new pane, a new session and the next app start all open
-        // on the model actually used last instead of on a hardcoded one. A behaviour pick
-        // records it too, so the profile you were last on is the one a fresh pane opens at.
-        //
-        // NOT within this session, though, and the distinction is worth keeping straight:
-        // this writes STORAGE, while the `defaultModel` the picker hands resolveProfileId
-        // comes from `state.selectedModel`, which only `setDefaultModel` dispatches. So a
-        // detour to another model and back lands on the profile resolveProfileId picks from
-        // the UNCHANGED in-session default — this write changes where the NEXT app start
-        // opens, not where a return trip inside this one lands.
-        writeDefaultAgentModel(storage, modelId);
+        if (selection.physicalModel === "changed") writeDefaultAgentModel(storage, modelId);
         // `?? ["off"]` is the ladder ChatPane is handed for the same row, so this cannot
         // disagree with the pane about which levels exist.
         const levels = stateRef.current.models.find((model) => model.id === modelId)

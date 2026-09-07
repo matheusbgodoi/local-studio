@@ -21,11 +21,13 @@ export type RuntimePromptTemplateRef = {
 };
 
 import type { NetworkPolicy } from "../../../shared/agent/network-policy";
+import type { ExecutionPolicy } from "../../../shared/agent/execution-policy";
 
 export type RuntimeStartOptions = {
   thinkingLevel?: AgentThinkingLevel;
   toolAccess?: AgentToolAccess;
   networkPolicy?: NetworkPolicy;
+  executionPolicy?: ExecutionPolicy;
   browserSessionId?: string;
   browserBackend?: "embedded" | "sitegeist";
   skills?: RuntimeSkillRef[];
@@ -291,6 +293,7 @@ export function runtimeOptionsFingerprint(options: RuntimeStartOptions): string 
     // more: it is always loaded, so it can never differ between two starts.
     //
     networkPolicy: options.networkPolicy ?? "direct",
+    behaviorProfile: options.executionPolicy?.behaviorProfile ?? null,
     browserBackend: browserBackend(options),
     browserSessionId: options.browserSessionId ?? "",
     skills,

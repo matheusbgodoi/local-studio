@@ -1,23 +1,12 @@
 "use client";
 
-// Codex-style subagent chips: each child agent this session spawned, with a
-// live status dot; click to open the subagent's own session (drill-in).
-
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Spinner } from "@/ui";
 import { ComposerColumn } from "@/features/runs/composer-column";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 
-type SubagentRun = {
-  id: string;
-  name: string;
-  piSessionId: string | null;
-  status: "running" | "done" | "error";
-  startedAt: string;
-  finishedAt: string | null;
-  error?: string;
-};
+import type { SubagentRun } from "@shared/agent/subagent";
 
 async function fetchSubagents(parentPiSessionId: string): Promise<SubagentRun[]> {
   const response = await fetch(
@@ -39,9 +28,7 @@ export function SubagentChips({ piSessionId }: { piSessionId: string }) {
       try {
         const next = await fetchSubagents(piSessionId);
         if (!cancelled) setRuns(next);
-      } catch {
-        // Transient; next poll retries.
-      }
+      } catch {}
     };
     void load();
     const timer = window.setInterval(() => void load(), 4000);
@@ -66,8 +53,8 @@ export function SubagentChips({ piSessionId }: { piSessionId: string }) {
             }
           }}
           title={
-            run.status === "error"
-              ? `${run.name} — failed: ${run.error ?? "unknown error"}`
+            run.status === "error" || run.status === "interrupted"
+              ? `${run.name} — ${run.status}: ${run.error ?? "unknown error"}`
               : `${run.name} — ${run.status === "running" ? "working" : "open the subagent session"}`
           }
           className="flex items-center gap-1.5 rounded-full bg-(--fg)/[0.05] px-2.5 py-1 text-[length:var(--fs-sm)] text-(--fg)/75 transition-colors hover:bg-(--fg)/[0.08] hover:text-(--fg)/90 disabled:cursor-default"
@@ -77,11 +64,18 @@ export function SubagentChips({ piSessionId }: { piSessionId: string }) {
           ) : (
             <span
               className={`h-1.5 w-1.5 rounded-full ${
-                run.status === "error" ? "bg-(--err)" : "bg-(--ok,#40c977)"
+                run.status === "error"
+                  ? "bg-(--err)"
+                  : run.status === "interrupted"
+                    ? "bg-(--ui-warning)"
+                    : "bg-(--ok,#40c977)"
               }`}
             />
           )}
           <span className="max-w-44 truncate">{run.name}</span>
+          {run.status === "interrupted" ? (
+            <span className="text-(--fg)/60">interrupted</span>
+          ) : null}
           {run.status === "done" ? <span className="text-(--fg)/40">updated</span> : null}
         </button>
       ))}

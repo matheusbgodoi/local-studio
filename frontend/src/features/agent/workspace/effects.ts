@@ -119,8 +119,14 @@ function runInitialApiEffects(state: WorkspaceState, deps: WorkspaceEffectDeps):
     // resolve themselves without the user having to reload the page. The error
     // notice stays visible (dismissible) until an attempt succeeds.
     const attemptLoadModels = (attempt: number): void => {
-      deps.dispatch?.({ type: "setModelsLoading", loading: true });
-      if (attempt === 0) deps.dispatch?.({ type: "setError", error: "" });
+      // Only the first attempt shows a spinner. A retry against a host that is
+      // simply asleep would otherwise flip the picker back into "loading"
+      // every few seconds, forever, which is what made the model selector look
+      // frozen whenever the RTX was off.
+      if (attempt === 0) {
+        deps.dispatch?.({ type: "setModelsLoading", loading: true });
+        deps.dispatch?.({ type: "setError", error: "" });
+      }
       void Effect.runPromise(
         Effect.gen(function* () {
           const payload = yield* Effect.tryPromise({
@@ -153,7 +159,11 @@ function runInitialApiEffects(state: WorkspaceState, deps: WorkspaceEffectDeps):
                 error: error instanceof Error ? error.message : "Failed to load models",
               });
               deps.dispatch?.({ type: "setModelsLoading", loading: false });
-              const delay = Math.min(5_000 * 2 ** attempt, 60_000);
+              // Keep retrying — a host that wakes up should repopulate the
+              // picker on its own — but settle at five minutes. Hammering a
+              // sleeping controller every minute buys nothing and each probe
+              // holds a request open for the whole control-plane timeout.
+              const delay = Math.min(5_000 * 2 ** attempt, 300_000);
               deps.window.setTimeout?.(() => attemptLoadModels(attempt + 1), delay);
             }),
           ),

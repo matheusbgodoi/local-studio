@@ -1,5 +1,8 @@
+import { finishBrowserCleanup } from "./cleanup";
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { rm } from "node:fs/promises";
+import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { chromium, type BrowserContext } from "playwright-core";
@@ -9,11 +12,6 @@ import { networkService } from "../network";
 
 const LAUNCH_TIMEOUT_MS = 15_000;
 
-// The profile is where a site's cookies live after the owner has legitimately
-// signed in or passed a verification check, so it belongs beside the rest of
-// Local Studio's user data rather than in os.tmpdir(), which the OS is entitled
-// to sweep and which every other process on the machine can read. It stays a
-// DEDICATED profile: the owner's own Chrome profile is never opened or copied.
 const browserDataDirectory = (): string => {
   const override = process.env.LOCAL_STUDIO_BROWSER_PROFILE_DIR?.trim();
   if (override) return override;
@@ -86,10 +84,18 @@ export const findBrowserBinary = (): string | null => {
   return platformBrowserCandidates().find((candidate) => existsSync(candidate)) ?? null;
 };
 
-class PlaywrightManager {
+const managers = new Set<PlaywrightManager>();
+
+export class PlaywrightManager {
+  constructor(private readonly sessionId?: string) {}
   private context: BrowserContext | null = null;
   private launching: Promise<BrowserContext> | null = null;
   private headful = false;
+  private temporaryProfile: string | null = null;
+  private profileClosed = false;
+  private stopping: Promise<void> | null = null;
+  private closing: Promise<void> | null = null;
+  private removing: Promise<void> | null = null;
 
   isAvailable(): boolean {
     return findBrowserBinary() !== null;
@@ -100,10 +106,24 @@ class PlaywrightManager {
   }
 
   profileDirectory(): string {
-    return browserDataDirectory();
+    if (this.sessionId?.startsWith("subagent:")) {
+      this.temporaryProfile ??= mkdtempSync(path.join(os.tmpdir(), "local-studio-child-browser-"));
+      return this.temporaryProfile;
+    }
+    return this.sessionId
+      ? path.join(
+          browserDataDirectory(),
+          "sessions",
+          createHash("sha256").update(this.sessionId).digest("hex"),
+        )
+      : browserDataDirectory();
   }
 
   async ensure(): Promise<BrowserContext> {
+    if (this.stopping) await this.stopping;
+    if (this.closing || this.removing)
+      throw new Error("Browser is still closing; retry after cleanup completes");
+    managers.add(this);
     if (this.context) return this.context;
     if (this.launching) return this.launching;
     const executablePath = findBrowserBinary();
@@ -111,20 +131,13 @@ class PlaywrightManager {
       throw new Error("Browser unavailable: no Chromium found — set LOCAL_STUDIO_CHROME_PATH");
     }
     const headless = !this.headful;
-    //
-    // Chromium ignores HTTP_PROXY entirely — it reads the system network
-    // settings or --proxy-server and nothing else — so the environment other
-    // tools follow does nothing for it. Under protection it is launched inside
-    // the same jail as every other child, which is what actually contains it,
-    // and given the proxy flag so that it works rather than merely fails
-    // closed. Both headless and headful take this path, and so does the
-    // relaunch behind browser_verify, because they all go through here.
-    //
+
     const network = networkService();
-    const jailArgs = network.chromiumArguments();
+    const policy = this.sessionId ? network.sessionPolicy(this.sessionId) : undefined;
+    const jailArgs = network.chromiumArguments(policy);
     const launch = (userDataDir: string): Promise<BrowserContext> =>
       chromium.launchPersistentContext(userDataDir, {
-        executablePath: network.chromiumExecutable(executablePath),
+        executablePath: network.chromiumExecutable(executablePath, policy),
         headless,
         viewport: { width: 1280, height: 800 },
         timeout: LAUNCH_TIMEOUT_MS,
@@ -134,18 +147,16 @@ class PlaywrightManager {
           "--disable-dev-shm-usage",
           ...jailArgs,
         ],
-        env: { ...process.env, ...network.environment() } as Record<string, string>,
-        ...(network.proxyEndpoint()
-          ? { proxy: { server: `socks5://${network.proxyEndpoint()}` } }
+        env: { ...process.env, ...network.environment(policy) } as Record<string, string>,
+        ...(network.proxyEndpoint(policy)
+          ? { proxy: { server: `socks5://${network.proxyEndpoint(policy)}` } }
           : {}),
       });
-    const dataDirectory = browserDataDirectory();
+    const dataDirectory = this.profileDirectory();
+    this.profileClosed = false;
     this.launching = launch(dataDirectory)
       .catch((error: unknown) => {
-        // A second Chromium on the same userDataDir corrupts it, so Playwright
-        // refuses. Falling back to a per-pid profile keeps the browser usable
-        // but LOSES every cookie the owner verified with - hence the warning.
-        if (!String(error).includes("ProcessSingleton")) throw error;
+        if (this.temporaryProfile || !String(error).includes("ProcessSingleton")) throw error;
         console.warn(
           "[browser] profile already in use; starting an isolated copy — verified sessions will not carry over",
         );
@@ -154,7 +165,10 @@ class PlaywrightManager {
       .then((context) => {
         this.context = context;
         context.once("close", () => {
-          if (this.context === context) this.context = null;
+          if (this.context === context) {
+            this.profileClosed = true;
+            this.context = null;
+          }
         });
         return context;
       })
@@ -164,28 +178,78 @@ class PlaywrightManager {
     return this.launching;
   }
 
-  // Reopen the SAME profile with a visible window so the owner can complete a
-  // challenge or a login by hand.
-  //
-  // Chromium cannot switch a live context between headless and headful, and two
-  // processes must never hold one userDataDir at once, so the only safe order is
-  // close-then-relaunch. Cookies and local storage survive because they live in
-  // the profile on disk, not in the process - which is exactly why the profile
-  // had to stop being a temp directory.
   async setInteractive(headful: boolean): Promise<BrowserContext> {
+    if (this.stopping) await this.stopping;
+    if (this.closing || this.removing)
+      throw new Error("Browser is still closing; retry after cleanup completes");
     if (this.headful === headful && this.context) return this.context;
     if (this.launching) await this.launching.catch(() => undefined);
     const previous = this.context;
+    if (previous) await previous.close();
     this.context = null;
-    if (previous) await previous.close().catch(() => undefined);
     this.headful = headful;
     return this.ensure();
   }
 
-  stop(): void {
+  stop(): Promise<void> {
+    this.stopping ??= this.closeProfile().finally(() => {
+      this.stopping = null;
+    });
+    return this.stopping;
+  }
+
+  private async closeProfile(): Promise<void> {
+    const pending = this.launching;
+    if (pending && !(await finishBrowserCleanup("browser startup", () => pending))) return;
+    if (this.closing) {
+      const closing = this.closing;
+      await finishBrowserCleanup("context closure", () => closing);
+      return;
+    }
     const context = this.context;
-    this.context = null;
-    if (context) void context.close().catch(() => undefined);
+    if (context) {
+      const closing = Promise.resolve()
+        .then(() => context.close())
+        .then(async () => {
+          if (this.context === context) {
+            this.profileClosed = true;
+            this.context = null;
+          }
+          if (!this.context) await this.removeClosedProfile();
+          managers.delete(this);
+        })
+        .catch(() => {
+          if (!this.context || this.context === context) this.profileClosed = false;
+          console.warn("[browser] close cleanup failed; child profile retained");
+        })
+        .finally(() => {
+          if (this.closing === closing) this.closing = null;
+        });
+      this.closing = closing;
+      await finishBrowserCleanup("context closure", () => closing);
+      return;
+    }
+    await finishBrowserCleanup("temporary profile removal", () => this.removeClosedProfile());
+    managers.delete(this);
+  }
+
+  private async removeClosedProfile(): Promise<void> {
+    if (this.removing) return this.removing;
+    const directory = this.temporaryProfile;
+    if (!directory) return;
+    if (!this.profileClosed || this.context) {
+      console.warn("[browser] child profile retained because browser closure was not confirmed");
+      return;
+    }
+    const removing = rm(directory, { recursive: true, force: true })
+      .then(() => {
+        if (this.temporaryProfile === directory) this.temporaryProfile = null;
+      })
+      .finally(() => {
+        if (this.removing === removing) this.removing = null;
+      });
+    this.removing = removing;
+    return removing;
   }
 }
 
@@ -196,7 +260,11 @@ export const playwrightManager = getGlobalSingleton(
 
 getGlobalSingleton("playwrightExitHook", () => {
   if (typeof process !== "undefined") {
-    process.on("exit", () => playwrightManager.stop());
+    process.on("exit", stopBrowserManagers);
   }
   return true;
 });
+
+export function stopBrowserManagers(): void {
+  for (const manager of managers) void manager.stop();
+}

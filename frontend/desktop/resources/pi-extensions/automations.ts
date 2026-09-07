@@ -1,19 +1,8 @@
-// Automations (Scheduled) tools for Local Studio.
-//
-// Lets the agent create, list and delete scheduled automations — a saved
-// prompt the runtime re-runs on a cron-like schedule in its own fresh session.
-// Calls proxy through the frontend like the subagents/connectors bridges, so
-// this file stays a plain pi extension with no runtime imports.
-//
-// The record shape mirrors services/agent-runtime automations-store.ts
-// (Automation): name, prompt, modelId, cwd, schedule{interval|daily|weekly}.
-
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 const FRONTEND_BASE = process.env.LOCAL_STUDIO_FRONTEND_BASE ?? "http://127.0.0.1:3000";
-// Present only while the app is published; the frontend then requires it of
-// every caller, with no exemption for ones running on this machine.
+
 const FRONTEND_TOKEN = process.env.LOCAL_STUDIO_FRONTEND_TOKEN;
 const STUDIO_HEADERS: Record<string, string> = {
   "Content-Type": "application/json",
@@ -30,8 +19,6 @@ const textResult = (text: string, details: Record<string, unknown>): ToolResult 
   content: [{ type: "text", text }],
   details,
 });
-
-// ─── Schedule shapes (mirror shared/agent/automation.ts) ────────────────────
 
 type IntervalSchedule = { kind: "interval"; minutes: number };
 type DailySchedule = { kind: "daily"; time: string; weekdaysOnly?: boolean };
@@ -60,8 +47,6 @@ function isValidTime(value: unknown): value is string {
   return typeof value === "string" && /^([01]?\d|2[0-3]):[0-5]\d$/.test(value.trim());
 }
 
-/** Validate the agent-supplied schedule into the store's shape, or explain what
- *  is wrong. Kept pure so the normalization is unit-tested without HTTP. */
 export function normalizeScheduleArg(
   input: ScheduleArg | undefined,
 ): { ok: true; schedule: NormalizedSchedule } | { ok: false; error: string } {
@@ -102,7 +87,6 @@ export function normalizeScheduleArg(
   return { ok: false, error: "schedule.kind must be 'interval', 'daily' or 'weekly'." };
 }
 
-/** One-line human description of a schedule, for list output. */
 export function describeSchedule(schedule: NormalizedSchedule): string {
   if (schedule.kind === "interval") return `every ${schedule.minutes} min`;
   if (schedule.kind === "daily") {
@@ -110,8 +94,6 @@ export function describeSchedule(schedule: NormalizedSchedule): string {
   }
   return `weekly on ${WEEKDAY_NAMES[schedule.day] ?? `day ${schedule.day}`} at ${schedule.time}`;
 }
-
-// ─── HTTP helpers ───────────────────────────────────────────────────────────
 
 async function httpJson(
   path: string,
@@ -150,16 +132,14 @@ function errorText(body: unknown, status: number): string {
   return `HTTP ${status}`;
 }
 
-/** Resolve the model an automation should run under: explicit arg, else the
- *  current session's model (injected by pi-runtime), else the first available. */
 async function resolveModelId(
   explicit: string | undefined,
+  sessionModelId: string | undefined,
   signal: AbortSignal | undefined,
 ): Promise<string | null> {
   const trimmed = explicit?.trim();
   if (trimmed) return trimmed;
-  const envModel = process.env.LOCAL_STUDIO_MODEL_ID?.trim();
-  if (envModel) return envModel;
+  if (sessionModelId) return sessionModelId;
   const { ok, body } = await httpJson("/api/agent/models", { method: "GET" }, signal);
   if (!ok || !body || typeof body !== "object") return null;
   const models = (body as { models?: unknown }).models;
@@ -193,13 +173,13 @@ function formatAutomationLine(record: AutomationRecord): string {
   return `- ${name} [${id}] — ${scheduleText}, ${status}${next}`;
 }
 
-/** describeSchedule for an already-stored (normalized) schedule object. */
 function describeScheduleLoose(schedule: ScheduleArg): string {
   const parsed = normalizeScheduleArg(schedule);
   return parsed.ok ? describeSchedule(parsed.schedule) : "unknown schedule";
 }
 
 export default function automationsExtension(pi: ExtensionAPI): void {
+  const sessionModelId = process.env.LOCAL_STUDIO_MODEL_ID?.trim();
   pi.registerTool({
     name: "schedule_automation",
     label: "Schedule automation",
@@ -247,7 +227,7 @@ export default function automationsExtension(pi: ExtensionAPI): void {
       const scheduleResult = normalizeScheduleArg(args.schedule);
       if (!scheduleResult.ok) return textResult(scheduleResult.error, { failed: true });
       try {
-        const modelId = await resolveModelId(args.model, signal);
+        const modelId = await resolveModelId(args.model, sessionModelId, signal);
         if (!modelId) {
           return textResult("No model available to run the automation. Pass a 'model' id.", {
             failed: true,
