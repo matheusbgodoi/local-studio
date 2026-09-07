@@ -9,8 +9,10 @@ import {
 import { ADD_PROJECT_EVENT, SESSIONS_CHANGED_EVENT } from "@/lib/workspace-events";
 import type { Project as ProjectEntry } from "@/features/agent/projects/types";
 import type { ActiveAgentSession } from "./types";
+import type { NetworkPolicy } from "@shared/agent/network-policy";
 
 const SESSION_NAV_TITLE_PREFIX = "local-studio.agent.sessionNavTitle:";
+const SESSION_NAV_STATE_PREFIX = "local-studio.agent.sessionNavState:";
 let lastNavigationTimestamp = 0;
 let navigationSequence = 0;
 
@@ -129,6 +131,45 @@ export function consumeAgentSessionNavTitle(sessionId: string | null | undefined
     return title;
   } catch {
     return undefined;
+  }
+}
+
+export type AgentSessionNavState = {
+  title: string;
+  modelId: string | null;
+  networkPolicy: NetworkPolicy | null;
+};
+
+export function rememberAgentSessionNavState(sessionId: string, state: AgentSessionNavState): void {
+  rememberAgentSessionNavTitle(sessionId, state.title);
+  try {
+    window.sessionStorage.setItem(`${SESSION_NAV_STATE_PREFIX}${sessionId}`, JSON.stringify(state));
+  } catch {
+    return;
+  }
+}
+
+export function consumeAgentSessionNavState(
+  sessionId: string | null | undefined,
+): AgentSessionNavState | null {
+  if (typeof window === "undefined" || !sessionId) return null;
+  const key = `${SESSION_NAV_STATE_PREFIX}${sessionId}`;
+  try {
+    const raw = window.sessionStorage.getItem(key);
+    window.sessionStorage.removeItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<AgentSessionNavState>;
+    const networkPolicy =
+      parsed.networkPolicy === "direct" || parsed.networkPolicy === "vpn_protected"
+        ? parsed.networkPolicy
+        : null;
+    return {
+      title: typeof parsed.title === "string" ? parsed.title : "",
+      modelId: typeof parsed.modelId === "string" ? parsed.modelId : null,
+      networkPolicy,
+    };
+  } catch {
+    return null;
   }
 }
 

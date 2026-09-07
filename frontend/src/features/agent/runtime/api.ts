@@ -16,6 +16,7 @@ import type {
 } from "@/features/agent/contracts";
 import type { BrowserBackend } from "@/features/agent/tools/types";
 import type { NetworkPolicy } from "@shared/agent/network-policy";
+import type { ExecutionPolicy } from "@shared/agent/execution-policy";
 import type {
   ComposerPromptTemplateRef,
   ComposerSkillRef,
@@ -161,6 +162,7 @@ export type CanonicalSessionMeta = {
   modelId: string | null;
   startedAt: string | null;
   piSessionId: string | null;
+  executionPolicy: ExecutionPolicy | null;
   usage?: SessionUsageTotals | null;
 };
 

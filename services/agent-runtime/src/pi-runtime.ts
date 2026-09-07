@@ -719,7 +719,8 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
         this.unsubscribe = runtime.session.subscribe((event) => this.recordEvent(event));
         if (this.currentPiSessionId) {
           yield* Effect.tryPromise({
-            try: () => setSessionExecutionPolicy(this.currentPiSessionId!, executionPolicy),
+            try: () =>
+              setSessionExecutionPolicy(this.currentPiSessionId!, executionPolicy, modelId),
             catch: (error) => error,
           });
         }

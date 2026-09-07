@@ -7,6 +7,7 @@ import {
   saveSubagentRun,
   readSubagentRuns,
   readSessionExecutionPolicy,
+  readSessionListMetadata,
   setSubagentLink,
   setSessionArchived,
   forgetSessionMetadata,
@@ -80,6 +81,13 @@ test("fresh process restores completed results and marks unfinished children int
     expect(readSessionExecutionPolicy("child-a")).toEqual({
       behaviorProfile: "uncensored",
       networkPolicy: "vpn_protected",
+    });
+    expect(readSessionListMetadata()("child-a")).toMatchObject({
+      modelId: "qwen-uncensored",
+      executionPolicy: {
+        behaviorProfile: "uncensored",
+        networkPolicy: "vpn_protected",
+      },
     });
     await forgetSessionMetadata("child-b");
     expect(freshList(dir, "parent").map((x) => x.id)).toEqual(["run-a"]);

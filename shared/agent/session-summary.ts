@@ -1,3 +1,5 @@
+import type { ExecutionPolicy } from "./execution-policy";
+
 export type SessionSummary = {
   id: string;
   filename: string;
@@ -11,6 +13,7 @@ export type SessionSummary = {
   archivedAt: string | null;
   parentSessionId: string | null;
   subagentName: string | null;
+  executionPolicy: ExecutionPolicy | null;
 };
 
 export type AggregatedSession = SessionSummary & {

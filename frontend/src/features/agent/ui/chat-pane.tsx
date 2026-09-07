@@ -757,6 +757,10 @@ export function ChatPane({
   });
   const handleComposerSubmit = useCallback(
     (event: FormEvent) => {
+      if (activeTab?.status === "loading") {
+        event.preventDefault();
+        return;
+      }
       if (goalModeApi.submitAsGoal(event, activeTab?.input ?? "")) return;
       const invocation = parseSlashInvocation(activeTab?.input ?? "");
       const commandCanRun = invocation?.name !== "goal" || canRunGoalCommand(activePiSessionId);

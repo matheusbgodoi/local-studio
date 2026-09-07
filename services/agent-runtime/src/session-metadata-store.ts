@@ -32,6 +32,7 @@ type StoredSessionMetadata = {
   sessionUpdatedAt?: string;
   parentSessionId?: string;
   subagentName?: string;
+  modelId?: string;
   executionPolicy?: ExecutionPolicy;
 };
 
@@ -89,6 +90,7 @@ function normalizeStore(value: unknown): SessionMetadataStore {
       parentSessionId:
         typeof metadata.parentSessionId === "string" ? metadata.parentSessionId : undefined,
       subagentName: typeof metadata.subagentName === "string" ? metadata.subagentName : undefined,
+      modelId: typeof metadata.modelId === "string" ? metadata.modelId : undefined,
       executionPolicy: decodedPolicy._tag === "Some" ? decodedPolicy.value : undefined,
     };
   }
@@ -190,6 +192,8 @@ export type SessionListMetadata = SessionArchiveState & {
   internal: boolean;
   parentSessionId: string | null;
   subagentName: string | null;
+  modelId: string | null;
+  executionPolicy: ExecutionPolicy | null;
 };
 
 export function readSessionListMetadata(): (sessionId: string) => SessionListMetadata {
@@ -202,6 +206,8 @@ export function readSessionListMetadata(): (sessionId: string) => SessionListMet
       archivedAt: metadata?.archived === true ? (metadata.archivedAt ?? null) : null,
       parentSessionId: metadata?.parentSessionId ?? null,
       subagentName: metadata?.subagentName ?? null,
+      modelId: metadata?.modelId ?? null,
+      executionPolicy: metadata?.executionPolicy ? { ...metadata.executionPolicy } : null,
     };
   };
 }
@@ -245,6 +251,7 @@ export function readSessionExecutionPolicy(sessionId: string): ExecutionPolicy |
 export async function setSessionExecutionPolicy(
   sessionId: string,
   policy: ExecutionPolicy,
+  modelId?: string,
 ): Promise<void> {
   const id = sessionId.trim();
   if (!id) return;
@@ -253,6 +260,7 @@ export async function setSessionExecutionPolicy(
     const store = readStore();
     store.sessions[id] = {
       ...(store.sessions[id] ?? {}),
+      ...(modelId?.trim() ? { modelId: modelId.trim() } : {}),
       executionPolicy: decoded,
       updatedAt: new Date().toISOString(),
     };
@@ -418,6 +426,7 @@ export async function saveSubagentRun(run: SubagentRun): Promise<void> {
         parentSessionId: decoded.parentPiSessionId,
         subagentName: decoded.name,
         cwd: decoded.cwd,
+        modelId: decoded.modelId,
         executionPolicy: decoded.executionPolicy,
         updatedAt: new Date().toISOString(),
       };
