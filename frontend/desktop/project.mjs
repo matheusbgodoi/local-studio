@@ -592,7 +592,11 @@ var init_check_conventional_commits = __esm(() => {
     if (!range)
       fail("Usage: check-conventional-commits.mjs --message-file <path> | --range <base..head>");
     else {
-      let output2 = execFileSync2("git", ["log", "--format=%s", range], { encoding: "utf8" }).trim();
+      const excludeIndex = args.indexOf("--exclude-remote");
+      const remote = excludeIndex === -1 ? undefined : args[excludeIndex + 1];
+      if (excludeIndex !== -1 && !remote) throw Error("--exclude-remote requires a remote name");
+      const exclusions = remote ? ["--not", `--remotes=${remote}`] : [];
+      let output2 = execFileSync2("git", ["log", "--format=%s", range, ...exclusions], { encoding: "utf8" }).trim();
       (output2 ? output2.split(/\r?\n/) : []).forEach((subject, index) => validateSubject(subject, `commit ${index + 1}`));
     }
   }
@@ -2057,27 +2061,13 @@ function prePush() {
   let remote = process.argv[2], url = process.argv[3], updates = readFileSync17(0, "utf8").trim();
   for (let update of updates ? updates.split(`
 `) : []) {
-    let [localRef, localSha, remoteRef, remoteSha] = update.trim().split(/\s+/);
+    let [localRef, localSha, remoteRef] = update.trim().split(/\s+/);
     if (["refs/heads/main", "refs/heads/dev"].includes(remoteRef))
       throw Error(`pre-push: direct pushes to ${remoteRef} are blocked; merge through GitHub`);
-    if (/^0{40}$/.test(localSha))
-      continue;
-    let range2;
-    if (/^0{40}$/.test(remoteSha)) {
-      let defaultRef;
-      try {
-        defaultRef = git(["symbolic-ref", "--quiet", "--short", `refs/remotes/${remote}/HEAD`]);
-      } catch {
-        defaultRef = `${remote}/main`;
-      }
-      try {
-        range2 = `${git(["merge-base", defaultRef, localSha])}..${localSha}`;
-      } catch {
-        range2 = localSha;
-      }
-    } else
-      range2 = `${remoteSha}..${localSha}`;
-    console.log(`Checking conventional commits for ${localRef} -> ${remote}/${remoteRef} (${url})`), run3(process.execPath, [path11.join(root5, "scripts/project.mjs"), "check-commits", "--range", range2]);
+    if (/^0{40}$/.test(localSha)) continue;
+    git(["remote", "get-url", remote]);
+    console.log(`Checking outgoing conventional commits for ${localRef} -> ${remote}/${remoteRef} (${url})`);
+    run3(process.execPath, [path11.join(root5, "scripts/project.mjs"), "check-commits", "--range", localSha, "--exclude-remote", remote]);
   }
   run3("npm", ["run", "check:static"], path11.join(root5, "frontend")), run3("npm", ["run", "check:cleanup"], path11.join(root5, "frontend")), run3(process.execPath, [path11.join(root5, "scripts/project.mjs"), "assert-standalone"]);
 }

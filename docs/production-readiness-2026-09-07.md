@@ -41,3 +41,12 @@ and long-conversation compaction remain required before promotion.
 Related evidence: [status](status-readiness-2026-09-07.md),
 [subagents](subagent-readiness-2026-09-07.md),
 [context and durable work](durable-agentic-runtime.md).
+
+## Push validation
+
+The first push was blocked because the old hook rechecked an upstream `test:`
+commit already present on the fork's dev branch. Outgoing validation now excludes
+commits already reachable from that remote's tracking refs, while validating
+every new outgoing subject. Direct pushes to dev/main and the full static,
+cleanup and standalone gates remain enforced. This fixes history selection;
+it does not disable hooks or permit new nonconventional commits.
