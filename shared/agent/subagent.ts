@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 
 export const SUBAGENT_RUN_TIMEOUT_MS = 15 * 60_000;
+export const SUBAGENT_RESPONSE_TIMEOUT_MS = SUBAGENT_RUN_TIMEOUT_MS + 30_000;
 export const SUBAGENT_BODY_LIMIT_BYTES = 256_000;
 
 export const SubagentRunInputSchema = Schema.Struct({
