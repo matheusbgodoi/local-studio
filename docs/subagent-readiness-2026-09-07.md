@@ -24,7 +24,7 @@ Three deterministic offline checks in the existing agent-runtime test directory
 passed: inherited restrictions/independent browser/early persisted ownership,
 cancellation of a running child, and cleanup after startup failure. No backend
 or live user session was involved. Runtime TypeScript passed before the commit.
-Installed cancellation and concurrent-tool acceptance remain pending.
+Installed final5 completed two concurrent logical child tasks with independently verified coding/document artifacts; final6 restored their completed records after process restart. See [the installed candidate receipt](installed-candidate-2026-09-07.md). Child-specific cancellation during active work remains a separate acceptance requirement.
 
 ## Limits
 
@@ -35,7 +35,7 @@ persistent long-task path. A completed model report is not proof that its claime
 shell or file actions occurred; acceptance still requires independently observed
 artifacts and command results.
 
-## Restart discovery — source qualified, installed acceptance pending
+## Restart discovery — source and installed list restoration qualified
 
 SOURCE INSPECTION: the old list endpoint read only a process-global map. Parent/name links and transcripts survived, but after restart the same parent returned an empty subagent list.
 
@@ -43,7 +43,7 @@ DECIDED / APPLIED in source: the existing locked, atomically replaced `agent-ses
 
 A fresh process lists completed/error records with their original status and transcript link. A previously running record is shown as `interrupted`, with no invented finish time and explicit guidance to inspect partial work before starting a replacement. No request is replayed, no tools run during restoration and no automatic resume is claimed. Old parent/name-only metadata is still discoverable, with task/completion status explicitly unknown. Interrupted chips use a warning state instead of a green completion marker.
 
-MEASURED / PROVEN: deterministic checks launched fresh Bun processes against temporary metadata files, restoring completed results and unfinished children, preserving records through an unrelated archive write, enforcing parent isolation, honoring child metadata deletion and recovering legacy links. Existing inherited-restriction, cancellation and startup-cleanup checks also passed. No model or live application request was sent. Root must still qualify installed restart/list/transcript navigation.
+MEASURED / PROVEN: deterministic checks launched fresh Bun processes against temporary metadata files, restoring completed results and unfinished children, preserving records through an unrelated archive write, enforcing parent isolation, honoring child metadata deletion and recovering legacy links. Existing inherited-restriction, cancellation and startup-cleanup checks also passed. No model or live application request was sent. Installed final6 GET subagents returned both actual completed child records with saved results and original timestamps, plus interrupted prior attempts with null finish times. See [the final6 receipt](installed-candidate-2026-09-07.md). This proves restart/list discovery, not automatic task resumption or every transcript-navigation interaction.
 
 Durable Runs remain the separate persistent long-task execution path. Metadata updates retain the existing version and file permissions; older binaries understand only the legacy links and can drop the added record map if they rewrite the store. Preserve the full user-data snapshot when rolling back.
 
