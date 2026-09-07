@@ -205,12 +205,12 @@ function sleep(ms) {
 function timeoutAfter(ms, message) {
   return new Promise((_, reject) => setTimeout(() => reject(Error(message)), ms));
 }
-function connectToTarget(webSocketDebuggerUrl) {
+function connectToTarget(webSocketDebuggerUrl, onEvent = () => {}) {
   let websocket = new WebSocket(webSocketDebuggerUrl), id = 0, pending = new Map;
   return websocket.addEventListener("message", (message) => {
     let data = JSON.parse(message.data);
-    if (!data.id || !pending.has(data.id))
-      return;
+    if (!data.id) return onEvent(data);
+    if (!pending.has(data.id)) return;
     let { resolve: resolve2, reject } = pending.get(data.id);
     if (pending.delete(data.id), data.error)
       reject(Error(JSON.stringify(data.error)));
@@ -243,16 +243,16 @@ async function debugPortFor(userDataDir) {
 }
 async function pageTarget(debugPort) {
   for (let attempt = 0;attempt < 100; attempt += 1) {
-    let target = (await fetch(`http://127.0.0.1:${debugPort}/json/list`).then((response) => response.json())).find((entry) => entry.type === "page" && entry.url.startsWith(baseUrl));
+    let target = (await fetch(`http://127.0.0.1:${debugPort}/json/list`).then((response) => response.json())).find((entry) => entry.type === "page" && (entry.url === "about:blank" || entry.url.startsWith(baseUrl)));
     if (target)
       return target;
     await sleep(50);
   }
   throw Error("Chrome page target did not appear");
 }
-async function waitForComplete(page) {
+async function waitForComplete(page, expectedUrl) {
   for (let attempt = 0;attempt < 100; attempt += 1) {
-    if ((await page.send("Runtime.evaluate", { returnByValue: !0, expression: "document.readyState" })).result.value === "complete")
+    if ((await page.send("Runtime.evaluate", { returnByValue: !0, expression: `location.href === ${JSON.stringify(expectedUrl)} && document.readyState` })).result.value === "complete")
       return;
     await sleep(50);
   }
@@ -268,6 +268,7 @@ async function pageMetrics(page) {
       return {
         nav: nav ? nav.toJSON() : null,
         paints,
+        appDocument: Boolean(document.querySelector('script[src*="/_next/static/"]')),
         resources: resources.length,
         scripts: resources.filter((entry) => entry.initiatorType === "script").length,
         css: resources.filter((entry) => entry.initiatorType === "link" || entry.name.endsWith(".css")).length,
@@ -277,6 +278,7 @@ async function pageMetrics(page) {
     })()`
   }), performanceMetrics = await page.send("Performance.getMetrics"), metric = Object.fromEntries(performanceMetrics.metrics.map((entry) => [entry.name, entry.value])), value = evaluated.result.value;
   return {
+    appDocument: value.appDocument,
     dclMs: value.nav.domContentLoadedEventEnd,
     loadMs: value.nav.loadEventEnd,
     fcpMs: value.paints["first-contentful-paint"] || 0,
@@ -299,12 +301,54 @@ async function routeResult(route) {
     "--disable-dev-shm-usage",
     "--window-size=1440,1000",
     `--user-data-dir=${userDataDir}`,
-    `${baseUrl}${route.path}`
+    "about:blank"
   ], { stdio: ["ignore", "ignore", "ignore"] });
   try {
-    let debugPort = await debugPortFor(userDataDir), target = await pageTarget(debugPort), page = await connectToTarget(target.webSocketDebuggerUrl);
+    let status = null, frameId = null, exceptions = 0, consoleErrors = 0;
+    const exceptionSites = [], consoleCategories = new Set(), httpErrors = new Map();
+    const onEvent = (event) => {
+      if (event.method === "Network.responseReceived" && event.params.response.status >= 400) {
+        const failedUrl = new URL(event.params.response.url);
+        if (failedUrl.origin === new URL(baseUrl).origin) {
+          const route = failedUrl.pathname.split("/").slice(0, 4).join("/");
+          const label = `${event.params.response.status} ${route}`;
+          httpErrors.set(label, (httpErrors.get(label) ?? 0) + 1);
+        }
+      }
+      if (event.method === "Runtime.exceptionThrown") {
+        exceptions += 1;
+        const details = event.params.exceptionDetails;
+        const frame = details.stackTrace?.callFrames?.[0];
+        const name = /^[A-Za-z]+Error$/.test(details.exception?.className ?? "") ? details.exception.className : "JavaScriptError";
+        const source = (frame?.url ?? details.url ?? "").split("?")[0].split("/").at(-1);
+        if (exceptionSites.length < 5) exceptionSites.push(`${name} ${source || "inline"}:${(frame?.lineNumber ?? details.lineNumber ?? 0) + 1}:${(frame?.columnNumber ?? details.columnNumber ?? 0) + 1} ${diagnosticErrorCategory(details.exception?.description ?? details.text ?? "")}`);
+      }
+      if (event.method === "Runtime.consoleAPICalled" && event.params.type === "error") {
+        consoleErrors += 1;
+        const message = event.params.args.map((value) => typeof value.value === "string" ? value.value : value.description ?? "").join(" ");
+        consoleCategories.add(diagnosticErrorCategory(message));
+      }
+      if (event.method === "Network.responseReceived" && event.params.type === "Document" && event.params.frameId === frameId) status = event.params.response.status;
+    };
+    let debugPort = await debugPortFor(userDataDir), target = await pageTarget(debugPort), page = await connectToTarget(target.webSocketDebuggerUrl, onEvent);
     try {
-      return await page.send("Performance.enable"), await waitForComplete(page), await sleep(100), { path: route.path, ...await pageMetrics(page), budget: route };
+      await page.send("Page.enable");
+      await page.send("Network.enable");
+      await page.send("Runtime.enable");
+      await page.send("Performance.enable");
+      frameId = (await page.send("Page.getFrameTree")).frameTree.frame.id;
+      if (browserToken) {
+        const cookie = await page.send("Network.setCookie", {
+          name: "local_studio_token", value: browserToken, url: baseUrl,
+          path: "/", httpOnly: true, secure: new URL(baseUrl).protocol === "https:", sameSite: "Strict"
+        });
+        if (!cookie.success) throw Error("Unable to seed profiler authentication cookie");
+      }
+      const url = `${baseUrl}${route.path}`;
+      await page.send("Page.navigate", { url });
+      await waitForComplete(page, url);
+      await sleep(1500);
+      return { path: route.path, status, exceptions, consoleErrors, exceptionSites, consoleCategories: [...consoleCategories], httpErrors: [...httpErrors.entries()], ...await pageMetrics(page), budget: route };
     } finally {
       page.close();
     }
@@ -312,11 +356,25 @@ async function routeResult(route) {
     child.kill("SIGTERM"), await sleep(100), rmSync(userDataDir, { recursive: !0, force: !0, maxRetries: 5, retryDelay: 50 });
   }
 }
+function diagnosticErrorCategory(message) {
+  if (/Cannot access .+ before initialization/.test(message)) return "access-before-initialization";
+  if (/Cannot read properties of (undefined|null)/.test(message)) return "missing-object-property";
+  if (/Minified React error #[0-9]+/.test(message)) return message.match(/Minified React error #[0-9]+/)[0];
+  if (/fetch failed|Failed to fetch/i.test(message)) return "fetch-failure";
+  if (/404|not found/i.test(message)) return "not-found";
+  if (/timeout|timed out/i.test(message)) return "timeout";
+  return "unclassified-message-redacted";
+}
 function formatNumber(value) {
   return value.toFixed(1).padStart(6, " ");
 }
 function violations(result) {
   let out = [];
+  for (const [label, count] of result.httpErrors) out.push(`HTTP resource error: ${label} (${count})`);
+  if (result.status !== 200) out.push(`document HTTP ${result.status ?? "unobserved"}`);
+  if (!result.appDocument) out.push("application scripts absent");
+  if (result.exceptions) out.push(`uncaught JavaScript exceptions: ${result.exceptions} (${result.exceptionSites.join("; ")})`);
+  if (result.consoleErrors) out.push(`console errors: ${result.consoleErrors} (${result.consoleCategories.join(", ")})`);
   if (result.dclMs > result.budget.dclMs)
     out.push(`dcl ${result.dclMs.toFixed(1)}ms > ${result.budget.dclMs}ms`);
   if (result.fcpMs > result.budget.fcpMs)
@@ -331,7 +389,7 @@ function violations(result) {
     out.push(`heap ${result.heapMiB.toFixed(1)}MiB > ${result.budget.heapMiB}MiB`);
   return out;
 }
-var defaultChromePaths, chromePath, baseUrl, routeTimeoutMs, routes, failures;
+var defaultChromePaths, chromePath, baseUrl, routeTimeoutMs, routes, failures, browserToken;
 var init_browser_perf_audit = __esm(async () => {
   init_perf_routes();
   defaultChromePaths = [
@@ -344,8 +402,19 @@ var init_browser_perf_audit = __esm(async () => {
   if (!chromePath)
     console.error("Chrome executable not found. Set LOCAL_STUDIO_PERF_CHROME."), process.exit(1);
   baseUrl = (process.env.LOCAL_STUDIO_PERF_URL || "http://127.0.0.1:3000").replace(/\/+$/, ""), routeTimeoutMs = Math.max(5000, Number.parseInt(process.env.LOCAL_STUDIO_PERF_BROWSER_TIMEOUT_MS || "15000", 10)), routes = browserRoutes();
+  const tokenFile = process.env.LOCAL_STUDIO_PERF_TOKEN_FILE;
+  const targetUrl = new URL(baseUrl);
+  if (!["http:", "https:"].includes(targetUrl.protocol) || targetUrl.username || targetUrl.password || targetUrl.search || targetUrl.hash) throw Error("Profiler URL must be an HTTP origin without credentials or query parameters");
+  if (tokenFile && !["127.0.0.1", "localhost", "[::1]"].includes(targetUrl.hostname)) throw Error("Profiler authentication is restricted to loopback");
+  browserToken = tokenFile ? readFileSync3(tokenFile, "utf8").trim() : "";
+  if (tokenFile && !browserToken) throw Error("Profiler token file is empty");
+  const requestedRoutes = process.env.LOCAL_STUDIO_PERF_ROUTES?.split(",").map((value) => value.trim());
+  if (requestedRoutes) {
+    if (requestedRoutes.some((value) => !routes.some((route) => route.path === value))) throw Error("Profiler route selection contains an unknown route");
+    routes = routes.filter((route) => requestedRoutes.includes(route.path));
+  }
   console.log(`Local Studio browser perf audit: ${baseUrl}`);
-  console.log("route              dcl    load     fcp    task    heap nodes  text res scripts css");
+  console.log("route              dcl    load     fcp    task    heap nodes  text res scripts css HTTP exceptions consoleErrors");
   failures = [];
   for (let route of routes) {
     let result = await Promise.race([
@@ -354,7 +423,7 @@ var init_browser_perf_audit = __esm(async () => {
       }),
       timeoutAfter(routeTimeoutMs, `${route.path} timed out after ${routeTimeoutMs}ms`)
     ]), bad = violations(result);
-    if (console.log(`${result.path.padEnd(16)} ${formatNumber(result.dclMs)}ms ${formatNumber(result.loadMs)}ms ${formatNumber(result.fcpMs)}ms ${formatNumber(result.taskMs)}ms ${formatNumber(result.heapMiB)}MiB ${String(result.nodes).padStart(5, " ")} ${String(result.textChars).padStart(5, " ")} ${String(result.resources).padStart(3, " ")} ${String(result.scripts).padStart(7, " ")} ${String(result.css).padStart(3, " ")}`), bad.length > 0)
+    if (console.log(`${result.path.padEnd(16)} ${formatNumber(result.dclMs)}ms ${formatNumber(result.loadMs)}ms ${formatNumber(result.fcpMs)}ms ${formatNumber(result.taskMs)}ms ${formatNumber(result.heapMiB)}MiB ${String(result.nodes).padStart(5, " ")} ${String(result.textChars).padStart(5, " ")} ${String(result.resources).padStart(3, " ")} ${String(result.scripts).padStart(7, " ")} ${String(result.css).padStart(3, " ")} ${result.status} ${result.exceptions} ${result.consoleErrors}`), bad.length > 0)
       failures.push(`${result.path}: ${bad.join(", ")}`);
   }
   if (failures.length > 0) {
@@ -1816,19 +1885,6 @@ async function afterPack(context) {
 }
 
 
-//
-// Remote access over the tailnet.
-//
-// `tailscale serve` publishes a loopback server to the owner's OWN tailnet and
-// nowhere else — it is not `funnel`, which is the public one and is never used
-// here. Tailnet membership is therefore the outer boundary.
-//
-// The token is the inner one, and it is not redundant: the desktop build answers
-// loopback requests unauthenticated on the assumption that loopback is the only
-// way in, and serve breaks exactly that assumption by connecting over loopback
-// itself. Creating the token file is what flips the frontend to demanding it —
-// see frontend/desktop/logic/frontend-token.ts.
-//
 async function remoteAccess(args3 = process.argv.slice(2)) {
   let os5 = await import("node:os");
   let fs5 = await import("node:fs");
@@ -1852,11 +1908,6 @@ async function remoteAccess(args3 = process.argv.slice(2)) {
     return;
   }
 
-  //
-  // Defaults to the port the app persisted for itself. Passing the wrong one is
-  // the difference between a working phone and a permanent 502, and the app
-  // already writes the right answer down.
-  //
   let port = valueAfter(args3, "--port");
   if (!port) {
     try {
