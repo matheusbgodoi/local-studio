@@ -25,6 +25,7 @@ import {
 } from "./pi-runtime-helpers";
 import { refreshPiModels, resolvePiModelSelection } from "./pi-runtime-models";
 import { applyContextHeadroomSettings } from "./pi-agent-settings";
+import { CONTEXT_RECOVERY_MESSAGE, observePiTurn } from "./pi-turn-lifecycle";
 import { describeContextBudget, type ContextBudgetReport } from "./context-budget";
 import { shouldRecoverByCompaction } from "../../../shared/agent/context-headroom";
 import { getProviderHub } from "./provider-hub";
@@ -134,8 +135,6 @@ type DurableSessionManager = Pick<
   "appendCustomEntry" | "getCwd" | "getEntries" | "getSessionFile" | "getSessionId"
 >;
 
-/** Appended to the system prompt for vision-capable models. Kept as an extra
- *  section rather than a replacement so first-party extensions still apply. */
 const VISION_GUIDANCE =
   "When an image is attached, inspect it carefully before answering. State only details visible in the image. Never invent labels, UI elements, text, or facts. Say when details are too small or uncertain. Give a concise answer. Use available tools to inspect supplied files when helpful.";
 
@@ -300,10 +299,6 @@ export function piResourceDiagnostics(agentDir?: string): PiResourceDiagnostic[]
 }
 
 class PiSdkSession extends EventEmitter implements PiAgentSession {
-  //
-  // The manager keys its map by this id; the session needs it too, because the
-  // control tools resolve which Run a conversation is driving from it.
-  //
   constructor(private readonly runtimeSessionId: string) {
     super();
   }
@@ -327,12 +322,6 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     string,
     { method: "select" | "confirm" | "input" | "editor"; resolve: (value: unknown) => void }
   >();
-  // --- personal MCP connectors, per session -------------------------------
-  // `desiredConnectors` is what the user asked THIS session for; it outlives a
-  // runtime rebuild so a model/cwd change re-activates instead of silently
-  // dropping the tools. `registeredConnectorTools` is what the CURRENT runtime
-  // actually has registered, and dies with it. Neither feeds
-  // runtimeFingerprint — activation must never restart a runtime.
   private readonly connectorHolderKey = randomUUID();
   private connectorApi: ExtensionAPI | null = null;
   private desiredConnectors: string[] = [];
@@ -359,28 +348,13 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
           this.desiredConnectors = ["personal-knowledge-mcp"];
         }
       }
-      return (
-        // Re-apply the session's connector selection after every start: a runtime
-        // rebuild (model, cwd, thinking level) drops the registrations, and the
-        // user's `/mcp` choice must survive it. A connector that cannot be
-        // reached must never fail the turn.
-        this.syncConnectorTools().then(
-          () => undefined,
-          () => undefined,
-        )
+      return this.syncConnectorTools().then(
+        () => undefined,
+        () => undefined,
       );
     });
   }
 
-  /**
-   * Personal MCP connectors active for THIS session.
-   *
-   * Deliberately not part of runtimeFingerprint: activating a connector must
-   * never tear down the runtime or re-spawn every MCP client, and it must not
-   * write connectors.json. It only moves names in and out of
-   * `agent.state.tools`, which is the single place tool schemas are serialised
-   * from.
-   */
   setConnectorSelection(connectorIds: string[]): Promise<ConnectorSelectionResult> {
     this.connectorSelectionInitialized = true;
     this.desiredConnectors = normalizePersonalConnectorIds(connectorIds);
@@ -408,8 +382,6 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
       const names = this.registeredConnectorTools.get(connectorId) ?? [];
       this.registeredConnectorTools.delete(connectorId);
       if (session) deactivateConnectorTools(session, names);
-      // Only the last holder closes the pooled connection; another session may
-      // still be mid-turn on the same server.
       if (releaseConnector(connectorId, this.connectorHolderKey)) {
         closePooledConnection(connectorId);
       }
@@ -425,8 +397,6 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
         }
         const label = resolvePersonalConnector(connectorId)?.label ?? connectorId;
         try {
-          // First spawn of this connector's process happens here — lazily, on
-          // the session that asked for it.
           const names = await registerConnectorTools(api, connectorId, label);
           this.registeredConnectorTools.set(connectorId, names);
           holdConnector(connectorId, this.connectorHolderKey);
@@ -481,8 +451,6 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
         const providerId = selectedModel.providerId ?? resolvedSelection.providerId;
         const backendModelId = selectedModel.rawId ?? resolvedSelection.modelId;
 
-        // One shared ModelRuntime across sessions and the provider hub: a
-        // sign-in completed in settings is live for the next turn.
         const sharedModelRuntime = yield* Effect.tryPromise({
           try: () => getProviderHub(),
           catch: (error) => error,
@@ -491,8 +459,6 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
 
         const sessionOptions = buildAgentSessionOptionsSync({ options });
         applyRuntimeEnvInjections(sessionOptions.envInjections);
-        // Expose the current session's model so the automations extension can
-        // default a scheduled run to the same model the user is talking to.
         applyRuntimeEnvInjections({ LOCAL_STUDIO_MODEL_ID: modelId });
         const sessionDir = configuredPiSessionDir(resolvedCwd);
         const resumeFile = desiredSessionId ? findSessionFile(resolvedCwd, desiredSessionId) : null;
@@ -505,21 +471,6 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
           try: () => applyContextHeadroomSettings(agentDir, selectedModel.contextWindow),
           catch: (error) => error,
         }).pipe(Effect.catch(() => Effect.succeed(null)));
-        //
-        // The agent's shell is pointed at the jail shim here, before the session
-        // exists, so the first bash call of a protected turn is already inside
-        // the boundary. `networkPolicy` is in the runtime fingerprint, so
-        // flipping the toggle rebuilds the runtime rather than leaving a live
-        // session on the shell it started with.
-        //
-        //
-        // Applied before the session exists, so the first bash call of a
-        // protected turn is already inside the boundary. If the write did not
-        // take, the runtime does NOT start: a session whose shell is the bare
-        // /bin/bash would run every command the model writes outside the jail
-        // while the owner is being shown a padlock, and failing to start is the
-        // only answer to that which is not a lie.
-        //
         {
           const network = networkService();
           const shim = network.shellShimPath();
@@ -552,18 +503,7 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
                             additionalSkillPaths: sessionOptions.skills,
                             additionalExtensionPaths: sessionOptions.extensionPaths,
                             additionalPromptTemplatePaths: sessionOptions.promptTemplatePaths,
-                            // Personal skills are discoverable by /skill:<name>
-                            // but must never reach the system prompt: this marks
-                            // them model-invocation-disabled at runtime, so
-                            // formatSkillsForPrompt drops them while
-                            // _expandSkillCommand still resolves them. No
-                            // SKILL.md frontmatter is touched.
                             skillsOverride: personalSkillsOverride(),
-                            // In-process: the goal section is injected per turn
-                            // via before_agent_start, keyed by the canonical
-                            // piSessionId this SessionManager owns. Runs here so
-                            // it never depends on the RPC extension's session id
-                            // (which differs and left the goal unread — #284).
                             extensionFactories: [
                               {
                                 name: "local-studio-goal",
@@ -575,16 +515,6 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
                                 name: "local-studio-personal-memory",
                                 factory: createPersonalMemoryExtension(selectedModel.controllerUrl),
                               },
-                              // Registers NO tools at load: a fresh session must
-                              // carry zero personal MCP schemas and must not
-                              // spawn a single MCP process. It only captures the
-                              // live ExtensionAPI so `/mcp <name>` can register
-                              // that one connector's tools later, in-place.
-                              // The durable-work control surface. Present on
-                              // EVERY chat session, because deciding that a
-                              // request is durable work is the model's to make
-                              // — a session that could not reach the tools
-                              // could never make it.
                               {
                                 name: "local-studio-agentic",
                                 factory: createAgenticControlExtension(() => runtimeSessionId),
@@ -596,11 +526,6 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
                                 }),
                               },
                             ],
-                            // Vision guidance is APPENDED, not substituted. This branch used to
-                            // set noExtensions/noSkills/noContextFiles and replace the whole
-                            // system prompt, which silently disabled every first-party extension
-                            // (session goal, artifact policy, subagents) on any
-                            // vision-capable model — i.e. on the primary model.
                             ...(selectedModel.vision
                               ? {
                                   appendSystemPromptOverride: (base: string[]) => [
@@ -761,7 +686,7 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
         if (compactionRecoveryUsed || controller.signal.aborted) return Effect.fail(error);
         if (!this.shouldCompactAfterPromptError(error)) return Effect.fail(error);
         compactionRecoveryUsed = true;
-        return this.compactAndRetryPromptEffect(message, options, priority, controller.signal);
+        return this.compactAndRetryPromptEffect(options, priority, controller.signal);
       }),
       Effect.catch((error) =>
         Effect.sync(() => {
@@ -779,13 +704,16 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
   }
 
   private promptSession(message: string, options: PiPromptOptions): Promise<void> {
-    return this.requireSession().prompt(message, {
-      streamingBehavior: options.streamingBehavior,
-      images: options.images,
-      expandPromptTemplates: options.expandPromptTemplates,
-      source: options.source,
-      preflightResult: options.preflightResult,
-    });
+    const session = this.requireSession();
+    return observePiTurn(session, () =>
+      session.prompt(message, {
+        streamingBehavior: options.streamingBehavior,
+        images: options.images,
+        expandPromptTemplates: options.expandPromptTemplates,
+        source: options.source,
+        preflightResult: options.preflightResult,
+      }),
+    );
   }
 
   private shouldCompactAfterPromptError(error: unknown): boolean {
@@ -796,7 +724,6 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
   }
 
   private compactAndRetryPromptEffect(
-    message: string,
     options: PiPromptOptions,
     priority: "interactive" | "background",
     signal: AbortSignal,
@@ -805,6 +732,7 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
       try: async () => {
         const session = this.requireSession();
         await session.waitForIdle();
+        signal.throwIfAborted();
         this.recordEvent({
           type: "notice",
           level: "info",
@@ -812,7 +740,7 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
         });
         await withInferenceContext(
           "background",
-          undefined,
+          signal,
           () => Promise.resolve(session.compact()),
           options.inferenceObserver,
         );
@@ -825,7 +753,13 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
             withInferenceContext(
               priority,
               signal,
-              () => this.promptSession(message, options),
+              () => {
+                signal.throwIfAborted();
+                const session = this.requireSession();
+                return observePiTurn(session, () =>
+                  session.sendCustomMessage(CONTEXT_RECOVERY_MESSAGE, { triggerTurn: true }),
+                );
+              },
               options.inferenceObserver,
             ),
           catch: (error) => error,
@@ -943,11 +877,6 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     });
   }
 
-  /** Stop the current run and hand back whatever was still queued.
-   *
-   *  clearQueue() returns the texts precisely so they are not lost — pi's own
-   *  TUI puts them back in the editor. Discarding them meant a stop silently
-   *  destroyed every message the user had lined up. */
   abort(): Promise<{ steering: string[]; followUp: string[] }> {
     return Effect.runPromise(
       Effect.tryPromise({
@@ -974,18 +903,14 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     if (!session) return Promise.resolve();
     try {
       session.clearQueue();
-    } catch {
-      // Queue restoration belongs to interactive Stop; durable cancel only needs idle confirmation.
-    }
+    } catch {}
     return (async () => {
       try {
         session.abortCompaction();
       } catch {}
       try {
         await session.abort();
-      } catch {
-        // waitForIdle is the authoritative postcondition even if abort reports an error.
-      }
+      } catch {}
       await session.waitForIdle();
     })();
   }
@@ -1012,8 +937,6 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
   private stopEffect(): Effect.Effect<void> {
     this.unsubscribe?.();
     this.unsubscribe = null;
-    // Tool registrations live in the runtime being disposed; the DESIRED set
-    // survives so the next ensureStarted re-activates the same connectors.
     this.connectorApi = null;
     for (const connectorId of this.registeredConnectorTools.keys()) {
       if (releaseConnector(connectorId, this.connectorHolderKey)) {
@@ -1052,6 +975,10 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
       eventLog: this.eventLog,
       contextUsage: this.computeContextUsage(),
     });
+  }
+
+  getStartOptions(): RuntimeStartOptions {
+    return structuredClone(this.currentStartOptions);
   }
 
   contextBudget(): ContextBudgetReport | null {

@@ -8,15 +8,6 @@ export const COMPACTION_KEEP_RECENT_TOKENS = 20_000;
 
 export const LOCAL_BACKEND_HTTP_IDLE_TIMEOUT_MS = 1_800_000;
 
-//
-// The idle timeout above is sized for INFERENCE: a 150K-token prompt-processing
-// pass on a local llama.cpp box legitimately runs for minutes before the first
-// byte. It must not be inherited by the control plane. Listing models, probing
-// health or reading a status endpoint either answers quickly or is not going to
-// answer at all, and a sleeping host on a tailnet never sends a reset — so
-// without its own deadline that request hangs for the full inference timeout
-// and the model picker appears frozen.
-//
 export const CONTROL_PLANE_TIMEOUT_MS = 8_000;
 
 export function compactionReserveTokens(contextWindow: number | null | undefined): number {
@@ -27,7 +18,9 @@ export function compactionReserveTokens(contextWindow: number | null | undefined
   return Math.min(MAX_COMPACTION_RESERVE_TOKENS, Math.max(MIN_COMPACTION_RESERVE_TOKENS, scaled));
 }
 
-export function contextCompactionThreshold(contextWindow: number | null | undefined): number | null {
+export function contextCompactionThreshold(
+  contextWindow: number | null | undefined,
+): number | null {
   if (typeof contextWindow !== "number" || !Number.isFinite(contextWindow) || contextWindow <= 0) {
     return null;
   }
@@ -43,6 +36,9 @@ const CONTEXT_WALL_PATTERNS: readonly RegExp[] = [
   /UND_ERR_(HEADERS|BODY)_TIMEOUT/i,
   /ECONNRESET/i,
   /socket hang up/i,
+];
+
+const CONTEXT_OVERFLOW_PATTERNS: readonly RegExp[] = [
   /exceeds the available context size/i,
   /exceeds the context window/i,
   /maximum context length/i,
@@ -60,7 +56,9 @@ const DELIBERATE_STOP_PATTERNS: readonly RegExp[] = [
 export function isContextWallFailure(message: string | null | undefined): boolean {
   if (!message) return false;
   if (DELIBERATE_STOP_PATTERNS.some((pattern) => pattern.test(message))) return false;
-  return CONTEXT_WALL_PATTERNS.some((pattern) => pattern.test(message));
+  return [...CONTEXT_WALL_PATTERNS, ...CONTEXT_OVERFLOW_PATTERNS].some((pattern) =>
+    pattern.test(message),
+  );
 }
 
 export function shouldRecoverByCompaction(
@@ -69,8 +67,9 @@ export function shouldRecoverByCompaction(
   contextWindow: number | null | undefined,
 ): boolean {
   if (!isContextWallFailure(message)) return false;
+  if (CONTEXT_OVERFLOW_PATTERNS.some((pattern) => pattern.test(message ?? ""))) return true;
   const threshold = contextCompactionThreshold(contextWindow);
-  if (threshold === null) return true;
-  if (typeof usedTokens !== "number" || !Number.isFinite(usedTokens)) return true;
+  if (threshold === null) return false;
+  if (typeof usedTokens !== "number" || !Number.isFinite(usedTokens)) return false;
   return usedTokens >= threshold * 0.5;
 }

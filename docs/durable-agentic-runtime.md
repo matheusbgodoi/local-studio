@@ -209,9 +209,10 @@ context does.
 `services/agent-runtime/src/http-dispatcher.ts`.
 
 Everything above is the Run path. A plain chat never enters the scheduler, so
-it relies on pi's own auto-compaction, which is correct — on a threshold hit it
-compacts and calls `agent.continue()`, so a turn stopped mid-task resumes on its
-own. What it lacked was room to work in.
+it relies on pi's own auto-compaction. Overflow recovery compacts and continues
+the interrupted turn. Threshold compaction runs after a settled response and
+continues only when messages are queued; it does not independently keep a
+completed plain-chat turn running.
 
 **MEASURED.** pi's threshold is `contextWindow - reserveTokens` against a flat
 `reserveTokens: 16384`. On the owner's `qwen-daily` and `qwen-uncensored`
@@ -551,3 +552,26 @@ checkpoint/compact/resume cycles happen in minutes instead of hours. It touches
 neither the model nor the served window, it can only ever narrow (a wider value
 is ignored), and it is unset in production. It is read once, in
 `agentic/service.ts`, and flows in as an ordinary policy parameter.
+
+## 17. Terminal inference errors (2026-09-07)
+
+**MEASURED — offline SDK.** Pi's agent resolves `prompt()` after a failed
+inference, emitting an assistant message with `stopReason: error`. Treating
+only rejected promises as failures made the runtime's context recovery and
+durable backend-loss handling miss these errors.
+
+**IMPLEMENTED.** `pi-turn-lifecycle.ts` observes the last assistant result
+through the complete SDK operation. A final error becomes a rejected runtime
+turn; an error followed by a successful SDK retry remains successful. Context
+recovery compacts once and sends a hidden continuation through the SDK's
+normal turn lifecycle, preserving the original user request and completed
+tool results instead of inserting the user's message and images again.
+Cancellation prevents queued recovery or continuation from starting.
+Explicit overflow can trigger recovery regardless of previous usage; a
+transport timeout requires evidence of substantial context before it can
+trigger summarization. Unknown usage does not establish context pressure.
+
+**EVIDENCE — deterministic offline.** `pi-turn-lifecycle.test.ts` exercises the
+installed Pi agent with a failing stream, a successful continuation, preflight
+rejection, and context/cancellation classification. Real near-ceiling and
+installed-product acceptance remain required before this is a live claim.
