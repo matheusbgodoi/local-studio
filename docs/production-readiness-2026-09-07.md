@@ -38,7 +38,7 @@ setup-request failures. The subsequent candidate installations and acceptance re
 [the installed receipt](installed-candidate-2026-09-07.md) and the status evidence.
 That receipt now includes actual threshold compaction at 190,073 backend tokens,
 externally verified memory-only continuation and bounded cancellation. Those
-results do not establish every workflow or the latest candidate's restart acceptance.
+results do not establish every workflow. Final10 additionally proved durable interrupted-child discovery after a fresh process restart; see the latest milestones in that chronological receipt.
 
 Related evidence: [status](status-readiness-2026-09-07.md),
 [subagents](subagent-readiness-2026-09-07.md),
@@ -67,7 +67,7 @@ ad-hoc-signed owner build. It was launched with an explicit isolated user-data
 directory, `Local Studio Acceptance 20260907`. The compiled one-way mirror
 copied existing histories and configuration; SQLite's read-only backup API
 copied durable task state, and local memory/artifacts were copied separately.
-The stable application's data was not migrated or modified. The task snapshot
+At that initial isolated milestone, the stable application's data was not migrated or modified. Final10 was subsequently installed in the stable channel after a private recovery snapshot; its original projects and histories loaded, and one synthetic acceptance project was added. The task snapshot
 contained three cancelled, three completed, one failed and one paused run;
 none was running. A fresh private frontend token gates the acceptance instance.
 

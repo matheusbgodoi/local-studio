@@ -4,7 +4,7 @@
 
 The installed Effect dependency executes `Effect.all` sequentially unless concurrency is explicit. A one-shot, in-memory observation of four independent 100 ms effects completed at 105, 207, 309, and 410 ms. The previous status poll used that default and waited for status, compatibility, GPU inventory, and metrics before publishing anything. Metrics also inherited the general 30-second request timeout and three retries.
 
-Frontend TypeScript and scoped ESLint pass for this change. Installed-product offline/recovery acceptance and the integrated `npm run check` remain pending; compilation is not product acceptance.
+Frontend TypeScript and scoped ESLint passed at this initial source milestone. The later integrated checks and bounded installed offline/recovery observations are recorded below; compilation alone is not product acceptance.
 
 ## DECIDED / APPLIED — source only
 
@@ -41,7 +41,7 @@ npm --prefix frontend run perf:browser
 
 MEASURED / PROVEN: authenticated installed Settings emitted one to two uncaught rejected requests on repeated profiling. Their stack points to the controller HTTP error constructor, while the resource failures include `/studio` requests. Source tracing found Settings mounted `useSetup` unconditionally. That hook eagerly created both setup request promises before the sequential Effect collector attached the second rejection handler. An unsupported setup API could therefore reject outside its intended error boundary. It also polled downloads on a page that was not displaying setup.
 
-DECIDED / APPLIED — source only: Settings now renders Settings regardless of inference connectivity or browser-local first-run state. Setup remains available at `/setup`, and the existing dashboard first-run redirect is unchanged. Setup requests are lazy Effect callbacks and independent setup reads run concurrently, so each rejection is owned from its creation. Actual HTTP errors retain their cause instead of being mislabeled as timeouts. Installed candidate acceptance remains pending.
+DECIDED / APPLIED — source only: Settings now renders Settings regardless of inference connectivity or browser-local first-run state. Setup remains available at `/setup`, and the existing dashboard first-run redirect is unchanged. Setup requests are lazy Effect callbacks and independent setup reads run concurrently, so each rejection is owned from its creation. Actual HTTP errors retain their cause instead of being mislabeled as timeouts. The later installed candidate acceptance below no longer reproduced the Settings exceptions.
 
 ## Installed candidate acceptance and diagnostic routing
 
@@ -61,6 +61,6 @@ MEASURED / PROVEN — the installed oMLX `/v1/models` returns Chatterbox speech 
 
 DECIDED / APPLIED — agent catalog discovery enriches only rows explicitly owned by `omlx` with its detailed status, validates both boundaries with Effect Schema, and excludes declared non-chat modalities and the explicit S3 tokenizer configuration. Other providers make no additional request. The enrichment has a two-second request/body deadline; malformed, missing or unavailable metadata preserves the original catalog. Unknown model types remain eligible. Speech artifacts and speech APIs are unchanged. This is a catalog filter, not a generic chat-capability guarantee.
 
-MEASURED / PROVEN — the source helper against the actual Mac oMLX list/status reduced three rows to one in 4 ms: Ornith retained, Chatterbox and S3Tokenizer excluded. This read-only command sent no model turn and wrote no application state. Runtime build-configuration TypeScript passed. Installed candidate API acceptance of this later source change remains pending.
+MEASURED / PROVEN — the source helper against the actual Mac oMLX list/status reduced three rows to one in 4 ms: Ornith retained, Chatterbox and S3Tokenizer excluded. This read-only command sent no model turn and wrote no application state. Runtime build-configuration TypeScript passed. The later final2 installed model API returned five models, retaining Mac Ornith and four RTX aliases while excluding Chatterbox and S3Tokenizer; see [the installed receipt](installed-candidate-2026-09-07.md).
 
 MEASURED / PROVEN — after restoring the acceptance application's original settings, fresh browser navigation to memory and Models returned real documents with zero exceptions, console errors or ARIA busy markers at nine seconds; the Models `Offline` label disappeared. This is recovery by fresh navigation, not a claim of same-tab recovery or successful inference.
