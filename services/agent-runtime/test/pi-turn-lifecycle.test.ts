@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Agent } from "@earendil-works/pi-agent-core";
 import { createAssistantMessageEventStream, type Model } from "@earendil-works/pi-ai";
 import { shouldRecoverByCompaction } from "../../../shared/agent/context-headroom";
-import { observePiTurn } from "../src/pi-turn-lifecycle";
+import { observePiTurn, PiTurnFailure, type PiTurnEventSource } from "../src/pi-turn-lifecycle";
 
 const model: Model<"openai-completions"> = {
   id: "offline",
@@ -104,4 +104,31 @@ describe("context recovery eligibility", () => {
       shouldRecoverByCompaction("Request timed out; operation was aborted", 190000, 200704),
     ).toBe(false);
   });
+});
+
+test("SDK compaction outcome accompanies terminal errors without repeating a failed summary", async () => {
+  for (const succeeded of [false, true]) {
+    const agent = backend(1);
+    let emit: Parameters<PiTurnEventSource["subscribe"]>[0] = () => {};
+    const source: PiTurnEventSource = {
+      subscribe(listener) {
+        emit = listener;
+        return agent.subscribe(listener);
+      },
+    };
+    const error = await observePiTurn(source, async () => {
+      await agent.prompt("original request");
+      emit({
+        type: "compaction_end",
+        reason: "overflow",
+        aborted: !succeeded,
+        willRetry: false,
+        result: succeeded
+          ? { summary: "preserved", firstKeptEntryId: "tail", tokensBefore: 100 }
+          : undefined,
+      });
+    }).catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(PiTurnFailure);
+    expect((error as PiTurnFailure).compaction).toBe(succeeded ? "succeeded" : "failed");
+  }
 });

@@ -601,6 +601,34 @@ summary with post-boundary history, rather than re-summarizing the full raw
 conversation. Output is capped at the smaller of 80% of the reserve and the
 model output limit; a split-turn prefix can require a separate summary capped
 at 50% of the reserve. Serialization does not enforce a tokenizer-verified
-input budget. A single oversized message can therefore exceed the summarizer
-window even after ordinary compaction. Chunked/adaptive summarization and
-real near-ceiling quality/cost qualification remain **HYPOTHESIS / TODO**.
+input budget. A single oversized message can therefore exceed the default
+summarizer window. The supported fallback below addresses this input failure;
+real near-ceiling quality/cost qualification remains **HYPOTHESIS / TODO**.
+
+## 19. Bounded summarizer overflow recovery (2026-09-07)
+
+**IMPLEMENTED.** The supported `session_before_compact` extension hook runs
+Pi's normal exported compactor for inputs estimated to fit. A predicted or
+backend-reported overflow switches to ordered incremental summary segments.
+Each segment updates the previous summary; rejected segments shrink and retry
+without replaying successful segments. The existing summary, user text,
+split-turn prefix and file-operation provenance flow through the fallback.
+Pi's normal serialization still truncates tool-result text; original rollout
+entries and the recent-message boundary remain intact. No transcript entries
+are replaced until every segment succeeds.
+
+**POLICY.** The fallback allows at most 32 model-stream calls, including
+summarizer retries; transport retries retain the configured SDK policy. It rejects empty/truncated summaries and honors cancellation.
+Failure returns hook cancellation explicitly because Pi otherwise swallows
+extension exceptions and retries the default oversized summary. Terminal-turn
+metadata prevents the outer recovery path from repeating a failed SDK
+compaction, or redundantly compacting one that already succeeded. Progress and
+errors appear as notices; final details record the method, segments, calls and
+serialized input size. There are no private SDK calls or vendor patches.
+
+**EVIDENCE — deterministic offline.** `bounded-compaction.test.ts` reproduces
+overflow in the installed SDK against a strict fake backend, then verifies
+staged completion, nonce goal/decision/pending/prior-summary retention, the
+unchanged recent boundary and original preparation, request bounds, aborts,
+truncated-output rejection and failure cancellation. These establish control
+flow, not real-model summary fidelity, tokenization accuracy or latency.

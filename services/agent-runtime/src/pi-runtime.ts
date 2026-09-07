@@ -25,9 +25,13 @@ import {
 } from "./pi-runtime-helpers";
 import { refreshPiModels, resolvePiModelSelection } from "./pi-runtime-models";
 import { applyContextHeadroomSettings, applySessionContextHeadroom } from "./pi-agent-settings";
-import { CONTEXT_RECOVERY_MESSAGE, observePiTurn } from "./pi-turn-lifecycle";
+import { CONTEXT_RECOVERY_MESSAGE, observePiTurn, PiTurnFailure } from "./pi-turn-lifecycle";
+import { createBoundedCompactionExtension } from "./bounded-compaction";
 import { describeContextBudget, type ContextBudgetReport } from "./context-budget";
-import { shouldRecoverByCompaction } from "../../../shared/agent/context-headroom";
+import {
+  isContextWallFailure,
+  shouldRecoverByCompaction,
+} from "../../../shared/agent/context-headroom";
 import { getProviderHub } from "./provider-hub";
 import { attachGoalDriver } from "./goal-driver";
 import { createGoalPromptExtension } from "./goal-prompt";
@@ -487,6 +491,7 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
           this.connectorApi = api;
         };
         const runtimeSessionId = this.runtimeSessionId;
+        const compactionExtension = createBoundedCompactionExtension(() => this.requireSession());
         const runtime = yield* Effect.tryPromise({
           try: () =>
             createAgentSessionRuntime(
@@ -505,6 +510,10 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
                             additionalPromptTemplatePaths: sessionOptions.promptTemplatePaths,
                             skillsOverride: personalSkillsOverride(),
                             extensionFactories: [
+                              {
+                                name: "local-studio-bounded-compaction",
+                                factory: compactionExtension,
+                              },
                               {
                                 name: "local-studio-goal",
                                 factory: createGoalPromptExtension(() =>
@@ -690,7 +699,12 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
         if (compactionRecoveryUsed || controller.signal.aborted) return Effect.fail(error);
         if (!this.shouldCompactAfterPromptError(error)) return Effect.fail(error);
         compactionRecoveryUsed = true;
-        return this.compactAndRetryPromptEffect(options, priority, controller.signal);
+        return this.compactAndRetryPromptEffect(
+          options,
+          priority,
+          controller.signal,
+          error instanceof PiTurnFailure && error.compaction === "succeeded",
+        );
       }),
       Effect.catch((error) =>
         Effect.sync(() => {
@@ -722,6 +736,9 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
 
   private shouldCompactAfterPromptError(error: unknown): boolean {
     if (!this.runtime) return false;
+    if (error instanceof PiTurnFailure && error.compaction === "failed") return false;
+    if (error instanceof PiTurnFailure && error.compaction === "succeeded")
+      return isContextWallFailure(error.message);
     const detail = error instanceof Error ? error.message : String(error ?? "");
     const usage = this.computeContextUsage();
     return shouldRecoverByCompaction(detail, usage?.tokens ?? null, usage?.contextWindow ?? null);
@@ -731,9 +748,11 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     options: PiPromptOptions,
     priority: "interactive" | "background",
     signal: AbortSignal,
+    alreadyCompacted = false,
   ): Effect.Effect<void, unknown> {
     return Effect.tryPromise({
       try: async () => {
+        if (alreadyCompacted) return;
         const session = this.requireSession();
         await session.waitForIdle();
         signal.throwIfAborted();
