@@ -9,6 +9,33 @@ Versioning is `<upstream base>-local.<n>` — see
 
 ## Unreleased
 
+## v2.1.0-local.16 — 2026-09-07
+
+- The app remains usable while the RTX host is offline, waking, loading a
+  model, restarting, or temporarily failing. Local screens and persisted data
+  no longer depend on a successful inference-status request, and remote calls
+  use bounded deadlines with explicit availability states.
+- Long conversations compact before the Qwen context wall, retain headroom for
+  hidden and tool tokens, persist incremental summaries, and perform one
+  bounded compact-and-continue recovery when a turn still crosses the limit.
+- Behavior and network policies are execution-owned and durable. Standard and
+  Uncensored sessions recursively pass their selected profile to children,
+  nested children, background work, retries, and resumptions. Direct and VPN
+  Protected sessions do the same without cross-session contamination.
+- Protected agent shells and browser resources now follow the inherited run
+  policy, wait for the protected boundary to become ready, and preserve that
+  policy across application and runtime restarts.
+- The durable scheduler keeps independent logical tasks alive while serializing
+  inference for the single RTX 3090, with bounded cancellation, recovery, and
+  progress state.
+- The native Electron acceptance run verified Standard/Direct and
+  Uncensored/VPN execution trees, nested inheritance, actual VPN egress,
+  restart recovery, continuation on the original Pi session, and simultaneous
+  isolation between top-level sessions.
+- The qualified Qwen Golden inference backend remains unchanged. This release
+  is source-only because the owner fork still has no Apple Developer ID or
+  notarization credentials; the installed owner build remains ad-hoc signed.
+
 - The RTX box is now a configured compute host. Settings → System shows its
   power state, resident model, GPU memory and last-seen time, read from the
   control server that already ran on it, and offers a Power on button. Status
