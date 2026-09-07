@@ -16,32 +16,8 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_RETRIES = 3;
 const DEFAULT_RETRY_DELAY_MS = 1_000;
 
-//
-// CONTROLLER REACHABILITY BREAKER.
-//
-// This client speaks to exactly one controller, and on this rig that controller
-// is a machine that sleeps. Every call against a sleeping host costs the full
-// upstream budget before failing, and a screen makes several — so the app read
-// as frozen for as long as the RTX was off, on surfaces that had nothing to do
-// with it.
-//
-// Once a call has proven the controller is not answering, the ones behind it
-// stop paying that price and fail immediately with the same error. After the
-// cooldown a single request is let through to find out whether the host came
-// back; a success reopens the gate at once.
-//
-// Deliberately NOT applied to: 4xx (the host answered), aborts by the caller, or
-// anything that does not go through this controller client. Local /api/agent/*
-// traffic does not use this module at all.
-//
 const CONTROLLER_DOWN_COOLDOWN_MS = 15_000;
 
-//
-// `probeInFlight` means "one request is out there finding out whether the host
-// is back", NOT "the host is down". The first version set it when the breaker
-// latched, which made the half-open branch unreachable: a woken controller
-// stayed blocked because nothing was ever allowed to go and notice.
-//
 type BreakerState = { downSince: number; probeInFlight: boolean };
 
 const controllerBreaker = new Map<string, BreakerState>();
@@ -59,16 +35,12 @@ function breakerVerdict(key: string): "open" | "closed" | "probe" {
   const state = controllerBreaker.get(key);
   if (!state) return "closed";
   if (Date.now() - state.downSince < CONTROLLER_DOWN_COOLDOWN_MS) return "open";
-  // Cooldown spent: exactly one caller goes and looks, and everyone else keeps
-  // the fast answer until it reports back.
   if (state.probeInFlight) return "open";
   state.probeInFlight = true;
   return "probe";
 }
 
 function markControllerDown(key: string): void {
-  // First failure or a probe that came back empty — either way, restart the
-  // cooldown and let the next probe happen after it.
   controllerBreaker.set(key, { downSince: Date.now(), probeInFlight: false });
 }
 
@@ -76,27 +48,33 @@ function markControllerUp(key: string): void {
   controllerBreaker.delete(key);
 }
 
-/** Test seam and a hook for "the owner just woke the host, try again now". */
-export function resetControllerBreaker(): void {
-  controllerBreaker.clear();
-}
-
-/** The controller's own verdict on itself, folded into the breaker: an
- *  upstream timeout means nothing is listening; any answer it composed itself
- *  (4xx) proves it is awake. A 5xx is left alone — it answered, but it may be
- *  mid-restart, and the retry ladder still covers that. */
-/** A transport failure against the controller is the same statement as an
- *  upstream timeout: nothing is listening. The first attempt's own abort is the
- *  one exception — that is this client's clock running out, not the host's
- *  silence, and on a slow-but-live controller it must not latch the gate shut. */
-function recordBreakerTransportFailure(error: unknown, attempt: number, key: string): void {
-  if (error instanceof Error && error.name === "AbortError" && attempt === 0) return;
-  markControllerDown(key);
-}
-
 function recordBreakerOutcome(response: Response, key: string): void {
   if (isUpstreamTimeoutResponse(response)) markControllerDown(key);
-  else if (response.status < 500) markControllerUp(key);
+  else markControllerUp(key);
+}
+
+function releaseControllerProbe(key: string): void {
+  const state = controllerBreaker.get(key);
+  if (state) state.probeInFlight = false;
+}
+
+function requestSignal(deadline: AbortSignal, caller?: AbortSignal | null): AbortSignal {
+  return caller ? AbortSignal.any([deadline, caller]) : deadline;
+}
+
+async function bufferNonStreamingResponse(response: Response): Promise<Response> {
+  if (
+    !response.body ||
+    (response.ok && response.headers.get("content-type")?.includes("text/event-stream"))
+  ) {
+    return response;
+  }
+  const body = await response.arrayBuffer();
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
 }
 
 export const encodePathSegments = (path: string) =>
@@ -296,73 +274,67 @@ export function createApiCore(params: {
       headers["X-Backend-Url"] || backendUrlOverride || getStoredBackendUrl() || baseUrl;
     const verdict = breakerVerdict(breakerKey);
     if (verdict === "open") throw new ControllerUnreachableError(breakerKey);
-    let lastError: Error | null = null;
-    let lastStatus: number | undefined;
     let retriedWithoutBackendOverride = false;
     const maxAttempts = retries + (useProxy && headers["X-Backend-Url"] ? 1 : 0);
 
     for (let attempt = 0; attempt <= maxAttempts; attempt++) {
       const controller = new AbortController();
+      const signal = requestSignal(controller.signal, fetchOptions.signal);
       const timeoutId = setTimeout(() => controller.abort(), timeout);
+      let response: Response;
 
       try {
-        const response = await fetch(url, {
+        response = await fetch(url, {
           ...fetchOptions,
           headers: { ...headers },
           credentials: "include",
-          signal: controller.signal,
+          signal,
         });
-
-        clearTimeout(timeoutId);
-        lastStatus = response.status;
-        maybeClearInvalidBackendOverride(response);
-
-        if (!response.ok) {
-          if (shouldRetryWithoutBackendOverride(response, headers, retriedWithoutBackendOverride)) {
-            retriedWithoutBackendOverride = true;
-            delete headers["X-Backend-Url"];
-            continue;
-          }
-
-          lastError = await responseError(response, endpoint);
-          // A controller that did not answer will not answer three more times
-          // for the same reason. Retrying the proxy's own upstream-timeout 504
-          // turned a 5s wait into 27s of frozen UI whenever the RTX slept.
-          recordBreakerOutcome(response, breakerKey);
-          if (
-            !isUpstreamTimeoutResponse(response) &&
-            shouldRetryAttempt(lastError, response.status, attempt, retries)
-          ) {
-            await waitBeforeRetry(
-              endpoint,
-              attempt,
-              retries,
-              retryDelay,
-              `(status: ${response.status})`,
-            );
-            continue;
-          }
-
-          throw lastError;
-        }
-
-        markControllerUp(breakerKey);
-        return response;
+        response = await bufferNonStreamingResponse(response);
       } catch (error) {
-        clearTimeout(timeoutId);
-        lastError = normalizeRequestError(error, timeout);
-        recordBreakerTransportFailure(error, attempt, breakerKey);
-
-        if (shouldRetryAttempt(error, lastStatus, attempt, retries)) {
-          await waitBeforeRetry(endpoint, attempt, retries, retryDelay, `(${lastError.message})`);
+        const normalized = normalizeRequestError(error, timeout);
+        if (fetchOptions.signal?.aborted) {
+          releaseControllerProbe(breakerKey);
+          throw normalized;
+        }
+        markControllerDown(breakerKey);
+        if (shouldRetryAttempt(error, undefined, attempt, retries)) {
+          await waitBeforeRetry(endpoint, attempt, retries, retryDelay, `(${normalized.message})`);
           continue;
         }
-
-        throw lastError;
+        throw normalized;
+      } finally {
+        clearTimeout(timeoutId);
       }
-    }
 
-    throw lastError || new Error("Request failed after retries");
+      maybeClearInvalidBackendOverride(response);
+      recordBreakerOutcome(response, breakerKey);
+      if (shouldRetryWithoutBackendOverride(response, headers, retriedWithoutBackendOverride)) {
+        retriedWithoutBackendOverride = true;
+        delete headers["X-Backend-Url"];
+        continue;
+      }
+      if (!response.ok) {
+        const error = await responseError(response, endpoint);
+        if (
+          !isUpstreamTimeoutResponse(response) &&
+          shouldRetryAttempt(error, response.status, attempt, retries)
+        ) {
+          await waitBeforeRetry(
+            endpoint,
+            attempt,
+            retries,
+            retryDelay,
+            `(status: ${response.status})`,
+          );
+          continue;
+        }
+        throw error;
+      }
+      markControllerUp(breakerKey);
+      return response;
+    }
+    throw new Error("Request failed after retries");
   };
 
   const request = async <T>(endpoint: string, options: RequestOptions = {}): Promise<T> => {

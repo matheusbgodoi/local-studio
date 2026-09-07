@@ -1,12 +1,5 @@
 "use client";
 
-// THE single owner of controller-level status: reachability, running process,
-// GPUs, metrics, launch progress, runtime summary. Fed by the controller SSE
-// (vllm:controller-event, dispatched by use-controller-events) with a 5s
-// poll+backoff fallback. Views derive from the snapshot via
-// realtime-status-types.ts — nothing else may poll getStatus or listen to
-// controller events for status.
-
 import { useSyncExternalStore } from "react";
 import { Effect, Result } from "effect";
 import { effectInterval, effectTimeout, type EffectTimer } from "@/lib/effect-timers";
@@ -42,6 +35,7 @@ import {
 
 const FAST_STATUS_REQUEST = { timeout: 5_000, retries: 0 } as const;
 const FAST_COMPAT_REQUEST = { timeout: 5_000, retries: 0 } as const;
+const FAST_METRICS_REQUEST = { timeout: 5_000, retries: 0 } as const;
 const FAST_GPU_REQUEST = { timeout: 5_000, retries: 0 } as const;
 
 type ControllerEventDetail = ControllerIdentity & {
@@ -215,7 +209,7 @@ function scheduleLaunchClear(stage: LaunchProgressData["stage"]) {
 }
 
 function emitStatusLoading() {
-  if (snapshot.statusLoading) return;
+  if (snapshot.statusLoading || snapshot.status) return;
   emitIfChanged({
     ...snapshot,
     statusLoading: true,
@@ -228,22 +222,25 @@ const requestEffect = <T>(load: () => Promise<T>): Effect.Effect<T, unknown> =>
 
 function fetchPollResultsEffect(): Effect.Effect<PollResults> {
   return Effect.gen(function* () {
-    const [statusResult, compatibilityResult, gpuResult, metricsResult] = yield* Effect.all([
-      Effect.result(requestEffect(() => api.getStatus(FAST_STATUS_REQUEST))),
-      Effect.result(requestEffect(() => api.getCompatibility(FAST_COMPAT_REQUEST))),
-      Effect.result(
-        requestEffect(async () => {
-          const payload = await api.getGPUs(FAST_GPU_REQUEST);
-          return { gpus: payload.gpus ?? [], observedAt: Date.now() } satisfies PolledGpus;
-        }),
-      ),
-      Effect.result(
-        requestEffect(async () => {
-          const metrics = await api.getMetrics();
-          return { metrics, observedAt: Date.now() } satisfies PolledMetrics;
-        }),
-      ),
-    ] as const);
+    const [statusResult, compatibilityResult, gpuResult, metricsResult] = yield* Effect.all(
+      [
+        Effect.result(requestEffect(() => api.getStatus(FAST_STATUS_REQUEST))),
+        Effect.result(requestEffect(() => api.getCompatibility(FAST_COMPAT_REQUEST))),
+        Effect.result(
+          requestEffect(async () => {
+            const payload = await api.getGPUs(FAST_GPU_REQUEST);
+            return { gpus: payload.gpus ?? [], observedAt: Date.now() } satisfies PolledGpus;
+          }),
+        ),
+        Effect.result(
+          requestEffect(async () => {
+            const metrics = await api.getMetrics(FAST_METRICS_REQUEST);
+            return { metrics, observedAt: Date.now() } satisfies PolledMetrics;
+          }),
+        ),
+      ] as const,
+      { concurrency: "unbounded" },
+    );
     const status = Result.isSuccess(statusResult) ? statusResult.success : null;
     const polledMetrics = pollMetrics(metricsResult, status);
     const polledGpus = Result.isSuccess(gpuResult)
@@ -299,16 +296,10 @@ function runtimeSummaryFromCompatibility(
 }
 
 function emitNoPolledStatus(gpus: GPU[], gpusObservedAt: number) {
-  // Keep a warm cache through transient navigation/SSE handoff failures. The
-  // next poll failure marks the controller offline, but a single missed fast
-  // request should not blank the status page or flash "offline".
-  const hasCachedStatus = Boolean(
-    snapshot.status || snapshot.runtimeSummary || snapshot.gpus.length,
-  );
   emitIfChanged({
     ...snapshot,
     statusLoading: false,
-    connected: hasCachedStatus && pollFailureStreak <= 3 ? snapshot.connected : false,
+    connected: false,
     gpus,
     gpusObservedAt,
     lastEventAt: Date.now(),
@@ -364,8 +355,6 @@ function metricsForEventProcess(process: ProcessInfo | null): Metrics | null {
 }
 
 function handleStatusEvent(data: Record<string, unknown>, now: number) {
-  // A live status event means the selected backend is reachable; clear any
-  // poll backoff so a recovered connection resumes fast polling.
   notePollOutcome(true);
   const status = statusFromEventData(data);
   const processUnchanged = sameProcess(snapshot.status?.process, status.process);
@@ -409,8 +398,6 @@ function handleLaunchProgressEvent(data: Record<string, unknown>, now: number) {
   scheduleLaunchClear(progress.stage);
   emitIfChanged({
     ...snapshot,
-    // A live launch event proves the controller is reachable even before the
-    // first successful status poll.
     connected: true,
     launchProgress: progress,
     lastEventAt: now,
@@ -494,7 +481,7 @@ function handleControllerEvent(detail: ControllerEventDetail | undefined) {
   }
   const handler = controllerEventHandlers[detail.type ?? ""];
   if (!handler) return;
-  eventEpoch += 1;
+  if (detail.type === "status") eventEpoch += 1;
   handler(detail.data ?? {}, Date.now());
 }
 
@@ -558,8 +545,6 @@ function start() {
   window.addEventListener("vllm:controller-event", onControllerEvent as EventListener);
   window.addEventListener(BACKEND_URL_CHANGED_EVENT, resetForControllerSwitch);
 
-  // Initial fetch + polling fallback in case SSE is blocked. The poll body
-  // checks the SSE freshness window and backoff gate before firing.
   void fetchStatusNow();
   effectInterval(() => {
     const now = Date.now();

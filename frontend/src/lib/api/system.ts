@@ -113,7 +113,8 @@ export function createSystemApi(core: ApiCore) {
     }): Promise<VRAMCalculation> =>
       core.request("/vram-calculator", { method: "POST", body: JSON.stringify(data) }),
 
-    getMetrics: (): Promise<Metrics> => core.request("/v1/metrics/vllm"),
+    getMetrics: (options?: RequestOptions): Promise<Metrics> =>
+      core.request("/v1/metrics/vllm", options),
 
     runBenchmark: (
       promptTokens = 1000,
