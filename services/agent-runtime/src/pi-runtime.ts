@@ -1,4 +1,5 @@
 import { contextUsageIsMeasured } from "./context-usage-provenance";
+import { installRuntimeStartupEnvironment } from "./runtime-startup-environment";
 import { releaseBrowserSession } from "./browser-host/browser-host";
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
@@ -19,7 +20,6 @@ import { assertAgentBehaviorProfileAllowed } from "../../../shared/agent/behavio
 import type { AgentImageInput } from "../../../shared/agent/agent-image-input";
 import type { AgentQueueAction } from "../../../shared/agent/agent-turn";
 import {
-  applyRuntimeEnvInjections,
   buildAgentSessionOptionsSync,
   personalSkillsOverride,
   runtimeOptionsFingerprint,
@@ -469,8 +469,10 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
         installInferenceBoundary(sharedModelRuntime);
 
         const sessionOptions = buildAgentSessionOptionsSync({ options });
-        applyRuntimeEnvInjections(sessionOptions.envInjections);
-        applyRuntimeEnvInjections({ LOCAL_STUDIO_MODEL_ID: modelId });
+        yield* installRuntimeStartupEnvironment({
+          ...sessionOptions.envInjections,
+          LOCAL_STUDIO_MODEL_ID: modelId,
+        });
         const sessionDir = configuredPiSessionDir(resolvedCwd);
         const resumeFile = desiredSessionId ? findSessionFile(resolvedCwd, desiredSessionId) : null;
         const sessionManager = resumeFile
@@ -645,7 +647,7 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
         this.currentStartOptions = options;
         this.unsubscribe = runtime.session.subscribe((event) => this.recordEvent(event));
       }.bind(this),
-    );
+    ).pipe(Effect.scoped);
   }
 
   prompt(
