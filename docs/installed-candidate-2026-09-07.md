@@ -126,3 +126,20 @@ After a fresh installed process restart, GET subagents returned HTTP 200 and res
 **MEASURED / PROVEN — browser isolation FAIL.** Actual browser child sessions `01a07ac1-3cd4-73b2-8fe9-f5f2c45e5c19` and `01a07ac1-3d46-7ea1-8203-76ec6fb32e12` completed with HTTP 200 in 123,974 and 130,906 ms. Tool traces contain 24 real calls, interleaved across three rounds; the first sequence navigated left at 07:25:45Z, right at 07:25:46Z, then read left at 07:25:47Z and right at 07:25:48Z. All three left output files contained the right page's key and URL. The three right files were correct. Neither HTTP success nor tool execution therefore establishes isolation. Keys remain private; evidence is `tool-order.json` and `external-checks.json` under `/tmp/local-studio-browser-child-workorders-20260907/installed-final6`.
 
 Source tracing identified the SDK's same-working-directory cached extension factory returning a module whose browser-owner constant was initialized earlier. The startup semaphore did not refresh that cached module state. A later source correction captures typed browser/relay configuration and automation defaults inside every factory initializer. Manual calls through the actual SDK cached loader preserve separate request owners and model defaults, but installed repeat acceptance is still pending. See [browser ownership evidence](browser-session-ownership-2026-09-07.md). The final6 browser result remains a failure until a separately recorded new installation and real overlapping child run pass.
+
+## Final9 build, installation and initial availability — 2026-09-07
+
+MEASURED / PROVEN — the integrating checkout completed `npm run check` for source `9f2135d7`. The official Dev packaging and installer workflows then completed, and the root launched that candidate for isolated acceptance. Logs: `/tmp/local-studio-readiness-check-final9-20260907.log`, `/tmp/local-studio-readiness-build-final9-20260907.log`, `/tmp/local-studio-readiness-install-dev-final9-20260907.log`, and `/tmp/local-studio-readiness-launch-final9-20260907.log`. This receipt supersedes earlier installation checkpoints; it does not transfer their acceptance results to newly changed behavior.
+
+Artifact manifest: `/tmp/local-studio-final9-artifacts.json`.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| CRIAs AI Dev-2.1.0-arm64-mac.zip | `854471142828dcfb4c68f52f6d5466f302a91a504eb331065e915e077dd4876c` |
+| CRIAs AI Dev-2.1.0-arm64.dmg | `bd20882a2d9613eba8b3480afe7a2f27ae5b0d87df0d8f1d3f7fb2d63541c0f8` |
+
+MEASURED / PROVEN — root's installed initial navigation reached `/agent` with HTTP 200 and zero busy indicators while challenger B was loading. Additional initial DOMContentLoaded observations were `/settings` HTTP 200 in 30 ms, `/runs` HTTP 200 in 30 ms, and `/models` HTTP 200 in 19 ms, each with zero `aria-busy` elements. These measurements establish initial availability only, not settled-screen correctness or a nine-second observation window.
+
+DECIDED / APPLIED — the acceptance instance uses isolated user data. Only its settings were changed for the bounded challenger-B product campaign, with a private backup; normal Mac application settings were preserved. B product qualification was running at this checkpoint and is not yet a readiness or promotion result.
+
+TARGET / NOT YET PROVEN — final9 includes the confirmed-late-close browser profile cleanup correction, but its actual installed child lifecycle has not yet qualified cleanup. The plain packaged-Node diagnostic was healthy; the installed product's earlier delayed close cause remains unresolved. Do not report cleanup PASS from packaging or that diagnostic. See [browser lifecycle evidence](browser-session-ownership-2026-09-07.md).
