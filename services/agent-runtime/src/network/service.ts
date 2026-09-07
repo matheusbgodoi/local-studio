@@ -1,29 +1,3 @@
-//
-// The network service: who is asking for protection, whether it is actually in
-// place, and what a spawned process has to be wrapped in.
-//
-// ONE BOUNDARY, NOT ONE PER SESSION. The agent-runtime is a single Node process
-// shared by every conversation — sessions are objects in a Map, subagents are
-// more objects in the same Map, and the browser host, Playwright manager and
-// connector pool are process-global singletons. There is therefore no honest
-// way to give conversation A a different route from conversation B, and
-// pretending otherwise would be the most dangerous kind of wrong: a padlock
-// that means nothing.
-//
-// So the policy is stated plainly and enforced conservatively: PROTECTED WINS.
-// While any session or any live Run asks for protection, the boundary is up and
-// every agent-spawned process goes through the tunnel — including those
-// belonging to conversations set to Direct. That is a real cost and the UI says
-// so out loud. The alternative, letting a protected workload occasionally take
-// the direct route, is the one outcome this feature exists to prevent.
-//
-// ENFORCEMENT AND ATTESTATION ARE SEPARATE. `enforced` is true when the jail
-// exists and the tunnel process is running — it is what makes traffic safe.
-// `attestation` is what a probe could observe. A state of PROTECTED needs both;
-// DEGRADED is what a working boundary with an incomplete measurement is called,
-// and it is never rendered as PROTECTED.
-//
-
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import {
@@ -222,9 +196,13 @@ export class NetworkService {
   // scheduler asks this before an external operation, and a `false` answer
   // pauses the Run rather than failing it — the same way a lost backend does.
   //
-  mayEgress(): boolean {
-    if (!this.protectionDemanded()) return true;
+  mayEgress(policy?: NetworkPolicy): boolean {
+    if (!this.requiresProtection(policy)) return true;
     return allowsProtectedEgress(this.state);
+  }
+
+  private requiresProtection(policy?: NetworkPolicy): boolean {
+    return policy ? policy === "vpn_protected" : this.protectionDemanded();
   }
 
   //
@@ -238,8 +216,8 @@ export class NetworkService {
   // believes it is confined. Refusing to start a process is recoverable;
   // starting an unconfined one is not.
   //
-  wrap(command: JailedCommand): JailedCommand {
-    if (!this.protectionDemanded()) return command;
+  wrap(command: JailedCommand, policy?: NetworkPolicy): JailedCommand {
+    if (!this.requiresProtection(policy)) return command;
     if (!this.profilePath) {
       throw new Error(
         `protected network is ${this.state.toLowerCase()}; the process was not started because it could not be confined`,
@@ -248,16 +226,16 @@ export class NetworkService {
     return jailCommand(this.profilePath, command);
   }
 
-  environment(): Record<string, string> {
-    return this.protectionDemanded() ? jailEnvironment(PROXY_PORT) : {};
+  environment(policy?: NetworkPolicy): Record<string, string> {
+    return this.requiresProtection(policy) ? jailEnvironment(PROXY_PORT) : {};
   }
 
   //
   // The shim the agent's `bash` tool is pointed at, or null when protection is
   // off so the SDK falls back to its own shell resolution untouched.
   //
-  shellShimPath(): string | null {
-    if (!this.protectionDemanded()) return null;
+  shellShimPath(policy?: NetworkPolicy): string | null {
+    if (!this.requiresProtection(policy)) return null;
     //
     // THROWS rather than returning null when protection is demanded but the jail
     // could not be built. Returning null here means "use the SDK's own shell",
@@ -279,8 +257,8 @@ export class NetworkService {
   // is on. Returning the original path when it is off is what keeps Direct mode
   // byte-identical to how it behaved before this existed.
   //
-  chromiumExecutable(executablePath: string): string {
-    if (!this.protectionDemanded()) return executablePath;
+  chromiumExecutable(executablePath: string, policy?: NetworkPolicy): string {
+    if (!this.requiresProtection(policy)) return executablePath;
     //
     // Same reason as shellShimPath: handing back the real binary while
     // protection is demanded launches an unconfined browser under a padlock.
@@ -306,8 +284,8 @@ export class NetworkService {
     };
   }
 
-  chromiumArguments(): string[] {
-    return this.protectionDemanded() && this.profilePath ? chromiumJailArguments() : [];
+  chromiumArguments(policy?: NetworkPolicy): string[] {
+    return this.requiresProtection(policy) && this.profilePath ? chromiumJailArguments() : [];
   }
 
   //
@@ -317,8 +295,8 @@ export class NetworkService {
   // is demanded. There is no third answer, so no caller can accidentally fall
   // back to a direct socket.
   //
-  httpAgents(): { http: HttpAgent; https: HttpsAgent } | null {
-    const endpoint = this.proxyEndpoint();
+  httpAgents(policy?: NetworkPolicy): { http: HttpAgent; https: HttpsAgent } | null {
+    const endpoint = this.proxyEndpoint(policy);
     if (!endpoint) return null;
     //
     // Null here means "protection is on and this path cannot be routed", which
@@ -334,15 +312,15 @@ export class NetworkService {
   // transport) or "this runtime cannot divert a socket" (refuse), never
   // "go direct".
   //
-  httpFetch(): typeof fetch | null {
-    const endpoint = this.proxyEndpoint();
+  httpFetch(policy?: NetworkPolicy): typeof fetch | null {
+    const endpoint = this.proxyEndpoint(policy);
     if (!endpoint) return null;
     if (!inProcessRoutingSupported()) return null;
     return tunnelledFetch(endpoint);
   }
 
-  proxyEndpoint(): string | null {
-    return this.protectionDemanded() ? `127.0.0.1:${PROXY_PORT}` : null;
+  proxyEndpoint(policy?: NetworkPolicy): string | null {
+    return this.requiresProtection(policy) ? `127.0.0.1:${PROXY_PORT}` : null;
   }
 
   //
@@ -573,7 +551,8 @@ export class NetworkService {
     if (this.state === "PROTECTED" && previous !== "PROTECTED") {
       this.emit(previous === "BLOCKED" ? "vpn.reconnected" : "vpn.protected");
     }
-    if (this.state === "DEGRADED" && previous !== "DEGRADED") this.emit("vpn.degraded", this.detail);
+    if (this.state === "DEGRADED" && previous !== "DEGRADED")
+      this.emit("vpn.degraded", this.detail);
   }
 
   status(): NetworkStatus {

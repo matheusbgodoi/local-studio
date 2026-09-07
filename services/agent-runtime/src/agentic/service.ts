@@ -103,6 +103,14 @@ const sessionFor = (
     cwd: run.cwd,
     piSessionId: agent ? agent.piSessionId : run.piSessionId,
     fallbackContextWindow: run.contextWindow,
+    startOptions: {
+      networkPolicy: run.networkPolicy,
+      executionPolicy: {
+        behaviorProfile: run.behaviorProfile,
+        networkPolicy: run.networkPolicy,
+      },
+      browserSessionId: runtimeSessionKey(run, agent),
+    },
     inferenceObserver,
   });
 
@@ -139,11 +147,7 @@ function createRuntime(): RuntimeState {
   const service = createAgenticRunService({
     store,
     session: (run, agent) =>
-      sessionFor(
-        run,
-        agent,
-        agent ? inferenceActivity.observer(run.id, agent.id) : undefined,
-      ),
+      sessionFor(run, agent, agent ? inferenceActivity.observer(run.id, agent.id) : undefined),
     capabilityFor,
     budgetPolicy: agenticBudgetPolicy(),
     isCancelled: (runId) => cancelled.has(runId),
@@ -183,7 +187,7 @@ function egressPermitted(store: AgenticStore, run: AgenticRun): boolean {
   const network = networkService();
   if (run.networkPolicy !== "vpn_protected") return true;
   network.setRunPolicy(run.id, run.networkPolicy);
-  if (network.mayEgress()) return true;
+  if (network.mayEgress(run.networkPolicy)) return true;
   if (run.status !== "PAUSED" && run.status !== "WAITING_USER") {
     store.updateRun(run.id, { status: "PAUSED" });
     store.appendEvent({
@@ -400,12 +404,16 @@ export function agenticRuntime() {
     capabilityForRun: (run) => state.capabilities.get(run.id) ?? capabilityFromRun(run),
     startRun: async (input) => {
       const capability = await resolveCapability(input.modelId);
+      if (capability.behaviorProfile !== input.executionPolicy.behaviorProfile) {
+        throw new Error("The durable run behavior profile no longer matches its parent session.");
+      }
       const committed = createRunFromPlan(state.store, {
         plan: input.plan,
         capability,
         sessionId: input.sessionId,
         piSessionId: input.piSessionId,
         cwd: input.cwd,
+        networkPolicy: input.executionPolicy.networkPolicy,
         budgetPolicy: agenticBudgetPolicy(),
       });
       state.capabilities.set(committed.run.id, capability);

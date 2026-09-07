@@ -4,6 +4,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { agenticControlHost } from "./control-host";
 import { validateProgress, validateProposal } from "./control-plane";
 import { createToolInterceptor } from "./tool-interceptor";
+import type { ExecutionPolicy } from "../../../../shared/agent/execution-policy";
 
 type ToolSchema = Parameters<ExtensionAPI["registerTool"]>[0]["parameters"];
 
@@ -58,6 +59,7 @@ export const AGENTIC_ROUTING_INSTRUCTIONS = [
 export function createAgenticControlExtension(
   getSessionId: () => string | null,
   getModelId: () => string | null,
+  getExecutionPolicy: () => ExecutionPolicy,
 ) {
   return (pi: ExtensionAPI): void => {
     createToolInterceptor({
@@ -123,6 +125,7 @@ export function createAgenticControlExtension(
           sessionId,
           piSessionId,
           cwd: ctx.cwd,
+          executionPolicy: getExecutionPolicy(),
         });
         const lines = started.tasks.map(
           (task) =>

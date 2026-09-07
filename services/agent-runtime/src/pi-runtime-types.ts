@@ -3,6 +3,7 @@ import type { AgentImageInput } from "../../../shared/agent/agent-image-input";
 import type { AgentQueueAction } from "../../../shared/agent/agent-turn";
 import type { RuntimeStartOptions } from "./pi-runtime-helpers";
 import type { InferenceActivityObserver } from "./agentic/inference-activity";
+import type { NetworkPolicy } from "../../../shared/agent/network-policy";
 
 type PiEvent = (Record<string, unknown> & { type?: string }) | AgentSessionEvent;
 
@@ -45,6 +46,8 @@ export type PiDurablePromptBoundary = {
   sessionFile: string;
   cwd: string;
   modelId: string;
+  behaviorProfile: string | null;
+  networkPolicy: NetworkPolicy;
   acceptedAt: string;
 };
 
@@ -54,6 +57,8 @@ export type PiAgentStatus = {
   running: boolean;
   active: boolean;
   modelId: string;
+  behaviorProfile: string | null;
+  networkPolicy: NetworkPolicy;
   cwd: string;
   piSessionId: string | null;
   agentDir: string;

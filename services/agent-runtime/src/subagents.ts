@@ -10,7 +10,9 @@ import { resolveDataDir } from "./data-dir";
 import { getGlobalSingleton } from "./instances";
 import { piRuntimeManager } from "./pi-runtime";
 import { lastAssistantText } from "./session-text";
-import { sessionSubagentLink, readSubagentRuns, saveSubagentRun } from "./session-metadata-store";
+import { readSubagentRuns, saveSubagentRun } from "./session-metadata-store";
+import type { ExecutionPolicy } from "../../../shared/agent/execution-policy";
+import { DEFAULT_NETWORK_POLICY } from "../../../shared/agent/network-policy";
 
 const NICKNAMES = [
   "Euclid",
@@ -43,13 +45,11 @@ export type { SubagentRun } from "../../../shared/agent/subagent";
 
 type SubagentState = {
   byParent: Map<string, SubagentRun[]>;
-  childPiSessionIds: Set<string>;
 };
 
 function state(): SubagentState {
   return getGlobalSingleton(`subagentRegistry:${resolveDataDir()}`, () => ({
     byParent: new Map<string, SubagentRun[]>(),
-    childPiSessionIds: new Set<string>(),
   }));
 }
 
@@ -112,18 +112,9 @@ async function executeSubagent(
   const registry = state();
   const { parentPiSessionId } = input;
 
-  if (
-    registry.childPiSessionIds.has(parentPiSessionId) ||
-    sessionSubagentLink(parentPiSessionId) !== null
-  ) {
-    throw new Error("Subagents cannot spawn their own subagents.");
-  }
   const parent = findParentRuntime(parentPiSessionId);
   if (!parent) {
     throw new Error("No running session found for this conversation.");
-  }
-  if (parent.sessionId.startsWith(SUBAGENT_SESSION_PREFIX)) {
-    throw new Error("Subagents cannot spawn their own subagents.");
   }
   const running = listSubagents(parentPiSessionId).filter((run) => run.status === "running");
   if (running.length >= MAX_CONCURRENT_PER_PARENT) {
@@ -133,6 +124,12 @@ async function executeSubagent(
   }
 
   const siblingCount = listSubagents(parentPiSessionId).length;
+  const parentOptions = parent.session.getStartOptions();
+  const executionPolicy: ExecutionPolicy = parentOptions.executionPolicy ?? {
+    behaviorProfile: parent.session.status.behaviorProfile,
+    networkPolicy:
+      parentOptions.networkPolicy ?? parent.session.status.networkPolicy ?? DEFAULT_NETWORK_POLICY,
+  };
   const run: SubagentRun = {
     id: randomUUID(),
     parentPiSessionId,
@@ -143,12 +140,14 @@ async function executeSubagent(
     startedAt: new Date().toISOString(),
     finishedAt: null,
     cwd: parent.session.status.cwd,
+    modelId: parent.session.status.modelId,
+    executionPolicy,
   };
   const runs = registry.byParent.get(parentPiSessionId) ?? [];
   runs.push(run);
   registry.byParent.set(parentPiSessionId, runs);
 
-  const modelId = input.modelId?.trim() || parent.session.status.modelId;
+  const modelId = parent.session.status.modelId;
   const cwd = parent.session.status.cwd;
   const runtimeSessionId = `${SUBAGENT_SESSION_PREFIX}${parentPiSessionId}:${run.id}`;
 
@@ -161,13 +160,14 @@ async function executeSubagent(
     await saveSubagentRun(run);
     signal.throwIfAborted();
     await session.ensureStarted(modelId, cwd || undefined, null, {
-      ...parent.session.getStartOptions(),
+      ...parentOptions,
+      networkPolicy: executionPolicy.networkPolicy,
+      executionPolicy,
       browserSessionId: runtimeSessionId,
     });
     signal.throwIfAborted();
     run.piSessionId = session.status.piSessionId;
     if (!run.piSessionId) throw new Error("Subagent session was not persisted.");
-    registry.childPiSessionIds.add(run.piSessionId);
     await saveSubagentRun(run);
     signal.throwIfAborted();
     await session.prompt(taskPrompt(run.name, input.task), () => {}, {

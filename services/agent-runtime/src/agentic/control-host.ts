@@ -12,6 +12,7 @@ import type { AgenticRun, AgenticTask } from "./contract";
 import type { ProgressReport, ValidatedPlan } from "./control-plane";
 import type { ProgressOutcome } from "./control-service";
 import type { AgenticStore } from "./store";
+import type { ExecutionPolicy } from "../../../../shared/agent/execution-policy";
 
 export type AgenticControlHost = {
   store: AgenticStore;
@@ -24,6 +25,7 @@ export type AgenticControlHost = {
     sessionId: string;
     piSessionId: string | null;
     cwd: string;
+    executionPolicy: ExecutionPolicy;
   }) => Promise<{ run: AgenticRun; tasks: AgenticTask[]; agentNames: string[] }>;
   revisePlan: (input: { runId: string; reason: string; plan: ValidatedPlan }) => {
     run: AgenticRun;

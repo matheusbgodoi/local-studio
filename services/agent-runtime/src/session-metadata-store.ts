@@ -5,6 +5,10 @@ import path from "node:path";
 import lockfile from "proper-lockfile";
 import { resolveDataDir } from "./data-dir";
 import { isRecord } from "../../../shared/agent/guards";
+import {
+  ExecutionPolicySchema,
+  type ExecutionPolicy,
+} from "../../../shared/agent/execution-policy";
 
 const SESSION_METADATA_FILENAME = "agent-session-metadata.json";
 const LOCK_STALE_MS = 10_000;
@@ -28,6 +32,7 @@ type StoredSessionMetadata = {
   sessionUpdatedAt?: string;
   parentSessionId?: string;
   subagentName?: string;
+  executionPolicy?: ExecutionPolicy;
 };
 
 type SessionMetadataStore = {
@@ -67,6 +72,9 @@ function normalizeStore(value: unknown): SessionMetadataStore {
   const sessions: Record<string, StoredSessionMetadata> = {};
   for (const [id, metadata] of Object.entries(value.sessions)) {
     if (!id.trim() || !isRecord(metadata)) continue;
+    const decodedPolicy = Schema.decodeUnknownOption(ExecutionPolicySchema)(
+      metadata.executionPolicy,
+    );
     sessions[id] = {
       internal: metadata.internal === true,
       archived: metadata.archived === true,
@@ -81,6 +89,7 @@ function normalizeStore(value: unknown): SessionMetadataStore {
       parentSessionId:
         typeof metadata.parentSessionId === "string" ? metadata.parentSessionId : undefined,
       subagentName: typeof metadata.subagentName === "string" ? metadata.subagentName : undefined,
+      executionPolicy: decodedPolicy._tag === "Some" ? decodedPolicy.value : undefined,
     };
   }
   const subagentRuns: Record<string, SubagentRun> = {};
@@ -226,6 +235,29 @@ export function sessionSubagentLink(sessionId: string): SessionSubagentLink | nu
     parentSessionId: metadata.parentSessionId,
     subagentName: metadata.subagentName ?? null,
   };
+}
+
+export function readSessionExecutionPolicy(sessionId: string): ExecutionPolicy | null {
+  const policy = readStore().sessions[sessionId.trim()]?.executionPolicy;
+  return policy ? { ...policy } : null;
+}
+
+export async function setSessionExecutionPolicy(
+  sessionId: string,
+  policy: ExecutionPolicy,
+): Promise<void> {
+  const id = sessionId.trim();
+  if (!id) return;
+  const decoded = Schema.decodeUnknownSync(ExecutionPolicySchema)(policy);
+  await withStoreLock(() => {
+    const store = readStore();
+    store.sessions[id] = {
+      ...(store.sessions[id] ?? {}),
+      executionPolicy: decoded,
+      updatedAt: new Date().toISOString(),
+    };
+    writeStore(store);
+  });
 }
 
 export async function setSubagentLink(
@@ -386,6 +418,7 @@ export async function saveSubagentRun(run: SubagentRun): Promise<void> {
         parentSessionId: decoded.parentPiSessionId,
         subagentName: decoded.name,
         cwd: decoded.cwd,
+        executionPolicy: decoded.executionPolicy,
         updatedAt: new Date().toISOString(),
       };
     }
