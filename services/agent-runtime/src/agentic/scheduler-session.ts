@@ -55,9 +55,10 @@ export function resolveContextReading(
   reportedTokens: number | null | undefined,
   contextWindow: number,
   estimate: () => number | null,
+  reportedIsMeasured = true,
 ): AgenticContextReading {
   if (typeof reportedTokens === "number" && Number.isFinite(reportedTokens) && reportedTokens > 0) {
-    return { tokens: Math.ceil(reportedTokens), contextWindow, measured: true };
+    return { tokens: Math.ceil(reportedTokens), contextWindow, measured: reportedIsMeasured };
   }
   const estimatedTokens = estimate();
   if (

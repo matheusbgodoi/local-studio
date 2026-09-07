@@ -1,14 +1,7 @@
+import { contextUsageIsMeasured } from "./context-usage-provenance";
 import { formatSkillsForPrompt } from "@earendil-works/pi-coding-agent";
 import type { AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
 
-//
-// Everything here is an ESTIMATE and is labelled as one. The only measured
-// number in the report is `reported`, which comes from the backend's own usage
-// accounting for the last turn. Four characters per token is the usual rule of
-// thumb for this tokenizer family; it is close enough to tell a 400-token tool
-// schema from a 4000-token one, which is the question this answers, and not
-// close enough to be quoted as a measurement.
-//
 const CHARS_PER_TOKEN = 4;
 
 export function estimateTextTokens(text: string): number {
@@ -30,29 +23,18 @@ export type ContextBudgetReport = {
     compactionThreshold: number | null;
   };
   estimated: {
+    sdkContextTokens: number | null;
     systemPrompt: number;
     toolSchemas: number;
     conversation: number;
     overheadBeforeConversation: number;
     total: number;
   };
-  //
-  // Inside the system prompt, not additional to it. Reporting these as separate
-  // lines that sum into the total was the first version of this file, and it
-  // triple-counted: the skills catalogue and the context files are built INTO
-  // the system prompt string, so they were already in `systemPrompt`.
-  //
   withinSystemPrompt: {
     skillsCatalogue: number;
     contextFiles: number;
     remainder: number;
   };
-  //
-  // NOT sent. pi's skills are already lazy: only name, description and path go
-  // into the prompt, and the body is read on demand. This is here so the size
-  // of what is being deferred is visible, and it is deliberately excluded from
-  // every total.
-  //
   skillBodiesNotSent: number;
   tools: ContextBudgetEntry[];
   skills: ContextBudgetEntry[];
@@ -68,9 +50,6 @@ function toolSchemaTokens(session: SessionLike, name: string): number {
   try {
     const definition = session.getToolDefinition(name);
     if (!definition) return 0;
-    // What the model actually pays for is the wire shape: the name, the
-    // description and the parameter schema. Handlers and UI labels never leave
-    // this process, so counting the whole object would overstate the cost.
     const wire = {
       name: definition.name,
       description: definition.description,
@@ -135,6 +114,7 @@ export function describeContextBudget(session: SessionLike): ContextBudgetReport
 
   const overheadBeforeConversation = systemPrompt + toolSchemas;
   const usage = session.getContextUsage();
+  const isMeasured = contextUsageIsMeasured(usage?.tokens, session.messages);
   const settings = session.settingsManager.getCompactionSettings();
   const contextWindow = session.model?.contextWindow ?? null;
 
@@ -142,13 +122,14 @@ export function describeContextBudget(session: SessionLike): ContextBudgetReport
     sessionId: session.sessionId || null,
     modelId: session.model?.id ?? null,
     measured: {
-      tokens: typeof usage?.tokens === "number" ? usage.tokens : null,
+      tokens: isMeasured ? (usage?.tokens ?? null) : null,
       contextWindow: contextWindow,
-      percent: typeof usage?.percent === "number" ? usage.percent : null,
+      percent: isMeasured ? (usage?.percent ?? null) : null,
       compactionThreshold:
         contextWindow && settings.enabled ? contextWindow - settings.reserveTokens : null,
     },
     estimated: {
+      sdkContextTokens: !isMeasured && typeof usage?.tokens === "number" ? usage.tokens : null,
       systemPrompt,
       toolSchemas,
       conversation,
@@ -167,7 +148,7 @@ export function describeContextBudget(session: SessionLike): ContextBudgetReport
     activeToolCount: activeNames.length,
     availableToolCount: allTools.length,
     note:
-      "Every figure under `estimated` is a four-characters-per-token approximation of the " +
+      "sdkContextTokens is the SDK hybrid of prior usage plus estimated trailing messages. Other figures under `estimated` are four-characters-per-token approximations of the " +
       "text that would be sent. Only `measured` comes from the backend's own accounting. " +
       "`withinSystemPrompt` decomposes the system prompt rather than adding to it, and " +
       "`skillBodiesNotSent` is never sent — skills are loaded on demand.",

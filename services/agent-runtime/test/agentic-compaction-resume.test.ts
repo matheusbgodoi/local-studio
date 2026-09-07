@@ -140,7 +140,7 @@ describe("context pressure checkpoints, compacts and resumes the same task by it
 
       const lastPrompt = harness.backend.promptsSent[harness.backend.promptsSent.length - 1] ?? "";
       expect(lastPrompt).toContain("verified by command output");
-      expect(lastPrompt).toContain("(satisfied)");
+      expect(lastPrompt).toContain("(model-reported, not independently verified)");
     } finally {
       harness.dispose();
     }

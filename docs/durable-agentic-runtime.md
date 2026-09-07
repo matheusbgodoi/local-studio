@@ -650,3 +650,11 @@ DECIDED / APPLIED in source: optional `evidenceSource` survives JSON persistence
 Unverifiable executable reports enter `WAITING_USER` with an explicit review/replan instruction; repeating a model claim cannot satisfy them. Assertion/review tasks retain autonomous completion and are labeled model-reported, not independently verified. Legacy acceptance is labeled unverified. Completed historical runs are not silently reopened.
 
 TARGET / NOT APPLIED: a runtime-owned verifier binding exact command/path expectations to observed results. No writer of `runtime_observation` is introduced, no arbitrary successful shell call counts as proof, and no executable criterion is inferred from English. Current planner strings remain model assertions, so task completion does not prove builds, files or tests actually succeeded. Product acceptance must still verify those externally.
+
+## 22. SDK context estimates are not backend measurements
+
+MEASURED / PROVEN through the installed candidate: a 600,000-character archive made the SDK report 161,820 context tokens while inference was pending. The completed backend response reported 146,523 input + 267 output = 146,790 tokens. SDK `getContextUsage()` combines prior assistant usage with estimated trailing messages; its positive number alone does not establish measurement.
+
+DECIDED / APPLIED in source: runtime context usage carries optional `estimated`; only a final successful assistant message, with no trailing message and an exact match to the public SDK `calculateContextTokens(usage)`, marks the count measured. Missing provenance is treated conservatively by the durable adapter. Unknown postcompaction context remains unknown. The budget endpoint places the hybrid count in `estimated.sdkContextTokens`, with measured tokens/percent null; full prompt component estimates remain separate. UI labels context estimates. Scheduling preserves the SDK's exact conservative number and thresholds rather than recounting it, while compaction effectiveness cannot claim measured improvement from hybrid counts.
+
+Installed acceptance of this provenance correction remains separate from the observed archive completion above.

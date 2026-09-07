@@ -134,15 +134,13 @@ function sessionTokenCount(session: Session | null): number {
 
 function sessionTopRows(activeModel: AgentModel | null, session: Session | null): StatusRowData[] {
   const contextWindow = activeModel?.contextWindow ?? 0;
-  // Prefer the runtime's own context reading: tokenStats is only the last
-  // model call, so it reads far too low on a session mid-turn.
   const contextTokens = session?.contextUsage?.tokens ?? sessionTokenCount(session);
   const percent = session?.contextUsage?.percent;
   return [
     { label: "State", value: session?.status ?? "idle" },
     { label: "Model", value: activeModel?.displayName ?? "Model identity unavailable" },
     {
-      label: "Context",
+      label: session?.contextUsage?.estimated !== false ? "Context estimate" : "Context",
       value: `${formatTokenCount(contextTokens)} / ${formatTokenCount(contextWindow)}${
         typeof percent === "number" ? ` · ${Math.round(percent)}%` : ""
       }`,
@@ -150,9 +148,6 @@ function sessionTopRows(activeModel: AgentModel | null, session: Session | null)
   ];
 }
 
-/** Lifetime spend. The context row above shows what the model can currently
- *  see; these rows show what the session has actually cost, which compaction
- *  does not reset and a tail-loaded transcript cannot reconstruct. */
 function sessionUsageRows(session: Session | null): StatusRowData[] {
   const usage = session?.usageTotals;
   if (!usage) return [];

@@ -1,10 +1,3 @@
-// The /api/agent/turn wire contract: request parsing, command-result shape,
-// and the generic body-field helpers the other agent route parsers reuse.
-//
-// Moved here from frontend/src/features/agent/contracts.ts so the
-// @local-studio/agent-runtime HTTP handlers can share the exact parsing logic
-// with the frontend; the frontend module re-exports everything from this file.
-
 import {
   agentImageDataError,
   agentImageLimitError,
@@ -12,11 +5,7 @@ import {
 } from "./agent-image-input";
 import { sanitizeComposerPromptTemplates, sanitizeComposerSkills } from "./composer-refs";
 import { Schema } from "effect";
-import {
-  DEFAULT_NETWORK_POLICY,
-  parseNetworkPolicy,
-  type NetworkPolicy,
-} from "./network-policy";
+import { DEFAULT_NETWORK_POLICY, parseNetworkPolicy, type NetworkPolicy } from "./network-policy";
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -92,20 +81,12 @@ export type AgentTurnRuntimeStatus = {
   piSessionId?: string | null;
   modelId?: string | null;
   eventSeq?: number;
-  contextUsage?: {
-    tokens: number | null;
-    contextWindow: number;
-    percent: number | null;
-    shouldCompact: boolean;
-  } | null;
+  contextUsage?: import("./context-usage").RuntimeContextUsage | null;
 };
 
 export type AgentTurnCommandResult = {
   type: "command";
   outcome: "accepted" | "queued" | "rejected";
-  // Wire field of the /turn response: the server echoes the opaque runtime key
-  // it resolved the command to. The client sends the session id as that key
-  // and does not read this back.
   runtimeSessionId: string;
   piSessionId?: string | null;
   active: boolean;

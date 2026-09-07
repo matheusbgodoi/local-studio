@@ -1,3 +1,4 @@
+import { contextUsageIsMeasured } from "./context-usage-provenance";
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { closeSync, constants, fsyncSync, openSync, readSync, statSync } from "node:fs";
@@ -1024,6 +1025,7 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     const tokens = typeof usage.tokens === "number" ? usage.tokens : null;
     return {
       tokens,
+      estimated: !contextUsageIsMeasured(tokens, session.messages),
       contextWindow: usage.contextWindow,
       percent: typeof usage.percent === "number" ? usage.percent : null,
       shouldCompact:

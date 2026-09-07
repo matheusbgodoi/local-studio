@@ -96,6 +96,7 @@ export function createPiAgenticSession(input: PiAgenticSessionInput): AgenticInf
           Math.floor(usage?.contextWindow ?? fallbackContextWindow ?? FALLBACK_CONTEXT_WINDOW),
         ),
         () => session.contextBudget()?.estimated.total ?? null,
+        usage?.estimated === false,
       );
     },
     prompt: async (text: string): Promise<void> => {

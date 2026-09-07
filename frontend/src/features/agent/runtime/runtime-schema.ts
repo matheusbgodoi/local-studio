@@ -5,6 +5,7 @@ export const RuntimeContextUsageSchema = Schema.Struct({
   contextWindow: Schema.Number,
   percent: Schema.Union([Schema.Null, Schema.Number]),
   shouldCompact: Schema.Boolean,
+  estimated: Schema.optional(Schema.Boolean),
 });
 
 const RuntimeLoggedEventSchema = Schema.Struct({
@@ -91,6 +92,4 @@ export function decodeRuntimeSessions(raw: unknown): RuntimeSessionSummary[] {
   return option._tag === "Some" ? [...(option.value.sessions ?? [])] : [];
 }
 
-// Canonical type lives in shared/agent/context-usage.ts (shared with the agent
-// runtime package); RuntimeContextUsageSchema above must stay in sync with it.
 export type { RuntimeContextUsage } from "@shared/agent/context-usage";
