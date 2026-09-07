@@ -85,7 +85,7 @@ Two actual child tasks were submitted together with separate Pi IDs and assigned
 
 The initial document was596 words, contained the exact assigned nonce once in its footer, and excluded the sibling nonce. Manual content review **failed** it: release gates put context ahead of offline reliability, and the comparison table assumed that the current backend was already quality-qualified although the fictional brief had not established that. File existence and model-reported success are not a document-quality pass. A subsequent correction, if successful, must be recorded separately from first-attempt quality.
 
-**SOURCE / NOT YET INSTALLED.** Policy rejection now carries a typed shared error and the turn boundary returns HTTP400 instead of500. The model remains unchanged and the actionable message remains the same. Runtime type checking passed; installed response verification follows the next candidate build.
+**DECIDED / APPLIED; subsequently installed-qualified.** Policy rejection carries a typed shared error and the turn boundary returns HTTP400 instead of500. The model remains unchanged and the actionable message remains the same. Runtime type checking passed; final10 stable HTTP admission verification is recorded below. Its missing visible error exposed a separate frontend defect, not a policy bypass.
 
 ## Final5 build and installation receipt; new acceptance pending
 
@@ -160,7 +160,13 @@ Artifact SHA-256 manifest: `/tmp/local-studio-final10-artifacts.json`.
 
 MEASURED / PROVEN — the installed Dev child cancellation repeat returned abort HTTP 200 and child HTTP 499, persisted `interrupted` with no result, and left its forbidden post-cancellation artifact absent after 93.733 seconds. Both the child's readiness nonce and subsequent parent's memory-only recall matched independent expectations. This verifies the correction for final9's aborted-partial-text false success; see [subagent cancellation evidence](subagent-readiness-2026-09-07.md#explicit-cancellation-outcome-correction) and `/tmp/local-studio-final10-cancellation-receipt.json`. No nonce value is included in this document.
 
-TARGET / NOT YET PROVEN AT THIS CHECKPOINT — the root had started the official stable installer, logging to `/tmp/local-studio-readiness-install-stable-final10-20260907.log`. Its completion and actual stable launch/UI/Vision acceptance were not yet verified for this receipt. Dev restart discovery of the newly interrupted record was also pending. Neither stable acceptance nor a final production promotion is inferred from the two successful builds.
+MEASURED / PROVEN — the official stable installer completed and installed `/Applications/CRIAs AI.app`, preserving its installer-managed rollback archive. Receipt: `/tmp/local-studio-readiness-install-stable-final10-20260907.log`. After a fresh Dev restart, the cancellation record was rediscovered with HTTP 200, `interrupted`, no result, and its original finish timestamp `2026-09-07T09:01:55.427Z`; `/tmp/local-studio-final10-cancellation-restart.json` supersedes the earlier pending restart state. This proves discovery of that interruption, not automatic resumption.
+
+MEASURED / PROVEN — a headless browser using the installed stable frontend/runtime submitted an image to `qwen-daily`, thinking Off, in session `01a07b27-880b-7cb2-940e-e7ddc0d076d7`. The exact expected digits were returned, visible in the browser, with a normal `stop`, no model error and zero uncaught browser errors. Timestamp-derived submission-to-completion time was 42.133 seconds; this is not a TTFT or image-encoding-only measurement. Receipt: `/tmp/local-studio-stable-final10-vision-receipt.json`.
+
+MEASURED / PROVEN — a subsequent text-only request in the same image-history session returned the correct capital with normal completion in 40.906 seconds, measured from timestamps. That request supplied no new image while retaining the previous image in history. Receipt: `/tmp/local-studio-stable-final10-text-after-image.json`. These checks qualify the concrete installed stable text/Vision path, not general Vision quality or native Electron preference behavior.
+
+TARGET / NOT YET PROVEN — final11 installation, native Electron CDP preference/selection acceptance and the revised admission-error/default-selection UI still require separate verification. A headless browser shares the installed HTTP frontend/runtime but has its own origin storage and lacks the native preload bridge; its successful requests do not prove the Electron renderer's selected/default profile.
 
 ## Stable admission feedback correction — source checkpoint
 
