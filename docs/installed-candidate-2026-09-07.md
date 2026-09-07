@@ -143,3 +143,21 @@ MEASURED / PROVEN — root's installed initial navigation reached `/agent` with 
 DECIDED / APPLIED — the acceptance instance uses isolated user data. Only its settings were changed for the bounded challenger-B product campaign, with a private backup; normal Mac application settings were preserved. B product qualification was running at this checkpoint and is not yet a readiness or promotion result.
 
 TARGET / NOT YET PROVEN — final9 includes the confirmed-late-close browser profile cleanup correction, but its actual installed child lifecycle has not yet qualified cleanup. The plain packaged-Node diagnostic was healthy; the installed product's earlier delayed close cause remains unresolved. Do not report cleanup PASS from packaging or that diagnostic. See [browser lifecycle evidence](browser-session-ownership-2026-09-07.md).
+
+
+## Final10 packaging and installed cancellation — 2026-09-07
+
+MEASURED / PROVEN — root completed the required `npm run check` and both official Dev/stable desktop builds for source `d658f233`. The official Dev installer completed, and the installed isolated acceptance application passed the cancellation workflow described below. Receipts: `/tmp/local-studio-readiness-check-final10-20260907.log`, `/tmp/local-studio-readiness-build-final10-20260907.log`, `/tmp/local-studio-readiness-build-stable-final10-20260907.log`, `/tmp/local-studio-readiness-install-dev-final10-20260907.log`, and `/tmp/local-studio-readiness-launch-final10-20260907.log`. Source checks and archive creation do not establish installed stable-channel behavior.
+
+Artifact SHA-256 manifest: `/tmp/local-studio-final10-artifacts.json`.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| CRIAs AI Dev-2.1.0-arm64-mac.zip | `164a9ef12621e64046c0df5dbb43faa0e949602ff155064965cf48010ee9024c` |
+| CRIAs AI Dev-2.1.0-arm64.dmg | `ad764d46d360b612e0865fc248b940bb4d13140488c379122cb8b05e99148455` |
+| CRIAs AI-2.1.0-arm64.dmg | `f34eb9a9539c3663ea307b5b62bfc83ae68e79043082f42cb1fa60b575d98413` |
+| CRIAs AI-2.1.0-arm64-mac.zip | `4a55f58706846f381c7145184a6d8a553f656f09c32519108542bf465201702e` |
+
+MEASURED / PROVEN — the installed Dev child cancellation repeat returned abort HTTP 200 and child HTTP 499, persisted `interrupted` with no result, and left its forbidden post-cancellation artifact absent after 93.733 seconds. Both the child's readiness nonce and subsequent parent's memory-only recall matched independent expectations. This verifies the correction for final9's aborted-partial-text false success; see [subagent cancellation evidence](subagent-readiness-2026-09-07.md#explicit-cancellation-outcome-correction) and `/tmp/local-studio-final10-cancellation-receipt.json`. No nonce value is included in this document.
+
+TARGET / NOT YET PROVEN AT THIS CHECKPOINT — the root had started the official stable installer, logging to `/tmp/local-studio-readiness-install-stable-final10-20260907.log`. Its completion and actual stable launch/UI/Vision acceptance were not yet verified for this receipt. Dev restart discovery of the newly interrupted record was also pending. Neither stable acceptance nor a final production promotion is inferred from the two successful builds.
