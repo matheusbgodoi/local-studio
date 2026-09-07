@@ -33,10 +33,10 @@ browser fingerprints, account identity, tokens, or any identifier the
 application layer carries. A logged-in session is just as identified through a
 tunnel as without one.
 
-**POLICY.** The words *anonymous*, *untraceable* and *invisible* do not appear
+**POLICY.** The words _anonymous_, _untraceable_ and _invisible_ do not appear
 in this feature's interface, and no code path implies them. The vocabulary is
-*VPN Protected*, *VPN-only egress*, *exit IP*, *tunnel*, *DNS* and
-*fail-closed*, because those are the things that are actually true.
+_VPN Protected_, _VPN-only egress_, _exit IP_, _tunnel_, _DNS_ and
+_fail-closed_, because those are the things that are actually true.
 
 ---
 
@@ -46,7 +46,7 @@ in this feature's interface, and no code path implies them. The vocabulary is
 every tool are available, the model chooses among them, and traffic follows the
 machine's normal route. Nothing is wrapped and nothing is intercepted.
 
-**VPN Protected** — every one of those tools is *still* available and the model
+**VPN Protected** — every one of those tools is _still_ available and the model
 still chooses among them. What changes is that any public-internet traffic
 originating from a protected workload must traverse the protected route, and if
 that route stops existing the traffic is blocked rather than re-routed.
@@ -94,15 +94,15 @@ flowchart TD
 
 Five separate concerns, deliberately not one file:
 
-| concern | file | what it owns |
-|---|---|---|
-| policy contract | `shared/agent/network-policy.ts` | the two policies, the six states, the three-valued observations |
-| **enforcement** | `services/agent-runtime/src/network/jail.ts` | the boundary that makes escape impossible |
-| tunnel | `services/agent-runtime/src/network/sing-box.ts` | config generation and process lifetime |
-| provider | `services/agent-runtime/src/network/provider.ts` | WireGuard import, key storage |
-| **attestation** | `services/agent-runtime/src/network/attestation.ts` | what a probe can observe — *not* security |
-| orchestration | `services/agent-runtime/src/network/service.ts` | who is asking, the state machine, what to wrap |
-| in-process egress | `services/agent-runtime/src/network/proxy-agent.ts` | the paths the jail cannot reach |
+| concern           | file                                                | what it owns                                                    |
+| ----------------- | --------------------------------------------------- | --------------------------------------------------------------- |
+| policy contract   | `shared/agent/network-policy.ts`                    | the two policies, the six states, the three-valued observations |
+| **enforcement**   | `services/agent-runtime/src/network/jail.ts`        | the boundary that makes escape impossible                       |
+| tunnel            | `services/agent-runtime/src/network/sing-box.ts`    | config generation and process lifetime                          |
+| provider          | `services/agent-runtime/src/network/provider.ts`    | WireGuard import, key storage                                   |
+| **attestation**   | `services/agent-runtime/src/network/attestation.ts` | what a probe can observe — _not_ security                       |
+| orchestration     | `services/agent-runtime/src/network/service.ts`     | who is asking, the state machine, what to wrap                  |
+| in-process egress | `services/agent-runtime/src/network/proxy-agent.ts` | the paths the jail cannot reach                                 |
 
 ---
 
@@ -118,7 +118,7 @@ in both directions, it tells you nothing about the request that has not happened
 yet, and it stops nothing.
 
 **IMPLEMENTED.** `NetworkStatus.enforcement.failClosed` is read from whether the
-jail exists. No probe contributes to it. The probes can only ever *downgrade*
+jail exists. No probe contributes to it. The probes can only ever _downgrade_
 the claim.
 
 ---
@@ -138,7 +138,7 @@ Four properties are why:
    profile fails with `sandbox_apply: Operation not permitted`.
 3. **No privilege.** No root, no pf, no TUN device, no daemon, no entitlement.
 4. **Fail-closed by construction, not by rule.** The only permitted destination
-   *is* the tunnel. When the tunnel dies there is no second path to fall back
+   _is_ the tunnel. When the tunnel dies there is no second path to fall back
    to, because none was ever allowed. This is the difference between a
    kill-switch you have to implement correctly and one you cannot implement
    incorrectly.
@@ -154,7 +154,7 @@ only.
 **MEASURED — pf with a `group` rule.** Kernel-enforced, and it does cover IPv6.
 But `pf_socket_lookup` only resolves credentials for TCP and UDP, so the rule is
 structurally blind to ICMP — and unprivileged ICMP datagram sockets open fine on
-this machine. It also matches the ids stored when a socket was *created*, so a
+this machine. It also matches the ids stored when a socket was _created_, so a
 setuid binary creates sockets it cannot see; `/usr/sbin/traceroute` is setuid
 root and world-executable.
 
@@ -162,23 +162,23 @@ root and world-executable.
 the boundary and are never treated as one. A process that ignores them gets
 `EPERM` rather than a connection. They exist so that well-behaved tools take the
 permitted path without being told, which is the difference between protected
-mode *working* and protected mode merely *blocking*.
+mode _working_ and protected mode merely _blocking_.
 
 ---
 
 ## 6. Coverage
 
-| surface | how it is covered | kind |
-|---|---|---|
-| model `bash` tool (`curl`, `git`, `npm`, `pip`, `ssh`, python scripts) | `shellPath` in the agent's own `settings.json` points at a shim that `exec`s `sandbox-exec` | kernel |
-| the web app's terminal (agent-runtime PTY) | spawn wrapped | kernel |
-| local MCP stdio connectors | spawn wrapped | kernel |
-| Chromium — headless, headful, `browser_verify` | `executablePath` points at an exec shim; Playwright's `proxy` option supplies `--proxy-server` | kernel |
-| page JS, XHR, fetch, WebSockets | inside the Chromium process, therefore inside its jail | kernel |
-| subagents | in-process sessions whose tools spawn through the wrapped sites | kernel |
-| `browser_search`, reader (`fetchReadable`, `fetchPublicDocument`) | CONNECT agent in `proxy-agent.ts`; refused outright when the tunnel is down | **code** |
-| remote (HTTP) MCP connectors, Google OAuth | `tunnelledFetch` on node:https over the CONNECT agent | **code** |
-| the desktop app's own terminal (Electron PTY) | not confined — see §10.6 | **none** |
+| surface                                                                | how it is covered                                                                              | kind     |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------- |
+| model `bash` tool (`curl`, `git`, `npm`, `pip`, `ssh`, python scripts) | `shellPath` in the agent's own `settings.json` points at a shim that `exec`s `sandbox-exec`    | kernel   |
+| the web app's terminal (agent-runtime PTY)                             | spawn wrapped                                                                                  | kernel   |
+| local MCP stdio connectors                                             | spawn wrapped                                                                                  | kernel   |
+| Chromium — headless, headful, `browser_verify`                         | `executablePath` points at an exec shim; Playwright's `proxy` option supplies `--proxy-server` | kernel   |
+| page JS, XHR, fetch, WebSockets                                        | inside the Chromium process, therefore inside its jail                                         | kernel   |
+| subagents                                                              | in-process sessions whose tools spawn through the wrapped sites                                | kernel   |
+| `browser_search`, reader (`fetchReadable`, `fetchPublicDocument`)      | CONNECT agent in `proxy-agent.ts`; refused outright when the tunnel is down                    | **code** |
+| remote (HTTP) MCP connectors, Google OAuth                             | `tunnelledFetch` on node:https over the CONNECT agent                                          | **code** |
+| the desktop app's own terminal (Electron PTY)                          | not confined — see §10.6                                                                       | **none** |
 
 The last row is the honest one. See §10.
 
@@ -190,7 +190,7 @@ The last row is the honest one. See §10.
 while Chat B is Direct, and each remembers its own setting.
 
 **POLICY.** A Run captures the policy of the conversation that created it, at
-birth, and keeps it until it ends. Moving the toggle afterwards starts the *next*
+birth, and keeps it until it ends. Moving the toggle afterwards starts the _next_
 Run somewhere else; it does not re-route work already in flight.
 
 ```
@@ -214,40 +214,41 @@ guarantee that nothing ever provided would be worse than the missing field.
 
 ---
 
-## 8. Isolation is conservative, not per-session
+## 8. Execution-owned routing
 
-**LIMITATION, and it is stated in the interface as well as here.**
+**DECIDED / APPLIED.** Network policy belongs to a session or durable Run and is
+captured in its execution policy. Child agents, nested children, background
+inference, compaction, retries and resumed durable work inherit that captured
+value. A child does not consult the current global default.
 
-The agent-runtime is **one Node process** shared by every conversation. Sessions
-are objects in a `Map`, subagents are more objects in the same `Map`, and the
-browser host, Playwright manager and connector pool are process-global
-singletons. Per-session env is applied by mutating `process.env`. There is
-therefore no honest way to give conversation A a different route from
-conversation B.
+The physical tunnel remains process-wide, but routing is selected from the
+active execution scope. Shells and browsers receive the captured policy at
+creation. In-process fetch and MCP paths resolve it from asynchronous execution
+context. Connector pools are partitioned by policy so a Direct session cannot
+reuse a connector process or transport created for a Protected session, or the
+reverse.
 
-**POLICY — protected wins.** While *any* session or *any* live Run asks for
-protection, the boundary is up and every agent-spawned process goes through the
-tunnel, including those belonging to conversations set to Direct.
+Conversation A can therefore remain Direct while conversation B uses VPN
+Protected. The tunnel may stay resident while B needs it, but A's scoped shell,
+browser, fetch and connector paths remain direct. Protected execution still
+fails closed whenever its tunnel or jail is unavailable.
 
-This is an accepted cost:
-
-- Acceptable: a Direct conversation temporarily using the VPN.
-- **Not** acceptable: a Protected workload occasionally using the direct route.
-
-When it applies, the UI says so rather than hiding it.
+The protected agent-shell shim carries the proxy environment and explicit
+`LOCAL_STUDIO_NETWORK_POLICY=vpn_protected` value into every spawned command.
+Runtime startup awaits the tunnel transition before the shim is installed.
 
 ---
 
 ## 9. States
 
-| state | meaning |
-|---|---|
-| `DIRECT` | protection not requested |
-| `STARTING` | requested, tunnel coming up — **egress already blocked** |
-| `PROTECTED` | enforcement active, tunnel healthy, attestation sufficient |
-| `DEGRADED` | boundary intact, measurement incomplete — never rendered as protected |
-| `BLOCKED` | protection required, tunnel unavailable, public egress refused |
-| `ERROR` | invalid configuration or an unrecoverable failure |
+| state       | meaning                                                               |
+| ----------- | --------------------------------------------------------------------- |
+| `DIRECT`    | protection not requested                                              |
+| `STARTING`  | requested, tunnel coming up — **egress already blocked**              |
+| `PROTECTED` | enforcement active, tunnel healthy, attestation sufficient            |
+| `DEGRADED`  | boundary intact, measurement incomplete — never rendered as protected |
+| `BLOCKED`   | protection required, tunnel unavailable, public egress refused        |
+| `ERROR`     | invalid configuration or an unrecoverable failure                     |
 
 **POLICY.** The jail is written and the state leaves `DIRECT` **before** the
 tunnel is asked to start. During the whole window in which the tunnel is coming
@@ -273,7 +274,7 @@ rounded up.
    machine. They are fail-closed the same way — every socket comes from an Agent
    whose only factory is the CONNECT tunnel, so with the tunnel down the request
    throws rather than finding another route — but that is enforced by code
-   discipline rather than by the kernel. Routing the connectors *widened* this
+   discipline rather than by the kernel. Routing the connectors _widened_ this
    category rather than shrinking it: they used to be refused outright, which was
    safer and less useful.
 2. **A socket connected before the jail and handed in as a descriptor would stay
@@ -295,7 +296,7 @@ rounded up.
    from the one already applied. Measured against libsandbox directly — compile
    succeeds inside our jail, `sandbox_apply` returns EPERM, and a byte-identical
    re-apply returns 0 as a no-op. It is a refusal to nest, not a missing rule,
-   so no allow widens it. In Direct mode it *could* be reversed by setting
+   so no allow widens it. In Direct mode it _could_ be reversed by setting
    `chromiumSandbox: true`; that is a separate change and is not made here.
 
    The consequence, measured with `sandbox_check` on live processes: a hostile
@@ -304,10 +305,11 @@ rounded up.
    does not stop it reading, and it can still post what it reads through the
    permitted tunnel. Chromium's own sandbox is what would stop the reading, and
    it is off.
+
 4. **`sandbox-exec` is formally deprecated by Apple.** It works on Darwin 27 and
    is the same facility Chromium itself uses, but it is not a contract Apple has
    promised to keep.
-5. **The desktop app's native terminal is not confined.** `frontend/desktop/logic/pty-manager.ts` spawns a shell in the Electron process, which has no access to the network service — that lives in the agent-runtime, a different process. It is the owner's own interactive terminal, driven by `terminal-panel.tsx`; no agent tool writes into it, and the model's own shell is a different path that *is* jailed. But if the owner types `curl` there while a conversation is protected, that request leaves on the machine's normal route. The web app's terminal, which shares the agent-runtime, is covered.
+5. **The desktop app's native terminal is not confined.** `frontend/desktop/logic/pty-manager.ts` spawns a shell in the Electron process, which has no access to the network service — that lives in the agent-runtime, a different process. It is the owner's own interactive terminal, driven by `terminal-panel.tsx`; no agent tool writes into it, and the model's own shell is a different path that _is_ jailed. But if the owner types `curl` there while a conversation is protected, that request leaves on the machine's normal route. The web app's terminal, which shares the agent-runtime, is covered.
 
 6. **A jailed helper would not fix §10.1.** Moving the reader and search into a Seatbelt-jailed helper process was prototyped and rejected on measurement, not taste: the jail constrains which socket the helper may open, and says nothing about what it asks the proxy to do once open. A jailed prototype reached a loopback service by sending `CONNECT localtest.me:9911`. Because `getaddrinfo` is denied inside the jail, only the unjailed parent can resolve and vet, so `publicResolvedAddresses()`, the address pin, the byte cap and the per-hop redirect re-vetting all stay code discipline either way — just one IPC boundary further from the socket they guard, at +76ms per hop and one spawn per redirect. See §13.
 
@@ -334,7 +336,7 @@ being down.
 - **IPv4** — attested only when a full request and response completed through
   the tunnel.
 - **IPv6** — measured when the tunnel carries `::/0`; reported `blocked` when it
-  does not. `blocked` is an *enforcement* claim, not an observation: the jail
+  does not. `blocked` is an _enforcement_ claim, not an observation: the jail
   permits no direct destination, so a v6 packet has nowhere to leak to. "IPv4
   through the tunnel, IPv6 through the Wi-Fi" is the classic split, and blocking
   is the correct outcome rather than a degraded one.
@@ -347,7 +349,7 @@ being down.
   stopped being true: allowing unix sockets so Chromium could bind its singleton
   socket also re-opened `mDNSResponder`, which runs outside the jail on the
   machine's own route — and the suite kept reporting DNS as protected, because
-  that row came from a request the *runtime* made through the tunnel and the
+  that row came from a request the _runtime_ made through the tunnel and the
   runtime is not jailed. Outbound unix sockets are path-scoped now, and the run
   asks the jail directly.
 
@@ -393,7 +395,7 @@ Direct IP while protected: NOT OBSERVED
 Every probe is now conclusive. An earlier run reported the first four as
 `INCONCLUSIVE`, because the only tunnel available then was a local sing-box peer
 that egressed from this same host: the exit address equalled the direct address
-by construction, which is indistinguishable from a leak *by address alone*. That
+by construction, which is indistinguishable from a leak _by address alone_. That
 was reported as inconclusive rather than as a pass it had not earned. With a real
 remote provider the four resolve, and the addresses differ — which is what
 "Direct IP while protected: NOT OBSERVED" states: this machine's own address
@@ -401,34 +403,34 @@ appeared in none of the protected egress.
 
 Measured separately, by hand, with a live loopback proxy:
 
-| probe | result |
-|---|---|
-| jailed `curl` direct | fails, exit 6 |
-| jailed `curl` via proxy | 200 |
-| jailed `getaddrinfo` | dies |
-| jailed raw socket to a literal address | `EPERM` |
-| jailed connect to a *different* loopback port | `EPERM` |
-| jailed connect to the permitted port | `ECONNREFUSED` (allowed, nothing listening) |
-| Playwright + Chromium via proxy | full page |
-| Playwright + Chromium without proxy | `ERR_NAME_NOT_RESOLVED` |
-| Playwright + Chromium, **tunnel killed** | `ERR_PROXY_CONNECTION_FAILED` — never a direct load |
-| Playwright **headful** via proxy | full page |
-| Playwright **headful** without proxy | `ERR_ACCESS_DENIED` |
-| Playwright **headful**, tunnel killed | `ERR_PROXY_CONNECTION_FAILED` |
-| `node -e fetch(...)` via proxy | 200 |
-| `git ls-remote` via proxy | refs returned |
+| probe                                         | result                                              |
+| --------------------------------------------- | --------------------------------------------------- |
+| jailed `curl` direct                          | fails, exit 6                                       |
+| jailed `curl` via proxy                       | 200                                                 |
+| jailed `getaddrinfo`                          | dies                                                |
+| jailed raw socket to a literal address        | `EPERM`                                             |
+| jailed connect to a _different_ loopback port | `EPERM`                                             |
+| jailed connect to the permitted port          | `ECONNREFUSED` (allowed, nothing listening)         |
+| Playwright + Chromium via proxy               | full page                                           |
+| Playwright + Chromium without proxy           | `ERR_NAME_NOT_RESOLVED`                             |
+| Playwright + Chromium, **tunnel killed**      | `ERR_PROXY_CONNECTION_FAILED` — never a direct load |
+| Playwright **headful** via proxy              | full page                                           |
+| Playwright **headful** without proxy          | `ERR_ACCESS_DENIED`                                 |
+| Playwright **headful**, tunnel killed         | `ERR_PROXY_CONNECTION_FAILED`                       |
+| `node -e fetch(...)` via proxy                | 200                                                 |
+| `git ls-remote` via proxy                     | refs returned                                       |
 
 **Boot ordering, with a protected Run already on disk.** Measured across a real
 restart: before `recover()` the state is `DIRECT` and egress is allowed; the
-instant `recover()` returns, protection is *demanded* and `mayEgress()` is
+instant `recover()` returns, protection is _demanded_ and `mayEgress()` is
 **false**; it stays false through `STARTING`, and becomes true only at
 `PROTECTED`. At no point is a recovered protected Run permitted to reach the
 network before the tunnel carries it.
 
-**Concurrency.** With conversation A protected and B on Direct, every spawn is
-jailed — B's included. `protectedSessionCount` counts only A. Returning A to
-Direct releases the boundary and spawns are unwrapped again. This is the
-"protected wins" policy of §8, measured rather than asserted.
+**Historical concurrency result.** The original acceptance campaign observed
+process-wide "protected wins" routing. That behavior has been superseded by the
+execution-owned routing in §8. The earlier observation remains evidence for the
+physical boundary, not current per-session routing semantics.
 
 **The most important one**, run with work in flight: killing sing-box left the
 proxy path failing (exit 7), the direct path failing with an **empty body**, and
@@ -489,7 +491,7 @@ far end.
 
 **Node `fetch` fails** — Node ignores `HTTP_PROXY` unless `NODE_USE_ENV_PROXY=1`,
 which protected mode sets. That variable decides whether protected mode is
-*usable* from Node, not whether it is *safe*.
+_usable_ from Node, not whether it is _safe_.
 
 **Tailscale unreachable** — should not happen; `100.64.0.0/10` is routed direct.
 If it does, check that `auto_detect_interface` is still `false`.

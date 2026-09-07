@@ -13,10 +13,10 @@ Logs: `/tmp/local-studio-readiness-check-final2-20260907.log` and `/tmp/local-st
 
 App: `frontend/dist-desktop-dev/mac-arm64/CRIAs AI Dev.app`.
 
-| Artifact | SHA-256 |
-| --- | --- |
+| Artifact                                                     | SHA-256                                                            |
+| ------------------------------------------------------------ | ------------------------------------------------------------------ |
 | `frontend/dist-desktop-dev/CRIAs AI Dev-2.1.0-arm64-mac.zip` | `5a29775cd54924d5465b37d23809525591fe78d50aa7e1b732177d3945e251a6` |
-| `frontend/dist-desktop-dev/CRIAs AI Dev-2.1.0-arm64.dmg` | `20c110d5d7e605858e77d0df73eafa678f2f13737413119886e63ea3d1456336` |
+| `frontend/dist-desktop-dev/CRIAs AI Dev-2.1.0-arm64.dmg`     | `20c110d5d7e605858e77d0df73eafa678f2f13737413119886e63ea3d1456336` |
 
 ## DECIDED / APPLIED — installation scope
 
@@ -26,11 +26,11 @@ The root engineer installed the candidate through the documented installer and r
 
 The existing authenticated `perf:browser` entrypoint observed each targeted route for nine seconds after load. Authentication was read from the isolated frontend token file into a loopback-scoped cookie; no credential or transcript was printed. No inference request was sent.
 
-| Route | Document | FCP | Browser task time | JS heap | Uncaught / console errors | ARIA busy markers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/agent` | HTTP 200, app scripts | 64 ms | 166.2 ms | 13.7 MiB | 0 / 0 | 0 |
-| `/models` | HTTP 200, app scripts | 80 ms | 125.3 ms | 8.0 MiB | 0 / 0 | 0 |
-| `/runs` | HTTP 200, app scripts | 84 ms | 106.9 ms | 7.9 MiB | 0 / 0 | 0 |
+| Route     | Document              | FCP   | Browser task time | JS heap  | Uncaught / console errors | ARIA busy markers |
+| --------- | --------------------- | ----- | ----------------- | -------- | ------------------------- | ----------------- |
+| `/agent`  | HTTP 200, app scripts | 64 ms | 166.2 ms          | 13.7 MiB | 0 / 0                     | 0                 |
+| `/models` | HTTP 200, app scripts | 80 ms | 125.3 ms          | 8.0 MiB  | 0 / 0                     | 0                 |
+| `/runs`   | HTTP 200, app scripts | 84 ms | 106.9 ms          | 7.9 MiB  | 0 / 0                     | 0                 |
 
 No predefined `Offline` or `No models` label was present. The root's installed model API inspection returned five models, retaining Mac Ornith and four RTX aliases while excluding Chatterbox and S3Tokenizer. Optional remote capability routes and the event endpoint still returned HTTP 404. The profiler reports these transport failures and exits nonzero; they are not classified as document or JavaScript crashes.
 
@@ -52,16 +52,16 @@ MEASURED / PROVEN — scoped frontend TypeScript and ESLint passed. No automated
 
 The root engineer drove two independent scratch sessions through the authenticated installed frontend on port 50801 using `qwen-daily`. This acceptance used the final2 build pinned above (`eb6f875f9c2f81080c2848ff25a8ba2a8df3e267`), not an isolated SDK invocation or direct inference curl. Each session created its own random identity file. File contents were checked externally; neither identity is recorded here.
 
-| Observation | Installed result |
-| --- | --- |
-| First archive, approximately 600,000 characters | Backend usage: 146,523 input + 267 output = 146,790 context tokens; successful completion below the 156,549-token threshold |
-| Second archive, approximately 192,000 characters | Backend usage: 43,154 input + 146,789 cached input + 130 output = 190,073 context tokens |
-| Automatic threshold compaction | `compaction_start`, reason `threshold`; bounded incremental fallback selected without a manual compact request |
-| Summary work | `bounded-incremental-v1`, two segments, two attempts, 605,897 summary-input characters, 4,718 summary characters |
-| Compaction settlement | `aborted: false`, `willRetry: false`, followed by `agent_settled`; session idle, no runtime error |
-| Postcompaction accounting | Context tokens and percent became null until a new backend response; no false zero |
-| Memory-only continuation | Exactly one tool call, `write`; no file read, listing, shell retrieval or supplied replacement nonce |
-| Continuation result | `recall.txt` matched the session's original nonce externally and did not contain the other session's nonce; final backend total 55,236 tokens |
+| Observation                                      | Installed result                                                                                                                              |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| First archive, approximately 600,000 characters  | Backend usage: 146,523 input + 267 output = 146,790 context tokens; successful completion below the 156,549-token threshold                   |
+| Second archive, approximately 192,000 characters | Backend usage: 43,154 input + 146,789 cached input + 130 output = 190,073 context tokens                                                      |
+| Automatic threshold compaction                   | `compaction_start`, reason `threshold`; bounded incremental fallback selected without a manual compact request                                |
+| Summary work                                     | `bounded-incremental-v1`, two segments, two attempts, 605,897 summary-input characters, 4,718 summary characters                              |
+| Compaction settlement                            | `aborted: false`, `willRetry: false`, followed by `agent_settled`; session idle, no runtime error                                             |
+| Postcompaction accounting                        | Context tokens and percent became null until a new backend response; no false zero                                                            |
+| Memory-only continuation                         | Exactly one tool call, `write`; no file read, listing, shell retrieval or supplied replacement nonce                                          |
+| Continuation result                              | `recall.txt` matched the session's original nonce externally and did not contain the other session's nonce; final backend total 55,236 tokens |
 
 Independent read-only inspection of the canonical JSONL confirmed that all four original user messages remained stored when compaction completed. The summary retained the exact session identity, the integer-cents decision, pending rounding verification, cancellation context and `proof.txt` modification metadata. The recent second archive remained in the active context; the reduction to roughly 55K therefore does not imply that only the short summary was retained. Successful continuation establishes usable postcompaction memory for these concrete facts, not arbitrary long-context reasoning fidelity.
 
@@ -95,10 +95,10 @@ The initial document was596 words, contained the exact assigned nonce once in it
 
 The initial final5 check caught removal of the public `browserHost` export, still referenced by the package entry point and existing browser persistence diagnostic. That one-line removal was reverted before the successful check. The public default host remains compatible; internal session-aware dispatch still uses the scoped resolver. The failed check is not counted as a passing gate.
 
-| Final5 artifact | SHA-256 measured from generated archive |
-| --- | --- |
+| Final5 artifact                                              | SHA-256 measured from generated archive                            |
+| ------------------------------------------------------------ | ------------------------------------------------------------------ |
 | `frontend/dist-desktop-dev/CRIAs AI Dev-2.1.0-arm64-mac.zip` | `1e79b5c7853b47f1ba9030c988543759a9104847adbfaba9acdf9794733604d3` |
-| `frontend/dist-desktop-dev/CRIAs AI Dev-2.1.0-arm64.dmg` | `aae680ae1fbef50e11fc00b063b1c899597208022b18646ee2581466e6bb4006` |
+| `frontend/dist-desktop-dev/CRIAs AI Dev-2.1.0-arm64.dmg`     | `aae680ae1fbef50e11fc00b063b1c899597208022b18646ee2581466e6bb4006` |
 
 **DECIDED / APPLIED — live installation.** The documented installer replaced `/Applications/CRIAs AI Dev.app` and recorded `/Users/matheusbgodoi/Library/Application Support/Local Studio Installer/Rollbacks/CRIAs AI Dev.zip` as the rollback archive. Installation log: `/tmp/local-studio-readiness-install-dev-final5-20260907.log`. The Dev application was quit at this receipt checkpoint, pending coordinated acceptance. Stable application promotion is not claimed. Archive creation proves a rollback artifact exists; it does not prove a rollback execution.
 
@@ -118,7 +118,6 @@ Both saved implementation-nonce files matched their corresponding privately reta
 
 This completes the concrete React and corrected-document child acceptance that the earlier interrupted attempt could not establish, and proves successful responses beyond the former approximately 300-second transport ceiling. Browser-extension ownership, browser-profile cleanup and final6 restart acceptance remain separate pending checks. Two completed tasks and one corrected document do not establish a 99% daily-work success rate.
 
-
 ## Final6 restart discovery passes; browser isolation fails
 
 **MEASURED / PROVEN — final6 installation.** The root completed the required full check, Dev build and official installation for source `b08bed25`. Generated ZIP SHA-256: `e056969d7a3174b2e3291cff3c9d04aaaa06c393c935957f51e971238438c17a`; DMG SHA-256: `1b9ba70f2cb2a6891a9caaa8f2e216a7a9d9c9179e8833c064f6bedc16047bca`. These are the root's archive receipts for that build, distinct from later source corrections.
@@ -135,10 +134,10 @@ MEASURED / PROVEN — the integrating checkout completed `npm run check` for sou
 
 Artifact manifest: `/tmp/local-studio-final9-artifacts.json`.
 
-| Artifact | SHA-256 |
-| --- | --- |
+| Artifact                         | SHA-256                                                            |
+| -------------------------------- | ------------------------------------------------------------------ |
 | CRIAs AI Dev-2.1.0-arm64-mac.zip | `854471142828dcfb4c68f52f6d5466f302a91a504eb331065e915e077dd4876c` |
-| CRIAs AI Dev-2.1.0-arm64.dmg | `bd20882a2d9613eba8b3480afe7a2f27ae5b0d87df0d8f1d3f7fb2d63541c0f8` |
+| CRIAs AI Dev-2.1.0-arm64.dmg     | `bd20882a2d9613eba8b3480afe7a2f27ae5b0d87df0d8f1d3f7fb2d63541c0f8` |
 
 MEASURED / PROVEN — root's installed initial navigation reached `/agent` with HTTP 200 and zero busy indicators while challenger B was loading. Additional initial DOMContentLoaded observations were `/settings` HTTP 200 in 30 ms, `/runs` HTTP 200 in 30 ms, and `/models` HTTP 200 in 19 ms, each with zero `aria-busy` elements. These measurements establish initial availability only, not settled-screen correctness or a nine-second observation window.
 
@@ -146,19 +145,18 @@ DECIDED / APPLIED — the acceptance instance uses isolated user data. Only its 
 
 TARGET / NOT YET PROVEN — final9 includes the confirmed-late-close browser profile cleanup correction, but its actual installed child lifecycle has not yet qualified cleanup. The plain packaged-Node diagnostic was healthy; the installed product's earlier delayed close cause remains unresolved. Do not report cleanup PASS from packaging or that diagnostic. See [browser lifecycle evidence](browser-session-ownership-2026-09-07.md).
 
-
 ## Final10 packaging and installed cancellation — 2026-09-07
 
 MEASURED / PROVEN — root completed the required `npm run check` and both official Dev/stable desktop builds for source `d658f233`. The official Dev installer completed, and the installed isolated acceptance application passed the cancellation workflow described below. Receipts: `/tmp/local-studio-readiness-check-final10-20260907.log`, `/tmp/local-studio-readiness-build-final10-20260907.log`, `/tmp/local-studio-readiness-build-stable-final10-20260907.log`, `/tmp/local-studio-readiness-install-dev-final10-20260907.log`, and `/tmp/local-studio-readiness-launch-final10-20260907.log`. Source checks and archive creation do not establish installed stable-channel behavior.
 
 Artifact SHA-256 manifest: `/tmp/local-studio-final10-artifacts.json`.
 
-| Artifact | SHA-256 |
-| --- | --- |
+| Artifact                         | SHA-256                                                            |
+| -------------------------------- | ------------------------------------------------------------------ |
 | CRIAs AI Dev-2.1.0-arm64-mac.zip | `164a9ef12621e64046c0df5dbb43faa0e949602ff155064965cf48010ee9024c` |
-| CRIAs AI Dev-2.1.0-arm64.dmg | `ad764d46d360b612e0865fc248b940bb4d13140488c379122cb8b05e99148455` |
-| CRIAs AI-2.1.0-arm64.dmg | `f34eb9a9539c3663ea307b5b62bfc83ae68e79043082f42cb1fa60b575d98413` |
-| CRIAs AI-2.1.0-arm64-mac.zip | `4a55f58706846f381c7145184a6d8a553f656f09c32519108542bf465201702e` |
+| CRIAs AI Dev-2.1.0-arm64.dmg     | `ad764d46d360b612e0865fc248b940bb4d13140488c379122cb8b05e99148455` |
+| CRIAs AI-2.1.0-arm64.dmg         | `f34eb9a9539c3663ea307b5b62bfc83ae68e79043082f42cb1fa60b575d98413` |
+| CRIAs AI-2.1.0-arm64-mac.zip     | `4a55f58706846f381c7145184a6d8a553f656f09c32519108542bf465201702e` |
 
 MEASURED / PROVEN — the installed Dev child cancellation repeat returned abort HTTP 200 and child HTTP 499, persisted `interrupted` with no result, and left its forbidden post-cancellation artifact absent after 93.733 seconds. Both the child's readiness nonce and subsequent parent's memory-only recall matched independent expectations. This verifies the correction for final9's aborted-partial-text false success; see [subagent cancellation evidence](subagent-readiness-2026-09-07.md#explicit-cancellation-outcome-correction) and `/tmp/local-studio-final10-cancellation-receipt.json`. No nonce value is included in this document.
 
@@ -178,7 +176,6 @@ DECIDED / APPLIED — the active chat now renders its stored error as an accessi
 
 MEASURED / PROVEN — frontend TypeScript and scoped ESLint completed with no errors. No frontend tests were added. Evidence: `/tmp/local-studio-admission-feedback-typecheck.log` and `/tmp/local-studio-admission-feedback-lint.log`. Installed final11 acceptance is pending: verify a legacy restricted selection still receives HTTP 400, displays the alert, retains its draft, shows the restricted identity, and allows explicit default repair. The isolated acceptance origin's legacy default can be represented by the plain model-ID value at localStorage key `local-studio.agent.defaultModel`; pane/session model selections are independently stored under `local-studio.agent.paneState`. Normal stable settings were not modified by this source change.
 
-
 DECIDED / APPLIED — source tracing established a second cause for the fresh-browser selection: `chooseModelId` chose the first active catalog row, even if its profile was restricted. Automatic selection now considers only allowed profiles, preferring an active declared default profile, then another active allowed model, then a declared default allowed profile, then another allowed model. A catalog containing only restricted profiles leaves automatic selection empty. Explicit current/preferred IDs, including restricted or temporarily absent IDs, remain unchanged for visible user repair; no stored choice is silently replaced.
 
 MEASURED / PROVEN — root inspected native Electron preferences separately and found its saved default was Ornith, not uncensored. The fresh headless browser's automatic selection must not be reported as the native saved default. Electron backs up the plain string key `local-studio.agent.defaultModel` in `<userData>/ui-preferences.json`. Renderer hydration first consults controller `persisted.ui_preferences`, then the Electron bridge, and fills only missing localStorage entries. An existing renderer-origin value therefore is not replaced merely by editing the backup file. No native or headless preference was changed by this source follow-up. Frontend TypeScript and scoped lint pass; installed fresh-default selection acceptance remains pending.
@@ -190,7 +187,6 @@ MEASURED / PROVEN — root used native Electron CDP on final10 to choose Qwen St
 DECIDED / APPLIED — explicit model-default writes now invoke the existing debounced durable preference save when, and only when, the supplied storage is the browser's actual `window.localStorage`. Existing retired-alias migration routes its write through the same helper. Ephemeral memory storage and server-side execution do not schedule a save. The existing backup mechanism remains the sole owner of controller/desktop persistence; no duplicate persistence format or preference authority was added.
 
 MEASURED / PROVEN — frontend TypeScript and scoped ESLint pass. Evidence: `/tmp/local-studio-durable-default-typecheck.log` and `/tmp/local-studio-durable-default-lint.log`. No frontend tests or live preference changes were made. Actual native Electron UI selection followed by matching durable file contents remains pending in the rebuilt installation.
-
 
 ## Final11 stable installation and native Electron acceptance
 
@@ -209,3 +205,15 @@ DECIDED / APPLIED — `/Applications/CRIAs AI.app` now contains final11 and was 
 MEASURED / PROVEN — the official stable installer used a separate `Rollbacks/final10-before-final11` directory. The original pre-promotion rollback archive remains byte-identical at SHA256 `dea7df6fdef7ea9387438d2e0d9bc67ef35e1489b3161e1a0a8a1f0da0b55de3`; its CRC and bundle identity were previously verified. This proves archive preservation/integrity, not a reinstall of that old client. Backend Golden restoration was actually executed and verified repeatedly in the paired inference campaign. The private pre-promotion user-data/session recovery snapshot remains under `Local Studio Installer/Recovery/production-readiness-20260907`.
 
 Remaining limits are deliberate: browser-profile cleanup can retain a profile when the actual browser close never settles; full Windows desktop reserve is below the campaign's 512 MiB floor; optional gateway capability requests still return 404; physical sleep/wake and same-tab Retry were not fully accepted. Golden stable Vision took 42.133 seconds, and a text-only follow-up retaining the image took 40.906 seconds. The qualified task examples do not prove arbitrary long-running job resumability or a 99% daily-task success rate. B's installed near-context compaction was not qualified and B was not promoted. No old model/recovery artifact was deleted.
+
+## Phase 5 inherited execution-policy correction — stable native acceptance
+
+MEASURED / PROVEN — source `1462a09a` passed `npm run check` and all 390 deterministic agent-runtime tests (1,271 assertions, 45 files). The official stable package was built and installed with `scripts/install-desktop-app.sh stable`. The installed application is `/Applications/CRIAs AI.app`; artifact and rollback hashes are in [the sanitized acceptance receipt](evidence/policy-inheritance-native-acceptance-2026-09-07.json). Build, check and install logs are `/tmp/local-studio-readiness-build-stable-policy-r4-20260907.log`, `/tmp/local-studio-readiness-check-policy-r4-20260907.log`, and `/tmp/local-studio-readiness-install-stable-policy-r4-20260907.log`.
+
+DECIDED / APPLIED — Standard remains the global default. Uncensored is enabled in the behavior picker and has no agent-unavailable label. A session captures its model alias, behavior profile and network policy; ordinary/nested/background subagents and durable Run agents inherit the snapshot. Session summaries, canonical replay metadata and durable rows preserve it. Reopening history hydrates those values before continuation, while a loading replay cannot submit with temporary defaults.
+
+MEASURED / PROVEN — native Electron CDP observed an Uncensored/VPN parent, child and grandchild using the same `qwen-uncensored`, `uncensored`, and `vpn_protected` values. Independent nonce files proved both descendant shells received `LOCAL_STUDIO_NETWORK_POLICY=vpn_protected`, reached the same VPN exit and differed from a direct Mac request. After an application/runtime restart, the real history row restored the Uncensored alias and VPN policy; a continuation reused the same Pi session and independently produced a VPN-routed nonce.
+
+MEASURED / PROVEN — while that protected parent remained resident and kept the physical tunnel active, a separate Standard/Direct parent and child reported `qwen-daily`, `standard`, and `direct`. Its independent network nonce matched the Mac's direct exit and differed from the VPN exit. This qualifies per-execution routing rather than the earlier process-wide protected-wins behavior. No exit address or credential is stored in the receipt.
+
+The acceptance campaign found and fixed three defects before this pass: protected shell creation racing tunnel startup, protected shell commands missing proxy environment, and reopened history reconstructing Standard/Direct before canonical replay. The earlier final11 admission restriction and its “unavailable for agents” UI are historical and superseded by this section.

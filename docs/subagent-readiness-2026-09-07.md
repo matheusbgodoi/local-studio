@@ -6,6 +6,9 @@ Ordinary subagents previously started with default full tool access and direct
 network policy. They now inherit the parent's runtime options, with a distinct
 browser session identity. Their persisted conversation is linked to its parent
 before the first inference, so a failure cannot leave an unidentified child.
+The inherited options now include an explicit behavior/network execution policy.
+Nested subagents are supported and recursively receive the same snapshot;
+neither profile nor network state is reconstructed from a global default.
 
 Request cancellation now reaches the child runtime. The existing 15-minute tool
 request limit is also enforced in the runtime, including callers that omit a
@@ -20,11 +23,20 @@ share the existing single GPU admission gate; their tools can run independently.
 
 ## Verification
 
-Three deterministic offline checks in the existing agent-runtime test directory
-passed: inherited restrictions/independent browser/early persisted ownership,
-cancellation of a running child, and cleanup after startup failure. No backend
-or live user session was involved. Runtime TypeScript passed before the commit.
+Deterministic offline checks in the existing agent-runtime test directory cover
+Standard/Direct and Uncensored/VPN child and grandchild creation through the
+actual subagent path, background priority, independent browser identity, early
+persisted ownership, cancellation, startup failure cleanup and fresh-process
+policy restoration. Runtime TypeScript passed before the commit.
 Installed final5 completed two concurrent logical child tasks with independently verified coding/document artifacts; final6 restored their completed records after process restart. See [the installed candidate receipt](installed-candidate-2026-09-07.md). Child-specific cancellation during active work remains a separate acceptance requirement.
+
+The later stable policy campaign observed both behavior profiles in the native
+product: an Uncensored/VPN parent, child and grandchild retained the same policy,
+then a Standard/Direct parent and child stayed direct while the protected parent
+kept the physical tunnel active. Restarting the app and reopening the real
+history row restored the Uncensored/VPN snapshot before a successful
+continuation. The sanitized evidence is in
+[the policy receipt](evidence/policy-inheritance-native-acceptance-2026-09-07.json).
 
 ## Limits
 
@@ -87,7 +99,6 @@ MEASURED / PROVEN offline: 29 checks / 133 assertions across admission, operatio
 
 LIMITATION: child-environment filtering is not a security sandbox. An agent with ordinary local file permissions can still access same-user files; it must not be described as isolated from all credentials. Credential rotation and handling already exposed transcript data belong to the separate operator remediation; this source change does not claim those actions occurred.
 
-
 ## Installed final8 operational Run acceptance — 2026-09-07
 
 MEASURED / PROVEN through the installed application built from `0a208948`: Run `run_971b490f-67ee-417a-aa3c-69c43e79aebd` reached `COMPLETED`; its task reached `SUCCEEDED` on attempt one, plan revision one, with no replan event. The operator-provided exact command retained both internal-credential absence checks and the nonce write. Its runtime witness records exit code zero and `aborted: false`. Independent filesystem inspection confirmed the resulting 32 bytes exactly matched the operator's nonce and expected SHA-256. No nonce, command payload or credential value is reproduced here.
@@ -107,6 +118,5 @@ ROOT CAUSE / SOURCE — the Pi turn observer propagated only `error` terminal re
 DECIDED / APPLIED — aborted terminal messages now propagate a typed cancellation, including cancellation observed after prompt settlement. Internal abort signals also normalize transport rejection to that cancellation. Deliberate cancellation leaves ordinary chat runtime `lastError` clear, bypasses context recovery, marks a child `interrupted`, and returns HTTP 499 instead of successful completion. Request-signal cancellation retains its non-success behavior. No aborted text is promoted to a child result.
 
 MEASURED / PROVEN — the existing manually run deterministic offline lifecycle file passes nine checks, including empty and partial aborted assistant messages, listener cleanup and cancellation's ineligibility for compaction. Runtime TypeScript passes. Evidence: `/tmp/local-studio-abort-outcome-offline-20260907.log` and `/tmp/local-studio-abort-outcome-typecheck-20260907.log`. No test dependency, framework or CI/hook wiring was added. Installed cancellation acceptance is recorded below.
-
 
 MEASURED / PROVEN — installed final10 source `d658f233` passed the actual cancellation repeat. The child first produced the exact externally checked readiness nonce. Manual runtime abort returned HTTP 200; the child request returned HTTP 499, its durable state was `interrupted`, and no completed result was present. The forbidden post-cancellation artifact remained absent 93.733 seconds after abort. A subsequent parent memory-only turn recalled its exact private nonce, establishing continuation of that parent after child cancellation. Parent Pi session: `01a07b19-3d30-7921-8f4d-d8f4325eebac`; child: `01a07b19-dcda-7a1a-ba5b-6a78bf069bb3`. Receipt: `/tmp/local-studio-final10-cancellation-receipt.json`; nonce values are intentionally omitted. This qualifies the concrete installed cancellation flow and supersedes the earlier pending cancellation status. Fresh-process restart discovery subsequently returned HTTP 200 with `interrupted`, no result, and the preserved finish time `2026-09-07T09:01:55.427Z`; receipt: `/tmp/local-studio-final10-cancellation-restart.json`. This qualifies interruption discovery after restart, not automatic task resumption. Stable installation and its HTTP frontend/runtime text/Vision checks are recorded in the [final10 installed receipt](installed-candidate-2026-09-07.md#final10-packaging-and-installed-cancellation--2026-09-07); native Electron preference acceptance remains separate.

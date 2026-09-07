@@ -20,7 +20,7 @@ Each claim below is labelled:
 ## 1. The defect this replaces
 
 **MEASURED.** Compaction is a memory operation, and its return value was being
-used as the answer to a different question: *should the agent keep working?*
+used as the answer to a different question: _should the agent keep working?_
 On an autonomous run there was no queued human message, so the loop exited and
 the task was abandoned silently. In a live rollout, 9 of 11 compactions were
 followed by a human message rather than by the agent continuing.
@@ -42,17 +42,17 @@ SQLite file, `agentic-runtime.sqlite`, beside the rest of the user data,
 opened through the `bun:sqlite` / `node:sqlite` shim the Litter ledger already
 proved (this package is typechecked by bun and shipped as `node dist/server.js`).
 
-| table | holds |
-|---|---|
-| `agentic_runs` | goal, status, model + physical model + behaviour profile, context window, usable limit, plan revision, active task, cumulative input/output/cache tokens, compaction count, latest checkpoint, result, failure, recovery state |
-| `agentic_plan_revisions` | revision number, why it happened, the resulting task id list |
-| `agentic_tasks` | title, description, status, dependencies, acceptance criteria, attempt count, agent, result summary, evidence, blocker |
-| `agentic_agents` | logical agent: role, status, model + physical model + behaviour profile, current task, session, active context, context limit, cumulative tokens, compactions, heartbeat |
-| `agentic_attempts` | one row per attempt at a task: status, outcome, evidence, error |
-| `agentic_tool_operations` | idempotency key, request hash, `PLANNED / STARTED / COMMITTED / FAILED / UNKNOWN`, whether it is side-effecting, external state |
-| `agentic_artifacts` | externalised payloads: size, token estimate, digest, path, preview, provenance |
-| `agentic_checkpoints` | tokens before/after, target, usable limit, duration, and the working set that was rebuilt |
-| `agentic_events` | the timeline the owner sees |
+| table                     | holds                                                                                                                                                                                                                          |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `agentic_runs`            | goal, status, model + physical model + behaviour profile, context window, usable limit, plan revision, active task, cumulative input/output/cache tokens, compaction count, latest checkpoint, result, failure, recovery state |
+| `agentic_plan_revisions`  | revision number, why it happened, the resulting task id list                                                                                                                                                                   |
+| `agentic_tasks`           | title, description, status, dependencies, acceptance criteria, attempt count, agent, result summary, evidence, blocker                                                                                                         |
+| `agentic_agents`          | logical agent: role, status, model + physical model + behaviour profile, current task, session, active context, context limit, cumulative tokens, compactions, heartbeat                                                       |
+| `agentic_attempts`        | one row per attempt at a task: status, outcome, evidence, error                                                                                                                                                                |
+| `agentic_tool_operations` | idempotency key, request hash, `PLANNED / STARTED / COMMITTED / FAILED / UNKNOWN`, whether it is side-effecting, external state                                                                                                |
+| `agentic_artifacts`       | externalised payloads: size, token estimate, digest, path, preview, provenance                                                                                                                                                 |
+| `agentic_checkpoints`     | tokens before/after, target, usable limit, duration, and the working set that was rebuilt                                                                                                                                      |
+| `agentic_events`          | the timeline the owner sees                                                                                                                                                                                                    |
 
 **POLICY.** Every table is prefixed `agentic_`. `controller/src/stores/sqlite.ts`
 sweeps a list of legacy names on every open — `runs`, `sessions`, `messages`,
@@ -159,7 +159,7 @@ backend refused to compact it.
 
 **IMPLEMENTED.** The expected next operation is the prompt alone, and
 compaction is skipped when the session is already at or below what the task
-needs, because compaction can only remove what is *not* the working set.
+needs, because compaction can only remove what is _not_ the working set.
 **EVIDENCE:** two tests in `agentic-compaction-resume.test.ts` named for this
 defect.
 
@@ -265,14 +265,14 @@ the payload and does not contain its last line.
 
 Every operation carries an idempotency key and a hash of its request:
 
-| state found | what happens |
-|---|---|
-| nothing | reserved, `PLANNED` |
-| same key, different request | `mismatch` — never a silent overwrite |
-| `COMMITTED` | `cached` — served from the ledger, not redone |
+| state found                         | what happens                                                  |
+| ----------------------------------- | ------------------------------------------------------------- |
+| nothing                             | reserved, `PLANNED`                                           |
+| same key, different request         | `mismatch` — never a silent overwrite                         |
+| `COMMITTED`                         | `cached` — served from the ledger, not redone                 |
 | `STARTED`/`UNKNOWN`, side-effecting | `reconcile` — the real external state must be inspected first |
-| `STARTED`, read-only | reserved — safe to retry |
-| `FAILED` | reserved — nothing was committed |
+| `STARTED`, read-only                | reserved — safe to retry                                      |
+| `FAILED`                            | reserved — nothing was committed                              |
 
 On restart: agents whose process is gone become `INTERRUPTED`, never
 `COMPLETED`; running attempts are settled as `INTERRUPTED`; `RUNNING` tasks
@@ -291,7 +291,7 @@ be on disk.
 **IMPLEMENTED.** `agentic/scheduler.ts`, driven by `agentic/service.ts`.
 
 **POLICY.** One local inference at a time. `prompt()` resolves when the turn is
-done, so the loop *is* the turn sequencing; no event listener can advance a Run
+done, so the loop _is_ the turn sequencing; no event listener can advance a Run
 twice, and no parallel GPU capacity is fabricated. Logical agents are durable
 objects with independent contexts and their own tasks; five of them may be the
 one resident checkpoint through five sessions, which is why every agent row
@@ -364,21 +364,21 @@ the scheduler is the production one. That is what makes it possible to force a
 dozen compactions in a millisecond rather than filling 176128 real tokens to
 observe the third.
 
-| file | covers |
-|---|---|
-| `agentic-dag.test.ts` | dependencies, cycles, readiness, selection |
-| `agentic-context-budget.test.ts` | capability read-through, reserves at six windows, preflight, post-compaction region, the override |
-| `agentic-compaction-resume.test.ts` | one compaction, ≥3 compactions on one unfinished task, working-set reconstruction, automatic resume, counters, loop guard |
-| `agentic-tool-operations.test.ts` | call/result pairing, externalisation, exactly-once |
-| `agentic-crash-recovery.test.ts` | restart after checkpoint, mid-task, around a tool operation |
-| `agentic-profile-durability.test.ts` | profile restoration, declared default, ordinary chat untouched |
-| `agentic-stall-replan.test.ts` | bounded retry, replan, no infinite loop |
-| `agentic-review-findings.test.ts` | every state an adversarial review found the runtime could not leave |
-| `agentic-control-plane.test.ts` | what the runtime accepts as a plan, and what it refuses |
-| `agentic-control-tools.test.ts` | the tools under the names and shapes the model sees |
-| `agentic-tool-interception.test.ts` | artifacts and idempotency on the real tool path |
-| `agentic-multi-agent.test.ts` | two agents, independent contexts, one decode at a time |
-| `agentic-inference-gate.test.ts` | one card decodes once; the owner goes first |
+| file                                 | covers                                                                                                                    |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `agentic-dag.test.ts`                | dependencies, cycles, readiness, selection                                                                                |
+| `agentic-context-budget.test.ts`     | capability read-through, reserves at six windows, preflight, post-compaction region, the override                         |
+| `agentic-compaction-resume.test.ts`  | one compaction, ≥3 compactions on one unfinished task, working-set reconstruction, automatic resume, counters, loop guard |
+| `agentic-tool-operations.test.ts`    | call/result pairing, externalisation, exactly-once                                                                        |
+| `agentic-crash-recovery.test.ts`     | restart after checkpoint, mid-task, around a tool operation                                                               |
+| `agentic-profile-durability.test.ts` | profile restoration, declared default, ordinary chat untouched                                                            |
+| `agentic-stall-replan.test.ts`       | bounded retry, replan, no infinite loop                                                                                   |
+| `agentic-review-findings.test.ts`    | every state an adversarial review found the runtime could not leave                                                       |
+| `agentic-control-plane.test.ts`      | what the runtime accepts as a plan, and what it refuses                                                                   |
+| `agentic-control-tools.test.ts`      | the tools under the names and shapes the model sees                                                                       |
+| `agentic-tool-interception.test.ts`  | artifacts and idempotency on the real tool path                                                                           |
+| `agentic-multi-agent.test.ts`        | two agents, independent contexts, one decode at a time                                                                    |
+| `agentic-inference-gate.test.ts`     | one card decodes once; the owner goes first                                                                               |
 
 ---
 
@@ -395,12 +395,12 @@ anything.
 because deciding that a request is durable work is the model's to make and a
 session that could not reach the tools could never make it.
 
-| tool | what the model proposes |
-|---|---|
-| `plan_agentic_run` | a goal, tasks with dependencies and acceptance criteria, optionally named agents |
-| `revise_agentic_plan` | a replacement plan, when what it learned means the current one cannot work |
-| `report_task_progress` | evidence against a task's criteria, or that it is blocked, or a question only the owner can answer |
-| `read_agentic_artifact` | part of a large output the runtime stored outside the conversation |
+| tool                    | what the model proposes                                                                            |
+| ----------------------- | -------------------------------------------------------------------------------------------------- |
+| `plan_agentic_run`      | a goal, tasks with dependencies and acceptance criteria, optionally named agents                   |
+| `revise_agentic_plan`   | a replacement plan, when what it learned means the current one cannot work                         |
+| `report_task_progress`  | evidence against a task's criteria, or that it is blocked, or a question only the owner can answer |
+| `read_agentic_artifact` | part of a large output the runtime stored outside the conversation                                 |
 
 **POLICY — the model proposes, the runtime decides.** There is no tool that
 writes a row, sets a status or invents an id. `agentic/control-plane.ts`
@@ -633,13 +633,27 @@ unchanged recent boundary and original preparation, request bounds, aborts,
 truncated-output rejection and failure cancellation. These establish control
 flow, not real-model summary fidelity, tokenization accuracy or latency.
 
-## 20. Behavior profile admission
+## 20. Inherited execution policy
 
-DECIDED / APPLIED in source: current agent sessions reject the `uncensored` behavior profile before SDK session creation; durable Run start/resume also rejects it during capability admission. This covers foreground chats, subagents and background tasks through their common runtime. Read-only tools still ingest untrusted content, so read-only mode is not an exception. Personal knowledge, project instructions and prior tool history also prevent claiming a trusted conversation merely by disabling writes. The error explains how to select the standard daily profile; no automatic rerouting occurs.
+DECIDED / APPLIED in source: Standard remains the automatic default for new
+ordinary sessions. Once a session starts, its effective behavior profile and
+network policy are captured together. Durable Runs, logical agents, ordinary
+subagents, nested subagents, background turns, compaction, retries and resumes
+receive that same snapshot. Uncensored is an ordinary explicit selection and is
+not rejected or replaced when work becomes agentic.
 
-The shared guard uses catalog behavior metadata, including renamed aliases. Only when metadata is absent does the exact known `qwen-uncensored` raw alias provide a compatibility fallback; other profile names are not guessed. Daily remains unchanged. Offline deterministic checks cover renamed profiles, durable admission, metadata precedence and fallback. Installed acceptance remains separate.
+The selected model alias remains part of the durable identity, while the
+behavior profile is also persisted independently and validated on descendant
+runtime creation. A mismatch is rejected rather than rerouted. Session metadata
+and durable Run rows preserve the effective policy across process restart.
+Different top-level sessions can carry different snapshots without changing one
+another.
 
-TARGET / NOT APPLIED: a dedicated trusted conversation mode without tools or imported untrusted context. Direct gateway requests are outside this client admission guard; the stack ADR-008 operational restrictions still apply there. This change does not claim a gateway-wide policy boundary.
+MEASURED / PROVEN offline: deterministic runtime checks exercised Standard and
+Uncensored children and grandchildren, background priority, Uncensored durable
+work through compaction, restored behavior and VPN state, exact turn/status
+contracts, and simultaneous Direct and VPN execution scopes. Installed product
+acceptance is recorded in [the stable candidate receipt](installed-candidate-2026-09-07.md#phase-5-inherited-execution-policy-correction--stable-native-acceptance).
 
 ## 21. Acceptance provenance and review
 
