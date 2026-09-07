@@ -36,3 +36,9 @@ LOCAL_STUDIO_PERF_TOKEN_FILE="$HOME/Library/Application Support/Local Studio/fro
 LOCAL_STUDIO_PERF_ROUTES=/,/agent,/settings,/configure,/usage,/runs,/agent/automations \
 npm --prefix frontend run perf:browser
 ```
+
+## Settings setup isolation
+
+MEASURED / PROVEN: authenticated installed Settings emitted one to two uncaught rejected requests on repeated profiling. Their stack points to the controller HTTP error constructor, while the resource failures include `/studio` requests. Source tracing found Settings mounted `useSetup` unconditionally. That hook eagerly created both setup request promises before the sequential Effect collector attached the second rejection handler. An unsupported setup API could therefore reject outside its intended error boundary. It also polled downloads on a page that was not displaying setup.
+
+DECIDED / APPLIED — source only: Settings now renders Settings regardless of inference connectivity or browser-local first-run state. Setup remains available at `/setup`, and the existing dashboard first-run redirect is unchanged. Setup requests are lazy Effect callbacks and independent setup reads run concurrently, so each rejection is owned from its creation. Actual HTTP errors retain their cause instead of being mislabeled as timeouts. Installed candidate acceptance remains pending.

@@ -37,14 +37,17 @@ export function refreshRuntimeStateEffect({
   setRuntimeJobs,
 }: RuntimeStateSetters) {
   return Effect.gen(function* () {
-    const [targetPayload, jobPayload] = yield* Effect.all([
-      requestEffect(() => api.getRuntimeTargets()).pipe(
-        Effect.catch(() => Effect.succeed({ targets: [] })),
-      ),
-      requestEffect(() => api.getRuntimeJobs()).pipe(
-        Effect.catch(() => Effect.succeed({ jobs: [] })),
-      ),
-    ] as const);
+    const [targetPayload, jobPayload] = yield* Effect.all(
+      [
+        requestEffect(() => api.getRuntimeTargets()).pipe(
+          Effect.catch(() => Effect.succeed({ targets: [] })),
+        ),
+        requestEffect(() => api.getRuntimeJobs()).pipe(
+          Effect.catch(() => Effect.succeed({ jobs: [] })),
+        ),
+      ] as const,
+      { concurrency: "unbounded" },
+    );
     setRuntimeTargets(targetPayload.targets);
     setRuntimeJobs(jobPayload.jobs);
   });
@@ -56,11 +59,14 @@ export function loadSecondarySetupDataEffect(
 ) {
   return Effect.gen(function* () {
     const warnings = [...initialWarnings];
-    const [presetsResult, targetResult, jobResult] = yield* Effect.all([
-      Effect.result(withSetupTimeoutEffect(api.getStarterPresets(), "starter presets")),
-      Effect.result(withSetupTimeoutEffect(api.getRuntimeTargets(), "runtime targets")),
-      Effect.result(withSetupTimeoutEffect(api.getRuntimeJobs(), "runtime jobs")),
-    ] as const);
+    const [presetsResult, targetResult, jobResult] = yield* Effect.all(
+      [
+        Effect.result(withSetupTimeoutEffect(() => api.getStarterPresets(), "starter presets")),
+        Effect.result(withSetupTimeoutEffect(() => api.getRuntimeTargets(), "runtime targets")),
+        Effect.result(withSetupTimeoutEffect(() => api.getRuntimeJobs(), "runtime jobs")),
+      ] as const,
+      { concurrency: "unbounded" },
+    );
 
     if (Result.isSuccess(presetsResult)) {
       setPresets(presetsResult.success.presets || []);
@@ -108,10 +114,15 @@ export function loadSetupDataEffect(
     setError(null);
     setLoadWarning(null);
     const warnings: string[] = [];
-    const [settingsResult, diagnosticsResult] = yield* Effect.all([
-      Effect.result(withSetupTimeoutEffect(api.getStudioSettings(), "settings")),
-      Effect.result(withSetupTimeoutEffect(api.getStudioDiagnostics(), "controller diagnostics")),
-    ] as const);
+    const [settingsResult, diagnosticsResult] = yield* Effect.all(
+      [
+        Effect.result(withSetupTimeoutEffect(() => api.getStudioSettings(), "settings")),
+        Effect.result(
+          withSetupTimeoutEffect(() => api.getStudioDiagnostics(), "controller diagnostics"),
+        ),
+      ] as const,
+      { concurrency: "unbounded" },
+    );
 
     if (Result.isSuccess(settingsResult)) {
       setSettings(settingsResult.success);

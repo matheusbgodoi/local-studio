@@ -3,8 +3,6 @@ import type { EngineJob } from "@/lib/types";
 import { isTerminalEngineJob } from "@/features/settings/runtime-targets";
 import api from "@/lib/api/client";
 
-// Server-side installs can legitimately run for ~30 minutes; poll fast at
-// first, then back off, and only give up well past the server install timeout.
 const RUNTIME_JOB_POLL_CEILING_MS = 35 * 60_000;
 const RUNTIME_JOB_FAST_POLL_WINDOW_MS = 60_000;
 const RUNTIME_JOB_FAST_POLL_MS = 1_000;
@@ -71,13 +69,22 @@ function isMissingRuntimeJobError(err: unknown): boolean {
 }
 
 export function withSetupTimeoutEffect<T>(
-  promise: Promise<T>,
+  load: () => Promise<T>,
   label: string,
   timeoutMs = 8_000,
 ): Effect.Effect<T, Error> {
-  return requestEffect(() => promise).pipe(
+  return requestEffect(load).pipe(
     Effect.timeout(timeoutMs),
-    Effect.catch(() => Effect.fail(new Error(`${label} timed out`))),
+    Effect.mapError((cause) =>
+      typeof cause === "object" &&
+      cause !== null &&
+      "_tag" in cause &&
+      cause._tag === "TimeoutError"
+        ? new Error(`${label} timed out`)
+        : cause instanceof Error
+          ? cause
+          : new Error(String(cause)),
+    ),
   );
 }
 
