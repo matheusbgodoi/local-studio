@@ -37,10 +37,10 @@ if even the notification is unwanted.
 |                |                                                                                                             |
 | -------------- | ----------------------------------------------------------------------------------------------------------- |
 | Fork base      | upstream **2.1.0** (merge-base `eeeb3406`)                                                                  |
-| Fork build     | **`v2.1.0-local.15`** — [release](https://github.com/matheusbgodoi/local-studio/releases/tag/v2.1.0-local.15) |
-| Upstream today | **v2.15.2**                                                                                                  |
+| Fork build     | **`v2.1.0-local.16`** — [release](https://github.com/matheusbgodoi/local-studio/releases/tag/v2.1.0-local.16) |
+| Upstream today | **v2.16.0**                                                                                                  |
 
-The fork is deliberately behind. Upstream has released fourteen minor versions on top
+The fork is deliberately behind. Upstream has released fifteen minor versions on top
 of the base this fork was cut from, and none of them has been merged, because a
 sync is a decision with a cost — every one of the five divergences in
 [`NOTICE`](../NOTICE) has to be re-reconciled by hand afterwards. Being behind is
