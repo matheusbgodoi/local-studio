@@ -1,3 +1,4 @@
+import { filterOmlxAgentCatalog } from "./omlx-agent-catalog";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
@@ -52,17 +53,6 @@ type PiProviderConfig = {
 
 type UserPiProviders = Record<string, PiProviderConfig>;
 
-/** Strip any prefixes this writer has already applied.
- *
- *  When PI_CODING_AGENT_DIR points at Local Studio's own data dir — which it
- *  does for the desktop app — the file we read here is the file we write. Every
- *  pass therefore re-prefixed providers that were already prefixed, so
- *  "vibeproxy-claude" became "user-pi-vibeproxy-claude", then
- *  "user-pi-user-pi-vibeproxy-claude", growing by one hop per launch. Observed
- *  in the wild at 26 nested hops and a 466 KB models.json.
- *
- *  Collapsing on read makes the merge idempotent and self-heals files that have
- *  already grown. */
 function baseProviderName(name: string): string {
   let base = name;
   while (base.startsWith(USER_PI_PREFIX)) base = base.slice(USER_PI_PREFIX.length);
@@ -80,11 +70,7 @@ async function loadUserPiProviders(): Promise<UserPiProviders> {
     const collapsed: UserPiProviders = {};
     for (const [name, config] of Object.entries(providers as UserPiProviders)) {
       const base = baseProviderName(name);
-      // Our own controller providers are regenerated from the live controller
-      // every pass; reading them back would duplicate them under a user-pi name
-      // the moment the controller went away. Test the COLLAPSED name — a prior
-      // pass has already produced "user-pi-local-studio" in the wild, which is
-      // our own provider wearing a user-pi hat.
+
       if (!base || base === PROVIDER_ID || base.startsWith(`${PROVIDER_ID}-`)) continue;
       collapsed[base] = config;
     }
@@ -143,17 +129,10 @@ function isInklingModelId(modelId: string): boolean {
   return modelId.toLowerCase().includes("inkling");
 }
 
-/** The physical checkpoint as its OWN controller names it.
- *
- *  `physicalModelId` is qualified with the provider for every controller after
- *  the first, exactly as `id` is, while the declaration table is keyed by the
- *  bare alias. This is the same unqualification `resolvePiModelSelection` does
- *  for a model id, applied to the grouping key. */
 function barePhysicalModelId(model: AgentModel): string {
   return resolvePiModelSelection(model.physicalModelId ?? "").modelId;
 }
 
-/** What a model row states about its thinking contract, server first. */
 function modelThinkingContract(model: AgentModel) {
   return resolveThinkingContract({
     modelId: model.rawId ?? model.id,
@@ -162,11 +141,8 @@ function modelThinkingContract(model: AgentModel) {
   });
 }
 
-/** One entry, so the picker renders a FIXED state instead of a ladder. */
 const NATIVE_ALWAYS_ON_THINKING_LEVELS: readonly AgentThinkingLevel[] = ["high"];
 
-/** Off / Low / Medium / XHigh — the only efforts the chat template accepts.
- *  Minimal, High and Max are deliberately absent, and XHigh is never Max. */
 const CHAT_TEMPLATE_THINKING_LEVELS: readonly AgentThinkingLevel[] = [
   "off",
   "low",
@@ -174,28 +150,17 @@ const CHAT_TEMPLATE_THINKING_LEVELS: readonly AgentThinkingLevel[] = [
   "xhigh",
 ];
 
-/**
- * The ladder an alias may offer.
- *
- * `source` is what the SERVER said about this row — its physical model and its
- * `nativeReasoning` flag. Passing it is what makes two aliases of one checkpoint
- * resolve to one ladder; omitting it falls back to the name table alone, which
- * is all a caller holding a bare id can do.
- */
 export function controllerModelThinkingLevels(
   reasoning: boolean,
   modelId = "",
   source: Omit<ThinkingContractInput, "modelId"> = {},
 ): AgentThinkingLevel[] {
   const contract = resolveThinkingContract({ ...source, modelId });
-  // Gated on `reasoning` because that IS the server's statement about the
-  // request contract: a checkpoint served with thinking off takes no effort.
+
   if (reasoning && contract === "chat-template-effort") {
     return [...CHAT_TEMPLATE_THINKING_LEVELS];
   }
-  // Deliberately NOT gated on `reasoning`: the gateway reports reasoning:false
-  // for this contract because it accepts no effort contract, which is a
-  // different statement from "does not think".
+
   if (contract === "native-always-on") {
     return [...NATIVE_ALWAYS_ON_THINKING_LEVELS];
   }
@@ -235,23 +200,6 @@ function modelCachePath(agentDir: string): string {
   return path.join(agentDir, "controller-models.cache.json");
 }
 
-//
-// A controller that is asleep does not refuse a connection — on a tailnet
-// nothing sends an RST, so every probe costs the full timeout. Paying eight
-// seconds is worth it once, to tell "asleep" from "slow"; paying it on every
-// retry is what made the model picker sit in a spinner forever with the RTX
-// off. So a controller that has just failed is re-probed briefly, and one
-// success restores the patient timeout.
-//
-//
-// A controller that is up answers /v1/models in tens of milliseconds — it is a
-// static list — so the impatient probe costs a live host nothing, and one
-// success clears the mark immediately. The expiry therefore only exists for a
-// host that is alive but slower than the impatient budget, which is rare and
-// self-correcting; keeping it at a minute meant every cold start more than a
-// minute after the last one paid the full eight seconds again, which is the
-// case the owner actually feels.
-//
 const OFFLINE_CONTROLLER_TIMEOUT_MS = 2_500;
 const OFFLINE_MEMORY_MS = 15 * 60_000;
 const offlineControllers = new Map<string, number>();
@@ -261,12 +209,6 @@ function offlinePath(agentDir: string): string {
   return path.join(agentDir, "controller-offline.json");
 }
 
-//
-// Persisted, because the expensive case is precisely a cold start: a fresh
-// process with an empty map spends the full timeout on a host it already knew
-// was asleep, and that eight seconds is the whole of "the app takes forever to
-// open". Surviving the restart is what makes the first launch fast too.
-//
 async function loadOfflineControllers(agentDir: string): Promise<void> {
   offlineControllersDir = agentDir;
   if (offlineControllers.size > 0) return;
@@ -276,9 +218,7 @@ async function loadOfflineControllers(agentDir: string): Promise<void> {
     for (const [url, since] of Object.entries(parsed as Record<string, unknown>)) {
       if (typeof since === "number") offlineControllers.set(url, since);
     }
-  } catch {
-    // No memory of a previous run is simply the patient path.
-  }
+  } catch {}
 }
 
 function persistOfflineControllers(): void {
@@ -295,8 +235,6 @@ function controllerTimeoutMs(url: string): number {
   const since = offlineControllers.get(url);
   if (since === undefined) return CONTROL_PLANE_TIMEOUT_MS;
   if (Date.now() - since > OFFLINE_MEMORY_MS) {
-    // Long enough since the last failure that the host may well be back; spend
-    // the full timeout again rather than writing it off on a 1.5s probe.
     offlineControllers.delete(url);
     persistOfflineControllers();
     return CONTROL_PLANE_TIMEOUT_MS;
@@ -314,13 +252,6 @@ function markControllerUnreachable(url: string): void {
   persistOfflineControllers();
 }
 
-//
-// Keyed by controller URL, not one flat list, so a host that is asleep keeps
-// contributing its own models while the hosts that are up contribute theirs
-// live. Dropping an offline host's models entirely was the second half of
-// "I cannot see models with the 3090 off": the Mac answering did not bring the
-// RTX aliases back, it just stopped the list being empty.
-//
 type ModelCache = Record<string, AgentModel[]>;
 
 async function readModelCache(agentDir: string): Promise<ModelCache> {
@@ -330,11 +261,8 @@ async function readModelCache(agentDir: string): Promise<ModelCache> {
     const cache: ModelCache = {};
     for (const [url, models] of Object.entries(parsed as Record<string, unknown>)) {
       if (!Array.isArray(models)) continue;
-      cache[url] = models.filter(
-        (entry): entry is AgentModel =>
-          Boolean(
-            entry && typeof entry === "object" && typeof (entry as AgentModel).id === "string",
-          ),
+      cache[url] = models.filter((entry): entry is AgentModel =>
+        Boolean(entry && typeof entry === "object" && typeof (entry as AgentModel).id === "string"),
       );
     }
     return cache;
@@ -347,10 +275,7 @@ async function writeModelCache(agentDir: string, cache: ModelCache): Promise<voi
   try {
     await writeFile(modelCachePath(agentDir), JSON.stringify(cache), "utf-8");
     await chmod(modelCachePath(agentDir), 0o600).catch(() => undefined);
-  } catch {
-    // A cache that cannot be written is a missed optimisation, never an error
-    // the caller should see: the live list it was about to return is fine.
-  }
+  } catch {}
 }
 
 function controllerLabel(controller: PiControllerConfig, index: number): string {
@@ -472,8 +397,6 @@ async function fetchModelsFromController(
     throw error;
   }
   if (!response.ok) {
-    // It answered, so it is awake — a 500 from a live controller must not make
-    // the next probe impatient.
     markControllerReachable(backendUrl);
     throw new Error(`${backendUrl}/v1/models failed with HTTP ${response.status}`);
   }
@@ -481,40 +404,35 @@ async function fetchModelsFromController(
   const payload = (await response.json()) as unknown;
   const providerId = providerIdForController(controller, index);
   const label = controllerLabel(controller, index);
-  const models = normalizeOpenAIModels(payload && typeof payload === "object" ? payload : {}).map(
-    (model) => ({
-      ...model,
-      reasoning: model.reasoning,
-      id: qualifyModelId(providerId, model.id),
-      physicalModelId: qualifyModelId(providerId, model.physicalModelId),
-      rawId: model.id,
-      providerId,
-      controllerUrl: backendUrl,
-      controllerName: label,
-      // The row is still unqualified here, so its `physicalModelId` is the bare
-      // alias the declaration table is keyed by.
-      thinkingLevels: controllerModelThinkingLevels(model.reasoning, model.rawId ?? model.id, {
-        physicalModelId: model.physicalModelId,
-        nativeReasoning: model.nativeReasoning,
-      }),
-      // The owner's label for this id wins over whatever the backend called it.
-      //
-      // It has to land on `displayName`, not just `name`. `displayName` is the
-      // product's model-identity field, and the picker treats its absence as
-      // "this row has no official identity" and drops the row: a backend that
-      // does not declare one is invisible in the model list, however correct
-      // its `name` is. oMLX declares nothing but the model directory name, so
-      // the local Ornith was being filtered out of the picker entirely — the
-      // list showed three RTX models and no Mac group at all.
-      ...(controller.modelNames?.[model.rawId ?? model.id]
-        ? { displayName: controller.modelNames[model.rawId ?? model.id] }
-        : {}),
-      name: (() => {
-        const base = controller.modelNames?.[model.rawId ?? model.id] ?? model.name;
-        return multipleControllers ? `${base} · ${label}` : base;
-      })(),
-    }),
+  const chatModels = await filterOmlxAgentCatalog(
+    normalizeOpenAIModels(payload && typeof payload === "object" ? payload : {}),
+    payload,
+    backendUrl,
+    headers,
   );
+  const models = chatModels.map((model) => ({
+    ...model,
+    reasoning: model.reasoning,
+    id: qualifyModelId(providerId, model.id),
+    physicalModelId: qualifyModelId(providerId, model.physicalModelId),
+    rawId: model.id,
+    providerId,
+    controllerUrl: backendUrl,
+    controllerName: label,
+
+    thinkingLevels: controllerModelThinkingLevels(model.reasoning, model.rawId ?? model.id, {
+      physicalModelId: model.physicalModelId,
+      nativeReasoning: model.nativeReasoning,
+    }),
+
+    ...(controller.modelNames?.[model.rawId ?? model.id]
+      ? { displayName: controller.modelNames[model.rawId ?? model.id] }
+      : {}),
+    name: (() => {
+      const base = controller.modelNames?.[model.rawId ?? model.id] ?? model.name;
+      return multipleControllers ? `${base} · ${label}` : base;
+    })(),
+  }));
   return { controller: { ...controller, url: backendUrl }, models, providerId };
 }
 
@@ -540,13 +458,7 @@ async function fetchModelsFromControllers(
       return;
     }
     if (!controller) return;
-    //
-    // The host did not answer, but we have seen it before. Keep its models in
-    // the list so the picker still shows them: choosing one is a reasonable
-    // thing to do — it is how the owner asks for that host to be woken — and a
-    // send that cannot reach it fails with a clear message. An empty picker
-    // offers no such move.
-    //
+
     const url = normalizeBackendUrl(controller.url);
     const cached = cache[url];
     if (cached && cached.length > 0) {
@@ -653,8 +565,7 @@ export async function refreshPiModels(
   const ownerControllers = settings.controllers.length > 0 ? settings.controllers : persisted;
   const controllers = mergeControllers(settings, ownerControllers);
   await savePersistedControllers(agentDir, controllers);
-  // A dead controller must not hide signed-in cloud providers: collect the
-  // failure and only surface it when nothing else can serve models.
+
   let models: AgentModel[] = [];
   let controllerModels: ControllerModels[] = [];
   let controllerError: unknown = null;
@@ -679,11 +590,6 @@ export async function refreshPiModels(
   const writtenAgentDir = await writePiModelsConfig(controllerModels, userPiProviders);
   const providerModels = await collectProviderAgentModels();
 
-  //
-  // Only what a host actually answered updates its own cache entry: models
-  // replayed from the cache for an offline host must not be written back as if
-  // they had just been observed, or the entry would never age out.
-  //
   const offline = new Set(offlineControllerUrls);
   let cacheChanged = false;
   for (const entry of controllerModels) {
@@ -706,9 +612,6 @@ async function collectProviderAgentModels(): Promise<AgentModel[]> {
   return listProviderAgentModels();
 }
 
-// Moved here from the shared models module: only the runtime needs the
-// pi-model mapping, and the OpenAICompletionsCompat type must resolve against
-// the SDK install.
 function isDeepSeekReasoningModel(model: AgentModel): boolean {
   const id = `${model.id} ${model.rawId ?? ""} ${model.name}`.toLowerCase();
   return model.reasoning && id.includes("deepseek");
@@ -724,8 +627,6 @@ function isInklingReasoningModel(model: AgentModel): boolean {
 }
 
 function isChatTemplateReasoningModel(model: AgentModel): boolean {
-  // Same resolution as the ladder, so the levels the picker offers and the wire
-  // shape those levels travel in cannot come apart for a new alias.
   return model.reasoning && modelThinkingContract(model) === "chat-template-effort";
 }
 
@@ -734,16 +635,9 @@ type PiThinkingContract = {
   compat?: Partial<OpenAICompletionsCompat>;
 };
 
-/** The reasoning half of a model's pi contract. pi-ai consumes this as DATA —
- *  it builds the request body itself — so this is the only place the wire shape
- *  is decided, and it reaches main chat, the Computer side-chat, compaction,
- *  automations and subagents through pi-agent/models.json. */
 function piThinkingContract(model: AgentModel): PiThinkingContract {
   if (isChatTemplateReasoningModel(model)) {
     return {
-      // `null` marks a level UNSUPPORTED — that is what keeps Minimal, High and
-      // Max out of the picker. `off` stays unmapped on purpose: this template
-      // turns thinking off through enable_thinking, not through an effort value.
       thinkingLevelMap: {
         minimal: null,
         low: "low",
@@ -761,11 +655,7 @@ function piThinkingContract(model: AgentModel): PiThinkingContract {
       },
     };
   }
-  // The hosted DeepSeek API uses a `thinking` object and requires an empty
-  // `reasoning_content` field on replayed assistant messages. Our vLLM
-  // controller exposes DeepSeek V4 through the standard OpenAI-compatible
-  // surface instead, where that hosted-only dialect corrupts tool-history
-  // turns. Keep the ordinary `reasoning_effort` mapping for controller models.
+
   if (isDeepSeekReasoningModel(model) && !isControllerBackedModel(model)) {
     return {
       thinkingLevelMap: {
