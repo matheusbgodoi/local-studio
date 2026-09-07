@@ -50,5 +50,32 @@
       "nativeBridge": true,
       "settingsBusy": 0
     }
-  }
+  },
+  "normal_launch": {
+    "debugging": false,
+    "checks": [
+      {
+        "endpoint": "/api/agent/models",
+        "http": 200,
+        "count": 5
+      },
+      {
+        "endpoint": "/api/agent/sessions/all",
+        "http": 200,
+        "count": 24
+      },
+      {
+        "endpoint": "/api/settings",
+        "http": 200
+      }
+    ]
+  },
+  "temporary_listeners_closed": [
+    50891,
+    50992,
+    50993,
+    9229,
+    9230,
+    18040
+  ]
 }
