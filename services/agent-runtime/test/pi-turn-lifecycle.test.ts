@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { Agent } from "@earendil-works/pi-agent-core";
 import { createAssistantMessageEventStream, type Model } from "@earendil-works/pi-ai";
 import { shouldRecoverByCompaction } from "../../../shared/agent/context-headroom";
-import { observePiTurn, PiTurnFailure, type PiTurnEventSource } from "../src/pi-turn-lifecycle";
+import {
+  observePiTurn,
+  PiTurnCancelled,
+  PiTurnFailure,
+  type PiTurnEventSource,
+} from "../src/pi-turn-lifecycle";
 
 const model: Model<"openai-completions"> = {
   id: "offline",
@@ -130,5 +135,39 @@ test("SDK compaction outcome accompanies terminal errors without repeating a fai
     }).catch((failure: unknown) => failure);
     expect(error).toBeInstanceOf(PiTurnFailure);
     expect((error as PiTurnFailure).compaction).toBe(succeeded ? "succeeded" : "failed");
+  }
+});
+
+test("an aborted assistant cannot turn partial text into successful completion", async () => {
+  for (const partialText of ["", "Partial progress before cancellation"]) {
+    const agent = backend(0);
+    await agent.prompt("prepare offline message");
+    const message = agent.state.messages.at(-1);
+    if (!message || message.role !== "assistant") throw new Error("Missing fixture message");
+    let emit: Parameters<PiTurnEventSource["subscribe"]>[0] = () => {};
+    let unsubscribed = false;
+    const source: PiTurnEventSource = {
+      subscribe(listener) {
+        emit = listener;
+        return () => {
+          unsubscribed = true;
+        };
+      },
+    };
+    const result = await observePiTurn(source, async () => {
+      emit({
+        type: "message_end",
+        message: {
+          ...message,
+          content: partialText ? [{ type: "text", text: partialText }] : [],
+          stopReason: "aborted",
+          errorMessage: "Request aborted",
+        },
+      });
+    }).catch((error: unknown) => error);
+    expect(result).toBeInstanceOf(PiTurnCancelled);
+    expect((result as Error).name).toBe("AbortError");
+    expect(unsubscribed).toBe(true);
+    expect(shouldRecoverByCompaction((result as Error).message, 190000, 200704)).toBe(false);
   }
 });

@@ -29,7 +29,12 @@ import {
 } from "./pi-runtime-helpers";
 import { refreshPiModels, resolvePiModelSelection } from "./pi-runtime-models";
 import { applyContextHeadroomSettings, applySessionContextHeadroom } from "./pi-agent-settings";
-import { CONTEXT_RECOVERY_MESSAGE, observePiTurn, PiTurnFailure } from "./pi-turn-lifecycle";
+import {
+  CONTEXT_RECOVERY_MESSAGE,
+  observePiTurn,
+  PiTurnCancelled,
+  PiTurnFailure,
+} from "./pi-turn-lifecycle";
 import { createBoundedCompactionExtension } from "./bounded-compaction";
 import { describeContextBudget, type ContextBudgetReport } from "./context-budget";
 import {
@@ -700,14 +705,16 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     this.promptAbortControllers.add(controller);
     let compactionRecoveryUsed = false;
     return Effect.tryPromise({
-      try: () =>
-        withInferenceContext(
+      try: async () => {
+        await withInferenceContext(
           priority,
           controller.signal,
           () => this.promptSession(message, options),
           options.inferenceObserver,
-        ),
-      catch: (error) => error,
+        );
+        if (controller.signal.aborted) throw new PiTurnCancelled();
+      },
+      catch: (error) => (controller.signal.aborted ? new PiTurnCancelled() : error),
     }).pipe(
       Effect.catch((error) =>
         options.restartOnContinuationError !== false && shouldRestartAfterPromptError(error)
@@ -727,7 +734,12 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
       }),
       Effect.catch((error) =>
         Effect.sync(() => {
-          this.lastError = error instanceof Error ? error.message : String(error);
+          this.lastError =
+            error instanceof PiTurnCancelled
+              ? null
+              : error instanceof Error
+                ? error.message
+                : String(error);
         }).pipe(Effect.andThen(Effect.fail(error))),
       ),
       Effect.ensuring(

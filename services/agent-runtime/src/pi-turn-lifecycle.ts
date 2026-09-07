@@ -3,6 +3,13 @@ import { Effect } from "effect";
 
 export type PiTurnEventSource = Pick<AgentSession, "subscribe">;
 
+export class PiTurnCancelled extends Error {
+  constructor() {
+    super("The turn was cancelled.");
+    this.name = "AbortError";
+  }
+}
+
 export class PiTurnFailure extends Error {
   constructor(
     message: string,
@@ -17,7 +24,7 @@ export function observePiTurn(
   session: PiTurnEventSource,
   operation: () => Promise<void>,
 ): Promise<void> {
-  let terminalError: string | null = null;
+  let terminalError: string | PiTurnCancelled | null = null;
   let compaction: PiTurnFailure["compaction"] = null;
   const unsubscribe = session.subscribe((event) => {
     if (event.type === "compaction_end") {
@@ -26,15 +33,23 @@ export function observePiTurn(
     }
     if (event.type !== "message_end" || event.message.role !== "assistant") return;
     terminalError =
-      event.message.stopReason === "error"
-        ? event.message.errorMessage?.trim() || "The model inference failed."
-        : null;
+      event.message.stopReason === "aborted"
+        ? new PiTurnCancelled()
+        : event.message.stopReason === "error"
+          ? event.message.errorMessage?.trim() || "The model inference failed."
+          : null;
   });
   return Effect.runPromise(
     Effect.tryPromise({ try: operation, catch: (error) => error }).pipe(
       Effect.andThen(
         Effect.suspend(() =>
-          terminalError ? Effect.fail(new PiTurnFailure(terminalError, compaction)) : Effect.void,
+          terminalError
+            ? Effect.fail(
+                terminalError instanceof PiTurnCancelled
+                  ? terminalError
+                  : new PiTurnFailure(terminalError, compaction),
+              )
+            : Effect.void,
         ),
       ),
       Effect.ensuring(Effect.sync(unsubscribe)),

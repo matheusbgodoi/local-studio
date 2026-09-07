@@ -1,3 +1,4 @@
+import { PiTurnCancelled } from "./pi-turn-lifecycle";
 import { randomUUID } from "node:crypto";
 import { Effect } from "effect";
 import {
@@ -190,7 +191,7 @@ async function executeSubagent(
     };
   } catch (error) {
     if (run.status === "running") {
-      run.status = "error";
+      run.status = signal.aborted || error instanceof PiTurnCancelled ? "interrupted" : "error";
       run.error = error instanceof Error ? error.message : "Subagent run failed";
       run.finishedAt = new Date().toISOString();
     }
