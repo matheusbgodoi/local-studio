@@ -39,3 +39,9 @@ Browser log: `/tmp/local-studio-installed-final2-browser-20260907.log`. Earlier 
 Read-only inspection of all eight existing acceptance run snapshots found 48 tasks and 139 acceptance criteria. Every existing criterion lacked `evidenceSource`; these are legacy records. The source renders distinct `Model reported · Not independently verified`, `Runtime observed`, and legacy labels. There was no actual new model-report criterion in this data to establish installed visual acceptance of that specific label. No task, criterion or model response was fabricated to satisfy this check. A subsequent real task must exercise that path before claiming it proven.
 
 These page observations do not prove interactive task cancellation, same-tab reconnection, long-session stability, successful inference, or the new uncensored admission guard. Those require their separately coordinated acceptance steps.
+
+## DECIDED / APPLIED — subsequent run deep-link fix
+
+Source inspection during read-only acceptance found that `/runs?run=<id>` selected the requested record while retaining the default Current view. Completed and archived records were therefore hidden by the detail panel's visibility gate, despite being successfully loaded. The page now uses one typed view classifier for filtering, manual tab selection and initial deep-link routing. It waits for the requested record, opens its matching Current, History or Archived view, and consumes that query selection once. Subsequent polling cannot reset manual selection; a manual tab change also cancels a still-pending query selection. A changed run query remains a new navigation request.
+
+MEASURED / PROVEN — scoped frontend TypeScript and ESLint passed. No automated tests were added. This fix is later than the `eb6f875f` build above and requires rebuilt installed acceptance before it is classified as proven product behavior.

@@ -1,7 +1,8 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
+import type { AgenticRun } from "@shared/agent/agentic-run";
 import {
   AppPage,
   Button,
@@ -27,44 +28,48 @@ import {
 } from "./runs-store";
 import { useRuns } from "./use-runs";
 
+type RunView = "current" | "history" | "archived";
+
+const terminal: ReadonlySet<AgenticRun["status"]> = new Set(["COMPLETED", "FAILED", "CANCELLED"]);
+
+function viewForRun(run: Pick<AgenticRun, "archivedAtMs" | "status">): RunView {
+  if (run.archivedAtMs !== null) return "archived";
+  return terminal.has(run.status) ? "history" : "current";
+}
+
 export default function RunsPage() {
   const { runs, selectedId, loading, error } = useRuns();
   const selectedSnapshot = useRunSnapshotState(selectedId);
   const snapshot = selectedSnapshot.snapshot;
   const requestedId = useSearchParams().get("run");
-  const [view, setView] = useState<"current" | "history" | "archived">("current");
-  const terminal = new Set(["COMPLETED", "FAILED", "CANCELLED"]);
-  const visibleRuns = runs.filter((run) => {
-    if (view === "archived") return run.archivedAtMs !== null;
-    if (run.archivedAtMs !== null) return false;
-    return view === "history" ? terminal.has(run.status) : !terminal.has(run.status);
-  });
+  const [view, setView] = useState<RunView>("current");
+  const appliedRequestedId = useRef<string | null>(null);
+  const visibleRuns = runs.filter((run) => viewForRun(run) === view);
 
-  //
-  // A Run is addressable: `/runs?run=<id>` is how the conversation's Run tab
-  // hands its Run to the deep view, and how a reload keeps that choice. It is
-  // applied only when the id itself changes, so clicking another Run in the
-  // list is not fought by a query param that outlived the intent.
-  //
   useMountSubscription(() => {
-    if (requestedId) selectRun(requestedId);
-  }, [requestedId]);
+    if (!requestedId) {
+      appliedRequestedId.current = null;
+      return;
+    }
+    if (appliedRequestedId.current === requestedId) return;
+    const requestedRun = runs.find((run) => run.id === requestedId);
+    if (!requestedRun) return;
+    appliedRequestedId.current = requestedId;
+    setView(viewForRun(requestedRun));
+    selectRun(requestedId);
+  }, [requestedId, runs]);
 
   const canResume =
     snapshot !== null &&
     (snapshot.run.status === "PAUSED" || snapshot.run.status === "WAITING_USER");
-  const canCancel =
-    snapshot !== null && !["COMPLETED", "FAILED", "CANCELLED"].includes(snapshot.run.status);
+  const canCancel = snapshot !== null && !terminal.has(snapshot.run.status);
   const selectedVisible = visibleRuns.some((run) => run.id === selectedId);
   const displayedError = error ?? selectedSnapshot.error;
 
-  const selectView = (next: "current" | "history" | "archived") => {
+  const selectView = (next: RunView) => {
+    appliedRequestedId.current = requestedId;
     setView(next);
-    const first = runs.find((run) => {
-      if (next === "archived") return run.archivedAtMs !== null;
-      if (run.archivedAtMs !== null) return false;
-      return next === "history" ? terminal.has(run.status) : !terminal.has(run.status);
-    });
+    const first = runs.find((run) => viewForRun(run) === next);
     selectRun(first?.id ?? null);
   };
 
