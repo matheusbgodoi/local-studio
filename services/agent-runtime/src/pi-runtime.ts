@@ -537,7 +537,16 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
         }).pipe(Effect.catch(() => Effect.succeed(null)));
         {
           const network = networkService();
-          network.setSessionPolicy(this.runtimeSessionId, executionPolicy.networkPolicy);
+          const networkTransition = network.setSessionPolicy(
+            this.runtimeSessionId,
+            executionPolicy.networkPolicy,
+          );
+          if (executionPolicy.networkPolicy === "vpn_protected") {
+            yield* Effect.tryPromise({
+              try: () => networkTransition,
+              catch: (error) => error,
+            });
+          }
           const shim = network.shellShimPath(executionPolicy.networkPolicy);
           const applied = applyAgentShell(agentDir, shim);
           if (shim !== null && !applied) {

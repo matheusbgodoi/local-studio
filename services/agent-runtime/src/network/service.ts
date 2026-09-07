@@ -147,13 +147,13 @@ export class NetworkService {
   // be flipped to Direct at any moment, while a Run keeps the policy it was
   // born with until it ends. Either one asking is enough.
   //
-  setSessionPolicy(sessionId: string, policy: NetworkPolicy): void {
+  setSessionPolicy(sessionId: string, policy: NetworkPolicy): Promise<void> {
     const previous = this.sessionPolicies.get(sessionId);
-    if (previous === policy) return;
+    if (previous === policy) return this.transition;
     if (policy === "direct") this.sessionPolicies.delete(sessionId);
     else this.sessionPolicies.set(sessionId, policy);
     this.emit("network.policy.changed", `session ${sessionId} → ${policy}`);
-    void this.reconcile();
+    return this.reconcile();
   }
 
   //
