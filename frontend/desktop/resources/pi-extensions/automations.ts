@@ -1,5 +1,3 @@
-const SESSION_MODEL_ID = process.env.LOCAL_STUDIO_MODEL_ID?.trim();
-
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
@@ -136,11 +134,12 @@ function errorText(body: unknown, status: number): string {
 
 async function resolveModelId(
   explicit: string | undefined,
+  sessionModelId: string | undefined,
   signal: AbortSignal | undefined,
 ): Promise<string | null> {
   const trimmed = explicit?.trim();
   if (trimmed) return trimmed;
-  if (SESSION_MODEL_ID) return SESSION_MODEL_ID;
+  if (sessionModelId) return sessionModelId;
   const { ok, body } = await httpJson("/api/agent/models", { method: "GET" }, signal);
   if (!ok || !body || typeof body !== "object") return null;
   const models = (body as { models?: unknown }).models;
@@ -180,6 +179,7 @@ function describeScheduleLoose(schedule: ScheduleArg): string {
 }
 
 export default function automationsExtension(pi: ExtensionAPI): void {
+  const sessionModelId = process.env.LOCAL_STUDIO_MODEL_ID?.trim();
   pi.registerTool({
     name: "schedule_automation",
     label: "Schedule automation",
@@ -227,7 +227,7 @@ export default function automationsExtension(pi: ExtensionAPI): void {
       const scheduleResult = normalizeScheduleArg(args.schedule);
       if (!scheduleResult.ok) return textResult(scheduleResult.error, { failed: true });
       try {
-        const modelId = await resolveModelId(args.model, signal);
+        const modelId = await resolveModelId(args.model, sessionModelId, signal);
         if (!modelId) {
           return textResult("No model available to run the automation. Pass a 'model' id.", {
             failed: true,
