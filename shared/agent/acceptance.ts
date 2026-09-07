@@ -7,7 +7,9 @@ export function requiresRuntimeEvidence(criterion: AcceptanceCriterion): boolean
 export function criterionIsSatisfied(criterion: AcceptanceCriterion): boolean {
   return (
     criterion.satisfied &&
-    (!requiresRuntimeEvidence(criterion) || (criterion.evidenceSource === "runtime_observation" && (!criterion.check || !!criterion.witness)))
+    (!requiresRuntimeEvidence(criterion) ||
+      (criterion.evidenceSource === "runtime_observation" &&
+        (!criterion.check || !!criterion.witness)))
   );
 }
 
@@ -18,7 +20,7 @@ export function acceptanceReviewReason(criteria: readonly AcceptanceCriterion[])
   if (pending.length === 0) return null;
   return (
     `Independent verification is required for: ${pending.map((c) => c.id).join(", ")}. ` +
-    "Model reports cannot verify command, file, or artifact criteria. This runtime has no automatic verifier for them. " +
+    "Model reports cannot verify command, file, or artifact criteria. Exact command/file specifications can be observed by this runtime; legacy description-only criteria and arbitrary artifacts cannot. " +
     "Review the actual outputs and revise the plan explicitly as a review/assertion if appropriate, then resume. Repeating the same report will not satisfy these criteria."
   );
 }

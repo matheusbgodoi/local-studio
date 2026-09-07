@@ -89,12 +89,12 @@ export function validateProposal(input: unknown): ValidatedPlan | ValidationFail
         const check = entry.check;
         const relative = check.kind === "command" ? check.cwd : check.path;
         if (!entry.description.trim() || !relative || relative.startsWith("/") || relative.includes("\\") || relative.split("/").includes("..") || relative.includes("\0")) throw new Error("invalid check path");
-        if (check.kind === "command" && (!check.command.trim() || check.command.length > MAX_TEXT_LENGTH || check.command.includes("\0"))) throw new Error("invalid command");
+        if (check.kind === "command" && (check.cwd !== "." || !check.command.trim() || check.command.length > MAX_TEXT_LENGTH || check.command.includes("\0"))) throw new Error("invalid command");
         if (check.kind === "file" && !/^[a-f0-9]{64}$/.test(check.sha256)) throw new Error("file check requires an exact lowercase SHA-256");
         return entry;
       });
     } catch {
-      return { ok: false, reason: `task "${title}" needs nonempty assertions or exact command/file check specifications with workspace-relative paths` };
+      return { ok: false, reason: `task "${title}" needs nonempty assertions or exact command/file check specifications with workspace-relative paths (command cwd must be "."; include any directory change in the exact command)` };
     }
     if (acceptance.length === 0) {
       return {

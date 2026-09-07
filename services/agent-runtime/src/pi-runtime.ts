@@ -1,3 +1,4 @@
+import { createOperationalTools } from "./agentic/operational-tools";
 import { contextUsageIsMeasured } from "./context-usage-provenance";
 import { installRuntimeStartupEnvironment } from "./runtime-startup-environment";
 import { releaseBrowserSession } from "./browser-host/browser-host";
@@ -574,6 +575,12 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
                           services,
                           sessionManager,
                           sessionStartEvent,
+                          customTools: createOperationalTools({
+                            cwd: resolvedCwd,
+                            runtimeSessionId,
+                            shellPath: services.settingsManager.getShellPath(),
+                            commandPrefix: services.settingsManager.getShellCommandPrefix(),
+                          }),
                           model,
                           thinkingLevel: selectedModel.reasoning
                             ? (options.thinkingLevel ?? "high")

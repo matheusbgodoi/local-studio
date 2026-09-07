@@ -107,6 +107,10 @@ export function renderWorkingSet(workingSet: AgenticWorkingSet): string {
         : "outstanding";
       const evidence = criterion.evidence ? ` — evidence: ${criterion.evidence}` : "";
       lines.push(`  - [${criterion.id}] ${criterion.description} (${mark})${evidence}`);
+      if (criterion.check)
+        lines.push(
+          `    Model-declared operational check: ${JSON.stringify(criterion.check)}. ${criterion.check.kind === "command" ? "Execute this exact command through bash." : "Call verify_file_criterion with this criterion id."}`,
+        );
     }
   }
   if (workingSet.dependencyOutputs.length > 0) {

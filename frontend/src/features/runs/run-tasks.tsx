@@ -65,10 +65,20 @@ function TaskRow({
       {task.acceptance.map((criterion) => (
         <RowDetailLine key={criterion.id}>
           {criterionIsSatisfied(criterion) ? "✓" : "○"} {criterion.description}
+          {criterion.check
+            ? " · Model-declared " +
+              criterion.check.kind +
+              " check: " +
+              (criterion.check.kind === "command"
+                ? criterion.check.command + " (cwd: " + criterion.check.cwd + ")"
+                : criterion.check.path + " (SHA-256: " + criterion.check.sha256 + ")")
+            : ""}
           {criterion.evidence ? ` — ${criterion.evidence}` : ""}
           {criterion.evidence || criterion.satisfied
             ? criterion.evidenceSource === "runtime_observation"
-              ? " · Runtime observed"
+              ? criterion.checkSource === "model_declared"
+                ? " · Runtime observed · Model-declared check · Goal not independently verified"
+                : " · Runtime observed"
               : criterion.evidenceSource === "model_report"
                 ? " · Model reported · Not independently verified"
                 : " · Legacy evidence · Not independently verified"

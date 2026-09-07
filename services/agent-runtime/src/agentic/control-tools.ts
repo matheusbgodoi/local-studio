@@ -27,7 +27,7 @@ const TASK_ITEM = {
       type: "array",
       items: Schema.toJsonSchemaDocument(ProposedAcceptanceSchema).schema,
       description:
-        "Assertions are model reports. Use {description, check:{kind:command, command, cwd}} for an exact command with exit code zero, or {description, check:{kind:file, path, sha256}} for exact bytes. Paths are workspace-relative. These are model-declared operational checks, not independent proof of the goal.",
+        "Assertions are model reports. Use {description, check:{kind:command, command, cwd}} for an exact command with exit code zero, or {description, check:{kind:file, path, sha256}} for exact bytes. Paths are workspace-relative; command cwd must be dot, with directory changes included in the command itself. These are model-declared operational checks, not independent proof of the goal.",
     },
   },
 } as const;
@@ -51,7 +51,7 @@ export const AGENTIC_ROUTING_INSTRUCTIONS = [
   "- When a request is substantial multi-step work that should survive this conversation — building, refactoring, migrating, investigating across many steps — call `plan_agentic_run` FIRST, with a plan, and then carry it out.",
   "- When a request is a question, an explanation, a lookup or a single small edit, just answer. Do NOT create a run for it.",
   "- Inside a run, report through `report_task_progress` rather than by describing progress in prose. Report what you observed; prose is model-reported evidence, never execution proof.",
-  "- Executable criteria require runtime observations matching their declared specifications. Assertions remain model-reported; a passing model-declared check is not independent verification of the goal.",
+  "- Execute exact declared commands through bash; for file SHA-256 checks call verify_file_criterion with the criterion id. Executable criteria require runtime observations matching their declared specifications. Assertions remain model-reported; a passing model-declared check is not independent verification of the goal.",
   "- If the approach is not working, call `revise_agentic_plan` with what you learned instead of repeating the same attempt.",
 ].join("\n");
 
