@@ -18,6 +18,7 @@ export class BrowserHost {
   constructor(private readonly manager = playwrightManager) {}
 
   private creating: Promise<HostedPage> | null = null;
+  private generation = 0;
   private pages = new Map<string, HostedPage>();
   private activeId: string | null = null;
 
@@ -35,6 +36,7 @@ export class BrowserHost {
     if (cached) this.pages.delete(cached.id);
 
     if (!pageId && this.creating) return this.creating;
+    const generation = this.generation;
     const create = async () => {
       const context = await this.manager.ensure();
       const rawPage =
@@ -43,6 +45,7 @@ export class BrowserHost {
           .find((candidate) =>
             Array.from(this.pages.values()).every((hosted) => !hosted.matches(candidate)),
           ) ?? (await context.newPage());
+      if (generation !== this.generation) throw new Error("Browser closed while creating a page");
       const hosted = HostedPage.attach(rawPage);
       this.pages.set(hosted.id, hosted);
       this.activeId = hosted.id;
@@ -164,8 +167,7 @@ export class BrowserHost {
   }
 
   async stop(): Promise<void> {
-    await this.creating?.catch(() => undefined);
-    for (const page of this.pages.values()) page.close();
+    this.generation += 1;
     this.pages.clear();
     this.activeId = null;
     await this.manager.stop();

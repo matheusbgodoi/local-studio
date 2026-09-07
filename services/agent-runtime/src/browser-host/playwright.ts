@@ -1,3 +1,4 @@
+import { finishBrowserCleanup } from "./cleanup";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { rm } from "node:fs/promises";
@@ -93,6 +94,7 @@ export class PlaywrightManager {
   private temporaryProfile: string | null = null;
   private profileClosed = false;
   private stopping: Promise<void> | null = null;
+  private closing: Promise<void> | null = null;
 
   isAvailable(): boolean {
     return findBrowserBinary() !== null;
@@ -189,29 +191,30 @@ export class PlaywrightManager {
 
   private async closeProfile(): Promise<void> {
     const pending = this.launching;
-    if (pending) await pending.catch(() => undefined);
+    if (pending && !(await finishBrowserCleanup("browser startup", () => pending))) return;
     const context = this.context;
     if (context) {
-      try {
-        await context.close();
-        this.profileClosed = true;
-        this.context = null;
-      } catch {
-        console.warn(
-          "[browser] context close failed; retaining its profile without deleting files",
-        );
-        return;
-      }
+      this.closing ??= Promise.resolve()
+        .then(() => context.close())
+        .finally(() => {
+          this.closing = null;
+        });
+      const closing = this.closing;
+      if (!(await finishBrowserCleanup("context closure", () => closing))) return;
+      this.profileClosed = true;
+      this.context = null;
     }
     if (this.temporaryProfile) {
       if (!this.profileClosed) {
         console.warn("[browser] child profile retained because browser closure was not confirmed");
       } else {
-        try {
-          await rm(this.temporaryProfile, { recursive: true, force: true });
+        const directory = this.temporaryProfile;
+        if (
+          await finishBrowserCleanup("temporary profile removal", () =>
+            rm(directory, { recursive: true, force: true }),
+          )
+        ) {
           this.temporaryProfile = null;
-        } catch {
-          console.warn("[browser] closed child profile cleanup failed; temporary files retained");
         }
       }
     }
