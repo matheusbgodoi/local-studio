@@ -9,9 +9,13 @@ export function requiresTrustedConversation(model: AgentBehaviorProfileIdentity)
   return rawId === "qwen-uncensored";
 }
 
+export class AgentBehaviorProfileError extends Error {
+  override readonly name = "AgentBehaviorProfileError";
+}
+
 export function assertAgentBehaviorProfileAllowed(model: AgentBehaviorProfileIdentity): void {
   if (!requiresTrustedConversation(model)) return;
-  throw new Error(
+  throw new AgentBehaviorProfileError(
     "The uncensored profile requires a trusted conversation with tools disabled. " +
       "Agent sessions can read untrusted content, including in read-only mode. " +
       "Select the standard daily profile to use chats, tasks, or background agents. " +

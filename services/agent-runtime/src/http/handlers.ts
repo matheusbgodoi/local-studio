@@ -1,3 +1,4 @@
+import { AgentBehaviorProfileError } from "../../../../shared/agent/behavior-profile";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -40,7 +41,6 @@ import {
   parseNetworkPolicy,
 } from "../../../../shared/agent/network-policy";
 
-// ─── POST /api/agent/turn ─────────────────────────────────────────────────
 
 function adoptRuntimePiSessionId(session: unknown, piSessionId: string | null | undefined) {
   const next = piSessionId?.trim();
@@ -101,12 +101,6 @@ function ensurePromptRuntimeEffect(
 ): Effect.Effect<void, unknown> {
   return Effect.tryPromise({
     try: () => {
-      //
-      // The conversation's preference is registered BEFORE the runtime starts,
-      // so the boundary is already up by the time anything the runtime spawns
-      // could reach the network. Registering it afterwards would leave a window
-      // in which a protected turn ran unprotected.
-      //
       networkService().setSessionPolicy(turn.sessionId, turn.networkPolicy);
       return resolved.session.ensureStarted(turn.modelId, turn.cwd, resolved.effectivePiSessionId, {
         thinkingLevel: turn.thinkingLevel,
@@ -127,11 +121,6 @@ function launchPrompt(
   resolved: ResolvedTurnSession,
   commandImages: AgentImageInput[] | undefined,
 ) {
-  //
-  // The shared inference gate lives in the runtime's prompt path, so a chat
-  // turn is serialised against every other decode without this call site
-  // knowing about it — and without the session reporting idle while it waits.
-  //
   void Effect.runPromise(
     Effect.tryPromise({
       try: () =>
@@ -273,7 +262,7 @@ function turnRouteEffect(request: Request): Effect.Effect<Response, unknown> {
               active: false,
               error: errorMessage(error, "Pi agent turn failed"),
             } satisfies AgentTurnCommandResult,
-            { status: 500 },
+            { status: error instanceof AgentBehaviorProfileError ? 400 : 500 },
           ),
         ),
       ),
@@ -281,14 +270,11 @@ function turnRouteEffect(request: Request): Effect.Effect<Response, unknown> {
   });
 }
 
-// ─── POST /api/agent/abort ────────────────────────────────────────────────
 
 export async function handleAgentAbort(request: Request): Promise<Response> {
   const body = (await request.json().catch(() => ({}))) as { sessionId?: string };
   const sessionId =
     typeof body.sessionId === "string" && body.sessionId.trim() ? body.sessionId.trim() : "default";
-  // Surface what the stop cleared so the client can put those messages back in
-  // front of the user instead of dropping them on the floor.
   const cleared = await piRuntimeManager.getSession(sessionId).abort();
   return Response.json({ ok: true, cleared });
 }
@@ -316,7 +302,6 @@ export async function handleExtensionUiResponse(request: Request): Promise<Respo
   return accepted ? Response.json({ ok: true }) : jsonError("Extension request is no longer active", 409);
 }
 
-// ─── POST /api/agent/compact ──────────────────────────────────────────────
 
 type CompactRequest = {
   sessionId?: string;
@@ -374,13 +359,6 @@ function compactRouteEffect(request: Request): Effect.Effect<Response, unknown> 
           session.ensureStarted(modelId, cwd, piSessionId, {
             thinkingLevel: body.thinkingLevel,
             toolAccess: body.toolAccess === "full" ? "full" : "read_only",
-            //
-            // A compaction restarts the runtime if the fingerprint moved, so it
-            // has to carry the same policy the turns do — otherwise compacting a
-            // protected conversation would rebuild it unprotected. This body is
-            // cast rather than parsed, so the value goes through the shared
-            // validator instead of being trusted.
-            //
             networkPolicy: parseNetworkPolicy(body.networkPolicy) ?? DEFAULT_NETWORK_POLICY,
             browserSessionId:
               typeof body.browserSessionId === "string" ? body.browserSessionId.trim() : undefined,
@@ -403,7 +381,6 @@ function compactRouteEffect(request: Request): Effect.Effect<Response, unknown> 
   });
 }
 
-// ─── GET /api/agent/runtime/sessions ──────────────────────────────────────
 
 export function handleRuntimeSessions(): Response {
   return Response.json({
@@ -413,7 +390,6 @@ export function handleRuntimeSessions(): Response {
   });
 }
 
-// ─── GET /api/agent/runtime/status ────────────────────────────────────────
 
 export function handleRuntimeStatus(request: Request): Response {
   const searchParams = new URL(request.url).searchParams;
@@ -435,7 +411,6 @@ export function handleRuntimeStatus(request: Request): Response {
   });
 }
 
-// ─── GET /api/agent/runtime/context-budget ────────────────────────────────
 
 export function handleRuntimeContextBudget(request: Request): Response {
   const searchParams = new URL(request.url).searchParams;
@@ -455,7 +430,6 @@ export function handleRuntimeContextBudget(request: Request): Response {
   return Response.json(budget);
 }
 
-// ─── GET /api/agent/runtime/events (SSE) ──────────────────────────────────
 
 function parseSeq(value: string | null): number {
   const parsed = Number(value ?? 0);
@@ -506,7 +480,6 @@ export function handleRuntimeEvents(request: Request): Response {
         try {
           controller.close();
         } catch {
-          // client already closed
         }
       };
 
@@ -584,7 +557,6 @@ export function handleRuntimeEvents(request: Request): Response {
   });
 }
 
-// ─── GET /api/agent/setup-checks ──────────────────────────────────────────
 
 export function handleSetupChecks(): Response {
   const codexDir = path.join(homedir(), ".codex");
