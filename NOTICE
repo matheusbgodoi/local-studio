@@ -1,0 +1,77 @@
+Local Studio
+Copyright 2025 0xSero
+
+This product includes software developed by the Local Studio project
+(https://github.com/sybil-solutions/local-studio), licensed under the
+Apache License, Version 2.0. A copy of the License is in the LICENSE file.
+
+--------------------------------------------------------------------------------
+MODIFICATIONS
+--------------------------------------------------------------------------------
+
+This repository (https://github.com/matheusbgodoi/local-studio) is a MODIFIED
+fork of that work, maintained by Matheus Barboza de Godoi. It is not the upstream
+project and is not endorsed by it.
+
+Modifications are Copyright 2026 Matheus Barboza de Godoi and are licensed under
+the same Apache License, Version 2.0.
+
+As required by section 4(b) of the License, the changed files carry prominent
+notices stating that they were changed. Rather than repeat a header in every
+file, the complete list is kept here and in the Git history of this fork, which
+records every change with its author and date.
+
+The fork diverges from upstream in five areas:
+
+1. CONTROLLER IDENTITY
+   The app is pointed at a private RTX 3090 host over a Tailscale network. Chat,
+   the model catalogue, Status and Usage all share that one controller identity.
+
+2. STATUS AND USAGE TELEMETRY
+   The Status and Usage pages read live host telemetry. Usage was rebuilt around
+   three tabs — Tokens, Energy and Efficiency — with cache-aware token semantics,
+   measured GPU board energy, coverage accounting, and cost derived from a
+   user-configured electricity tariff.
+   Added: frontend/src/features/usage/{activity-heatmap.tsx, energy-preferences.ts,
+   energy-settings.tsx, usage-efficiency-tab.tsx, usage-energy-tab.tsx,
+   usage-formatters.ts, usage-panels.tsx, usage-tokens-tab.tsx},
+   docs/status-and-usage.md.
+   Modified: controller/contracts/usage.ts, frontend/src/features/usage/*,
+   frontend/src/lib/api/system.ts, frontend/src/lib/types.ts.
+
+3. WEB SEARCH AND BROWSING
+   A keyless browser_search tool, reader-first page reading, conservative
+   challenge detection, and a human-verification path that hands a protected page
+   to the operator instead of attempting any automated bypass.
+   Added: services/agent-runtime/src/browser-host/{search.ts, challenge.ts},
+   services/agent-runtime/test/browser-*.test.ts, docs/web-search.md.
+   Modified: services/agent-runtime/src/browser-host/{browser-host.ts,
+   playwright.ts, reader.ts}, services/agent-runtime/src/http/browser-handlers.ts,
+   frontend/desktop/resources/pi-extensions/browser.ts,
+   frontend/desktop/resources/skills/browser/SKILL.md,
+   frontend/src/features/agent/ui/timeline/tool-block-view.tsx.
+
+4. PERSONAL MCP CONNECTORS AND SKILLS
+   Connectors are armed per chat session rather than per installation, and skills
+   load on demand, so a fresh session carries neither in its tool schemas.
+   Added: frontend/src/app/api/agent/connectors/session/route.ts,
+   frontend/src/features/agent/composer/{mcp-commands.ts,
+   skill-invocation-commands.ts}, frontend/src/features/agent/tools/
+   connector-session-api.ts, frontend/src/features/agent/workspace/
+   thinking-level-preference.ts.
+
+5. UPDATE POLICY
+   The desktop application never downloads or installs an upstream release
+   artefact over this customised build. It still reports that a newer upstream
+   release exists.
+   Added: docs/upstream-updates.md.
+   Modified: frontend/desktop/logic/update-manager.ts.
+
+--------------------------------------------------------------------------------
+THIRD-PARTY SERVICES
+--------------------------------------------------------------------------------
+
+browser_search queries DuckDuckGo's public no-JavaScript HTML frontends
+(html.duckduckgo.com and lite.duckduckgo.com). These are web pages, not a
+supported API. DuckDuckGo is not affiliated with this project and does not
+endorse it; use of those endpoints is subject to DuckDuckGo's own terms.

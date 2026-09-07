@@ -4,10 +4,61 @@ import { useCallback } from "react";
 import { RefreshCw } from "@/ui/icon-registry";
 import { ModelButton } from "@/ui";
 import { cx } from "@/ui/utils";
-import type { ModelIndexVariant } from "@/lib/api/studio";
+import type { ModelIndexResult, ModelIndexVariant } from "@/lib/api/studio";
 import { useDownloads } from "@/hooks/use-downloads";
-import { ModelRow, ModelSection, ModelStatus, ModelValue } from "./model-page";
+import {
+  ModelRow,
+  ModelSection,
+  ModelStatus,
+  ModelValue,
+  type ModelStatusTone,
+} from "./model-page";
 import { TierSection, useHardwareProfile, useModelIndex } from "./picks-shared";
+
+type CatalogSummary = { tone: ModelStatusTone; label: string; provenance: string | null };
+
+function catalogSummary(
+  data: ModelIndexResult | null,
+  tierCount: number,
+  loading: boolean,
+  error: string | null,
+): CatalogSummary {
+  // PROVENANCE OUTLIVES AN ERROR, because the tiers do.
+  //
+  // `useModelIndex` never clears `data` on a failed refresh — deliberately, so a transient
+  // error does not blank a catalogue the reader was already using. But this returned
+  // `provenance: null` for any error, so those still-rendered tiers lost the line saying where
+  // they came from. The bundled case is exactly when it matters: an error pill above a list
+  // silently shipped inside the app, with the sentence that said so now missing.
+  //
+  // So the source line is computed from whatever is on screen, and the error only changes the
+  // tone and adds itself to it.
+  const from = (): string | null => {
+    if (!data) return null;
+    return data.source === "bundled"
+      ? `Shipped with the app on ${data.updated} — this backend has no /studio/model-index, so nothing here reflects it`
+      : `Catalog updated ${data.updated}`;
+  };
+
+  if (error) {
+    const source = from();
+    return {
+      tone: "danger",
+      label: "error",
+      provenance: source ? `${source}. Last refresh failed: ${error}` : null,
+    };
+  }
+  if (loading) return { tone: "info", label: "loading", provenance: from() };
+  if (!data) return { tone: "default", label: "empty", provenance: null };
+  if (data.source === "bundled") {
+    return { tone: "warning", label: "bundled catalog", provenance: from() };
+  }
+  return {
+    tone: tierCount ? "good" : "default",
+    label: tierCount ? `${tierCount} tiers` : "empty",
+    provenance: from(),
+  };
+}
 
 export function PicksTab() {
   const { data, loading, error, refresh } = useModelIndex();
@@ -16,6 +67,7 @@ export function PicksTab() {
     downloadsByModel,
     startingModelIds,
     error: downloadError,
+    unsupported: downloadsUnsupported,
     startDownload,
   } = useDownloads();
 
@@ -30,25 +82,16 @@ export function PicksTab() {
   );
 
   const tiers = data?.tiers ?? [];
+  const summary = catalogSummary(data, tiers.length, loading, error);
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2.5">
-          <ModelStatus
-            tone={error ? "danger" : loading ? "info" : tiers.length ? "good" : "default"}
-          >
-            {error
-              ? "error"
-              : loading
-                ? "loading"
-                : tiers.length
-                  ? `${tiers.length} tiers`
-                  : "empty"}
-          </ModelStatus>
-          {data?.updated ? (
+          <ModelStatus tone={summary.tone}>{summary.label}</ModelStatus>
+          {summary.provenance ? (
             <span className="text-[length:var(--fs-sm)] text-(--ui-muted)">
-              Catalog updated {data.updated}
+              {summary.provenance}
             </span>
           ) : null}
           {hardware.poolGb > 0 ? (
@@ -64,7 +107,16 @@ export function PicksTab() {
       </div>
 
       {downloadError ? (
-        <div className="text-[length:var(--fs-sm)] text-(--err)">{downloadError}</div>
+        <div
+          className={cx(
+            "text-[length:var(--fs-sm)]",
+            downloadsUnsupported ? "text-(--ui-muted)" : "text-(--err)",
+          )}
+        >
+          {downloadsUnsupported
+            ? `Downloads are unavailable on this backend — ${downloadError}`
+            : downloadError}
+        </div>
       ) : null}
 
       {loading && tiers.length === 0 ? (

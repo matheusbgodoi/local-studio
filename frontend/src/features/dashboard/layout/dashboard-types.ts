@@ -12,6 +12,8 @@ export interface DashboardLayoutProps {
   currentProcess: ProcessInfo | null;
   currentRecipe: RecipeWithStatus | null;
   metrics: Metrics | null;
+  metricsObservedAt: number;
+  gpusObservedAt: number;
   gpus: GPU[];
   recipes: RecipeWithStatus[];
   logs: string[];

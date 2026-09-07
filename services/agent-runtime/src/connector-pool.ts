@@ -1,8 +1,13 @@
 import { connectMcp, type McpConnection, type McpToolInfo } from "./mcp-client";
 import { connectorAuthorizationHeaders } from "./connector-auth";
 import { listConnectors, type ConnectorConfig } from "./connectors-service";
+import { executionNetworkPolicy } from "./network/execution-scope";
 
-const pool = new Map<string, McpConnection>();
+const pool = new Map<string, { connectorId: string; connection: McpConnection }>();
+
+function connectionKey(connectorId: string): string {
+  return `${executionNetworkPolicy() ?? "ambient"}\0${connectorId}`;
+}
 
 export class ConnectorToolDeniedError extends Error {}
 
@@ -37,10 +42,33 @@ async function enabledConnector(connectorId: string): Promise<ConnectorConfig> {
   return connector;
 }
 
-function allowedTools(connector: ConnectorConfig, tools: McpToolInfo[]): McpToolInfo[] {
+export function allowedConnectorTools(
+  connector: ConnectorConfig,
+  tools: McpToolInfo[],
+): McpToolInfo[] {
   if (!connector.allowTools) return tools;
   const allow = new Set(connector.allowTools);
   return tools.filter((tool) => allow.has(tool.name));
+}
+
+function requiresReadOnlyContract(connector: ConnectorConfig): boolean {
+  return connector.origin?.kind === "plugin" || connector.origin?.binding === "google-workspace";
+}
+
+export function connectorToolContractError(
+  connector: ConnectorConfig,
+  tools: McpToolInfo[],
+): string | null {
+  if (!requiresReadOnlyContract(connector)) return null;
+  if (!connector.allowTools?.length) return "Observe connector has no approved read-only tools";
+  const declared = new Map(tools.map((tool) => [tool.name, tool]));
+  for (const name of connector.allowTools) {
+    const tool = declared.get(name);
+    if (!tool || tool.annotations?.readOnlyHint !== true) {
+      return `Tool "${name}" no longer satisfies the read-only contract`;
+    }
+  }
+  return null;
 }
 
 function assertToolAllowed(connector: ConnectorConfig, tool: string): void {
@@ -51,26 +79,44 @@ function assertToolAllowed(connector: ConnectorConfig, tool: string): void {
 }
 
 export async function getPooledConnection(connectorId: string): Promise<McpConnection> {
-  const existing = pool.get(connectorId);
-  if (existing) return existing;
+  const key = connectionKey(connectorId);
+  const existing = pool.get(key);
+  if (existing) return existing.connection;
   const connector = await enabledConnector(connectorId);
   const connection = connectMcp(toTarget(connector));
-  pool.set(connectorId, connection);
+  pool.set(key, { connectorId, connection });
   return connection;
 }
 
+//
+// Every pooled connector process, dropped. A connector started before
+// protection engaged is a live process outside the jail, and it would go on
+// serving protected tool calls from the wrong side of the boundary; one started
+// while protected keeps a jail that no longer applies after the owner returns
+// to Direct. Either way the pool has to be rebuilt, and the next call rebuilds
+// it under the policy in force then.
+//
+export function closeAllPooledConnections(): void {
+  for (const { connection } of pool.values()) connection.close();
+  pool.clear();
+}
+
 export function closePooledConnection(connectorId: string): void {
-  const connection = pool.get(connectorId);
-  if (!connection) return;
-  pool.delete(connectorId);
-  connection.close();
+  for (const [key, entry] of pool) {
+    if (entry.connectorId !== connectorId) continue;
+    pool.delete(key);
+    entry.connection.close();
+  }
 }
 
 export async function listConnectorTools(connectorId: string): Promise<McpToolInfo[]> {
   const connector = await enabledConnector(connectorId);
   try {
     const connection = await getPooledConnection(connectorId);
-    return allowedTools(connector, await connection.listTools());
+    const tools = await connection.listTools();
+    const contractError = connectorToolContractError(connector, tools);
+    if (contractError) throw new ConnectorToolDeniedError(contractError);
+    return allowedConnectorTools(connector, tools);
   } catch (error) {
     closePooledConnection(connectorId);
     throw error;
@@ -85,7 +131,16 @@ export async function callConnectorTool(
   const connector = await enabledConnector(connectorId);
   assertToolAllowed(connector, tool);
   try {
-    return await (await getPooledConnection(connectorId)).callTool(tool, args);
+    const connection = await getPooledConnection(connectorId);
+    const tools = await connection.listTools();
+    const contractError = connectorToolContractError(connector, tools);
+    if (contractError) throw new ConnectorToolDeniedError(contractError);
+    if (!tools.some((candidate) => candidate.name === tool)) {
+      throw new ConnectorToolDeniedError(
+        `Tool "${tool}" is not currently declared by connector "${connector.id}"`,
+      );
+    }
+    return await connection.callTool(tool, args);
   } catch (error) {
     closePooledConnection(connectorId);
     throw error;

@@ -533,7 +533,7 @@ function handleTerminalData(
 }
 
 function writeIntro(term: XTerm, cwd: string | null) {
-  term.writeln("\x1b[90mLocal Studio terminal (fallback mode — no TUI)\x1b[0m");
+  term.writeln("\x1b[90mCRIAs AI terminal (fallback mode — no TUI)\x1b[0m");
   if (!cwd) term.writeln("\x1b[31mNo working directory.\x1b[0m");
   writePrompt(term, cwd);
 }

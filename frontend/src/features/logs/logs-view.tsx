@@ -16,6 +16,7 @@ interface LogsViewProps {
   loadingContent: boolean;
   autoScroll: boolean;
   autoRefresh: boolean;
+  streamingAvailable: boolean;
   sidebarOpen: boolean;
   logRef: React.RefObject<HTMLDivElement | null>;
   onFilterChange: (value: string) => void;
@@ -42,6 +43,7 @@ export function LogsView({
   loadingContent,
   autoScroll,
   autoRefresh,
+  streamingAvailable,
   sidebarOpen,
   logRef,
   onFilterChange,
@@ -102,13 +104,19 @@ export function LogsView({
                 </span>
               </div>
               <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
-                <Checkbox
-                  checked={autoRefresh}
-                  onChange={onAutoRefreshChange}
-                  label="Auto-refresh"
-                  className="hidden items-center sm:flex"
-                  labelClassName="text-[length:var(--fs-sm)] font-normal"
-                />
+                {streamingAvailable ? (
+                  <Checkbox
+                    checked={autoRefresh}
+                    onChange={onAutoRefreshChange}
+                    label="Auto-refresh"
+                    className="hidden items-center sm:flex"
+                    labelClassName="text-[length:var(--fs-sm)] font-normal"
+                  />
+                ) : (
+                  <span className="hidden text-[length:var(--fs-sm)] text-(--dim) sm:inline">
+                    Snapshot
+                  </span>
+                )}
                 <Checkbox
                   checked={autoScroll}
                   onChange={onAutoScrollChange}

@@ -7,6 +7,8 @@ import type {
   UsageStats,
   VRAMCalculation,
 } from "../types";
+import type { ControllerCapabilities } from "@local-studio/contracts/capabilities";
+import type { OpenAIModelsResponse } from "@shared/agent/models";
 import { encodePathSegments, type ApiCore, type RequestOptions } from "./core";
 
 const MB = 1024 * 1024;
@@ -63,6 +65,9 @@ export function normalizeGpuAliases(list: unknown): GPU[] {
 
 export function createSystemApi(core: ApiCore) {
   return {
+    getControllerCapabilities: (options?: RequestOptions): Promise<ControllerCapabilities> =>
+      core.request("/capabilities", options),
+    probeControllerCapability: (endpoint: string) => core.probe(endpoint),
     launch: (recipeId: string): Promise<{ success: boolean; pid?: number; message: string }> =>
       core.request(`/launch/${encodePathSegments(recipeId)}`, {
         method: "POST",
@@ -79,9 +84,8 @@ export function createSystemApi(core: ApiCore) {
         retries: 0,
       }),
 
-    getOpenAIModels: (): Promise<{
-      data: Array<{ id: string; root?: string; max_model_len?: number }>;
-    }> => core.request("/v1/models"),
+    getOpenAIModels: (options?: RequestOptions): Promise<OpenAIModelsResponse> =>
+      core.request("/v1/models", options),
 
     tokenizeChatCompletions: (data: {
       model: string;
@@ -109,7 +113,8 @@ export function createSystemApi(core: ApiCore) {
     }): Promise<VRAMCalculation> =>
       core.request("/vram-calculator", { method: "POST", body: JSON.stringify(data) }),
 
-    getMetrics: (): Promise<Metrics> => core.request("/v1/metrics/vllm"),
+    getMetrics: (options?: RequestOptions): Promise<Metrics> =>
+      core.request("/v1/metrics/vllm", options),
 
     runBenchmark: (
       promptTokens = 1000,
@@ -153,7 +158,10 @@ export function createSystemApi(core: ApiCore) {
       error?: string;
     }> => core.request("/peak-metrics", { retries: 0 }),
 
-    getUsageStats: (): Promise<UsageStats> => core.request("/usage", { retries: 0 }),
+    getUsageStats: (query?: Record<string, string>): Promise<UsageStats> => {
+      const search = new URLSearchParams(query ?? {}).toString();
+      return core.request(search ? `/usage?${search}` : "/usage", { retries: 0 });
+    },
 
     getStatus: async (
       options?: RequestOptions,

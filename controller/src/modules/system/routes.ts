@@ -84,6 +84,29 @@ export const registerSystemRoutes = defineRoutes((app, context) => {
     });
 
   return mergeRoutes(
+    app.get("/capabilities", documentRoute, (ctx) =>
+      ctx.json({
+        schemaVersion: 1 as const,
+        controllerVersion: process.env["LOCAL_STUDIO_VERSION"] ?? null,
+        mode: "full" as const,
+        features: {
+          config: "supported" as const,
+          compatibility: "supported" as const,
+          lifecycle: "supported" as const,
+          catalog: "supported" as const,
+          modelIndex: "supported" as const,
+          downloadQueue: "supported" as const,
+          recipes: "supported" as const,
+          rigs: "supported" as const,
+          logs: "supported" as const,
+          openapi: "supported" as const,
+          metrics: "supported" as const,
+          metricsHistory: "unsupported" as const,
+          runtimeManagement: "supported" as const,
+          usage: "supported" as const,
+        },
+      }),
+    ),
     app.get(
       "/status",
       documentRoute,

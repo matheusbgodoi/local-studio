@@ -77,6 +77,7 @@ export function AutomationList({
             {visible.map((automation) => {
               const selected = automation.id === selectedId;
               const paused = automation.status === "paused";
+              const running = automation.activeRun !== null;
               return (
                 <button
                   key={automation.id}
@@ -116,7 +117,11 @@ export function AutomationList({
                         <span className="truncate">{scheduleLabel(automation.schedule)}</span>
                       </span>
                       <span className="mt-1 block truncate text-[length:var(--fs-xs)] text-(--ui-muted)/75">
-                        {paused ? "Paused" : `Next run ${relativeTime(automation.nextRunAt)}`}
+                        {running
+                          ? `Running since ${relativeTime(automation.activeRun?.startedAt ?? null)}`
+                          : paused
+                            ? "Paused"
+                            : `Next run ${relativeTime(automation.nextRunAt)}`}
                       </span>
                     </span>
                   </div>

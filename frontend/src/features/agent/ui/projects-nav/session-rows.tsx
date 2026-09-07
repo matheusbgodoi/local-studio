@@ -24,7 +24,10 @@ import {
   mergeActiveSessionPref,
   patchActiveSessionPref,
   rememberAgentSessionNavTitle,
+  rememberAgentSessionNavState,
   setAgentSessionDragData,
+  deleteSession,
+  moveSessionToProject,
   setSessionArchive,
   hrefWithOpenNonce,
 } from "./helpers";
@@ -122,11 +125,7 @@ export function ProjectRow({
         </button>
         <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
           {onTogglePin ? (
-            <PinButton
-              pinned={pinned}
-              onToggle={onTogglePin}
-              target={project.name}
-            />
+            <PinButton pinned={pinned} onToggle={onTogglePin} target={project.name} />
           ) : null}
           {onRemove ? (
             <button
@@ -398,6 +397,45 @@ export function ActiveSessionRow({
             }
           : undefined
       }
+      //
+      // Deleting removes the transcript from disk, which archiving deliberately
+      // does not do — so it asks first, names the conversation it is about, and
+      // says that it cannot be undone. Keyed on the pi session id for the same
+      // reason archive is: without a thread there is nothing on disk to remove.
+      //
+      //
+      // Not offered while the turn is running. A move relocates the transcript
+      // on disk, and the agent has that file open for append — it would keep
+      // writing to the old path and the moved copy would silently stop growing.
+      //
+      onMoveToProject={
+        session.threadId && project && activity !== "running"
+          ? (target) => {
+              if (target.id === project.id) return;
+              void moveSessionToProject(session.threadId as string, project, target).catch(
+                (error) => {
+                  console.warn("[agent] failed to move session", error);
+                },
+              );
+            }
+          : undefined
+      }
+      onDelete={
+        session.threadId
+          ? () => {
+              const threadId = session.threadId as string;
+              const confirmed = window.confirm(
+                `Delete "${label}"? This removes the conversation from disk and cannot be undone. Archive keeps it.`,
+              );
+              if (!confirmed) return;
+              void deleteSession(threadId, project)
+                .then(() => patchSessionPref(threadId, { hidden: true, pinned: undefined }))
+                .catch((error) => {
+                  console.warn("[agent] failed to delete session", error);
+                });
+            }
+          : undefined
+      }
       onRenameCommit={(trimmed) =>
         workspaceCommands().renameSession(
           session.paneId,
@@ -484,7 +522,11 @@ export function SessionRow({
           });
       }}
       onRememberTitle={() => {
-        rememberAgentSessionNavTitle(session.id, label);
+        rememberAgentSessionNavState(session.id, {
+          title: label,
+          modelId: session.modelId,
+          networkPolicy: session.executionPolicy?.networkPolicy ?? null,
+        });
         markSessionActivitySeen(session.id);
       }}
       onDragStart={(event) => {

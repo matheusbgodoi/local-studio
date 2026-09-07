@@ -10,53 +10,14 @@ import { useMountSubscription } from "@/hooks/use-mount-subscription";
 
 import { type ActiveSession, indexOpenByThreadId } from "@/features/agent/session-contracts";
 import type { AggregatedSession } from "@shared/agent/session-summary";
+import type { SessionSearchResult } from "@shared/agent/session-search";
+import { GLOBAL_SEARCH_DESTINATIONS } from "./global-search-destinations";
 
 type Props = {
   open: boolean;
   onClose: () => void;
   activeSessions: readonly ActiveSession[];
 };
-
-type AppDestination = {
-  href: string;
-  label: string;
-  keywords: string;
-  description: string;
-};
-
-const APP_DESTINATIONS: AppDestination[] = [
-  {
-    href: "/",
-    label: "Status",
-    keywords: "dashboard controller gpu metrics decode prefill throughput live historic",
-    description: "Controller, GPU, model status, and live metrics.",
-  },
-  {
-    href: "/usage",
-    label: "Usage",
-    keywords: "tokens requests analytics costs provider pi sessions peaks",
-    description: "Token, request, and model usage analytics.",
-  },
-  {
-    href: "/configure",
-    label: "Configure",
-    keywords:
-      "machines hardware models recipes launch downloads integrations mcp connectors plugins skills server logs api docs swagger controller engines runtime",
-    description: "Manage machines, models, integrations, and the controller.",
-  },
-  {
-    href: "/agent",
-    label: "Workbench",
-    keywords: "agent chat projects browser terminal tools files",
-    description: "Project-aware chat, terminals, files, and tools.",
-  },
-  {
-    href: "/settings",
-    label: "Settings",
-    keywords: "connection system appearance archived chats skills setup configuration",
-    description: "Connection, system, appearance, skills, and setup.",
-  },
-];
 
 function formatRelative(iso: string): string {
   const ts = new Date(iso).getTime();
@@ -79,6 +40,11 @@ export function SessionsCommand({ open, onClose, activeSessions }: Props) {
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [sessions, setSessions] = useState<AggregatedSession[] | null>(null);
+  const [sessionsError, setSessionsError] = useState(false);
+  const [contentResults, setContentResults] = useState<SessionSearchResult[]>([]);
+  const [contentStatus, setContentStatus] = useState<"idle" | "loading" | "ready" | "error">(
+    "idle",
+  );
   const [highlight, setHighlight] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -86,18 +52,54 @@ export function SessionsCommand({ open, onClose, activeSessions }: Props) {
   useMountSubscription(() => {
     if (!open) return;
     let cancelled = false;
+    setSessionsError(false);
     void import("@/features/agent/ui/sessions-command-effects")
       .then((mod) => mod.loadAggregatedSessions())
       .then((nextSessions) => {
         if (!cancelled) setSessions(nextSessions);
       })
       .catch(() => {
-        if (!cancelled) setSessions([]);
+        if (!cancelled) {
+          setSessions([]);
+          setSessionsError(true);
+        }
       });
     return () => {
       cancelled = true;
     };
   }, [open]);
+
+  useMountSubscription(() => {
+    const searchQuery = query.trim();
+    if (!open || searchQuery.length < 2) {
+      setContentResults([]);
+      setContentStatus("idle");
+      return;
+    }
+    const controller = new AbortController();
+    let current = true;
+    const timer = window.setTimeout(() => {
+      setContentResults([]);
+      setContentStatus("loading");
+      void import("@/features/agent/ui/sessions-command-effects")
+        .then((mod) => mod.searchConversationTranscripts(searchQuery, controller.signal))
+        .then((results) => {
+          if (!current) return;
+          setContentResults(results);
+          setContentStatus("ready");
+        })
+        .catch(() => {
+          if (!current || controller.signal.aborted) return;
+          setContentResults([]);
+          setContentStatus("error");
+        });
+    }, 180);
+    return () => {
+      current = false;
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [open, query]);
 
   useMountSubscription(() => {
     if (!open) return;
@@ -120,19 +122,21 @@ export function SessionsCommand({ open, onClose, activeSessions }: Props) {
     const all = sessions ?? [];
     const q = query.trim().toLowerCase();
     if (!q) return all.slice(0, 60);
+    const contentIds = new Set(contentResults.map((result) => result.sessionId));
     return all
       .filter((session) => {
+        if (contentIds.has(session.id)) return false;
         const haystack =
           `${session.firstUserMessage ?? ""} ${session.projectName} ${session.modelId ?? ""}`.toLowerCase();
         return haystack.includes(q);
       })
       .slice(0, 80);
-  }, [sessions, query]);
+  }, [contentResults, sessions, query]);
 
   const destinationFiltered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return APP_DESTINATIONS.slice(0, 8);
-    return APP_DESTINATIONS.filter((destination) =>
+    if (!q) return GLOBAL_SEARCH_DESTINATIONS.slice(0, 8);
+    return GLOBAL_SEARCH_DESTINATIONS.filter((destination) =>
       `${destination.label} ${destination.keywords} ${destination.description}`
         .toLowerCase()
         .includes(q),
@@ -147,7 +151,8 @@ export function SessionsCommand({ open, onClose, activeSessions }: Props) {
     );
   }, [liveOnlyActives, query]);
 
-  const totalRows = destinationFiltered.length + liveFiltered.length + filtered.length;
+  const totalRows =
+    destinationFiltered.length + liveFiltered.length + contentResults.length + filtered.length;
   const selectedIndex = totalRows > 0 ? Math.min(highlight, totalRows - 1) : 0;
 
   if (!open) return null;
@@ -172,7 +177,16 @@ export function SessionsCommand({ open, onClose, activeSessions }: Props) {
       onClose();
       return;
     }
-    const session = filtered[index - destinationFiltered.length - liveFiltered.length];
+    const contentIndex = liveIndex - liveFiltered.length;
+    if (contentIndex < contentResults.length) {
+      const result = contentResults[contentIndex];
+      router.push(
+        `/agent?project=${encodeURIComponent(result.projectId)}&session=${encodeURIComponent(result.sessionId)}&replace=1`,
+      );
+      onClose();
+      return;
+    }
+    const session = filtered[contentIndex - contentResults.length];
     if (!session) return;
     router.push(
       `/agent?project=${encodeURIComponent(session.projectId)}&session=${encodeURIComponent(session.id)}&replace=1`,
@@ -216,7 +230,7 @@ export function SessionsCommand({ open, onClose, activeSessions }: Props) {
               setQuery(event.target.value);
               setHighlight(0);
             }}
-            placeholder="Search destinations, sessions, projects, or models…"
+            placeholder="Search the app and conversation content…"
             className="flex-1 bg-transparent text-[length:var(--fs-lg)] text-(--fg) outline-none placeholder:text-(--dim)"
           />
           <kbd className="rounded bg-(--surface-2) px-1.5 py-0.5 text-[length:var(--fs-xs)] text-(--dim)">
@@ -224,11 +238,11 @@ export function SessionsCommand({ open, onClose, activeSessions }: Props) {
           </kbd>
         </div>
         <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto py-1">
-          {sessions === null ? (
+          {sessions === null && !query.trim() ? (
             <div className="px-4 py-6 text-[length:var(--fs-md)] text-(--dim)">
               Loading sessions…
             </div>
-          ) : totalRows === 0 ? (
+          ) : totalRows === 0 && contentStatus !== "loading" && contentStatus !== "error" ? (
             <div className="px-4 py-8 text-center text-[length:var(--fs-md)] text-(--dim)">
               No destinations or sessions match “{query}”.
             </div>
@@ -289,9 +303,62 @@ export function SessionsCommand({ open, onClose, activeSessions }: Props) {
                   </button>
                 );
               })}
+              {contentResults.length > 0 ? <SectionLabel>Conversation content</SectionLabel> : null}
+              {contentResults.map((result, index) => {
+                const i = destinationFiltered.length + liveFiltered.length + index;
+                const active = selectedIndex === i;
+                const label =
+                  cleanSessionTitle(result.title) || `Session ${result.sessionId.slice(0, 8)}`;
+                return (
+                  <button
+                    key={`content:${result.projectId}:${result.sessionId}`}
+                    type="button"
+                    onMouseEnter={() => setHighlight(i)}
+                    onClick={() => commit(i)}
+                    className={`flex w-full items-start gap-3 px-4 py-2 text-left text-[length:var(--fs-base)] transition-colors ${
+                      active ? "bg-(--bg)" : "hover:bg-(--bg)/70"
+                    }`}
+                  >
+                    <ChatIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-(--dim)" />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-2">
+                        <span className="truncate text-(--fg)">{label}</span>
+                        {result.archived ? (
+                          <span className="shrink-0 rounded bg-(--surface-2) px-1.5 py-0.5 text-[length:var(--fs-xs)] text-(--dim)">
+                            Archived
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className="mt-0.5 line-clamp-2 text-[length:var(--fs-sm)] leading-relaxed text-(--dim)">
+                        {result.snippet}
+                      </span>
+                    </span>
+                    <span className="inline-flex max-w-36 shrink-0 items-center gap-1 truncate text-[length:var(--fs-sm)] text-(--dim)">
+                      <Folder className="h-3 w-3" />
+                      {result.projectName}
+                    </span>
+                  </button>
+                );
+              })}
+              {contentStatus === "loading" ? (
+                <div className="px-4 py-3 text-[length:var(--fs-sm)] text-(--dim)">
+                  Searching conversation content…
+                </div>
+              ) : null}
+              {contentStatus === "error" ? (
+                <div className="px-4 py-3 text-[length:var(--fs-sm)] text-(--danger)">
+                  Conversation content could not be searched. Try again.
+                </div>
+              ) : null}
+              {sessionsError ? (
+                <div className="px-4 py-3 text-[length:var(--fs-sm)] text-(--danger)">
+                  Recent conversations could not be loaded.
+                </div>
+              ) : null}
               {filtered.length > 0 ? <SectionLabel>Recent sessions</SectionLabel> : null}
               {filtered.map((session, index) => {
-                const i = destinationFiltered.length + liveFiltered.length + index;
+                const i =
+                  destinationFiltered.length + liveFiltered.length + contentResults.length + index;
                 const active = selectedIndex === i;
                 const running = openByThreadId.has(session.id);
                 const label =

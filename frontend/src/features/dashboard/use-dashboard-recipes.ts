@@ -12,6 +12,7 @@ function processKey(process: ProcessInfo | null): string {
     process.backend,
     process.served_model_name ?? "",
     process.model_path ?? "",
+    process.started_at ?? "unknown-start",
   ].join("|");
 }
 

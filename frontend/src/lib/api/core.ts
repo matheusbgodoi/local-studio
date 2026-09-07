@@ -2,7 +2,11 @@ import { hc } from "hono/client";
 import { clearStoredBackendUrl, getApiKey, getStoredBackendUrl } from "./connection";
 import { delay } from "../async";
 import { isRecord } from "../guards";
-import { formatHttpErrorMessage, isRetryableError } from "./http-error-message";
+import {
+  formatHttpErrorMessage,
+  isRetryableError,
+  isUpstreamTimeoutResponse,
+} from "./http-error-message";
 import {
   isBenignSseTransportFailure,
   scrubTransportFetchErrorMessage,
@@ -11,6 +15,67 @@ import {
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_RETRIES = 3;
 const DEFAULT_RETRY_DELAY_MS = 1_000;
+
+const CONTROLLER_DOWN_COOLDOWN_MS = 15_000;
+
+type BreakerState = { downSince: number; probeInFlight: boolean };
+
+const controllerBreaker = new Map<string, BreakerState>();
+
+export class ControllerUnreachableError extends Error {
+  readonly controllerUrl: string;
+  constructor(controllerUrl: string) {
+    super("Controller is not responding");
+    this.name = "ControllerUnreachableError";
+    this.controllerUrl = controllerUrl;
+  }
+}
+
+function breakerVerdict(key: string): "open" | "closed" | "probe" {
+  const state = controllerBreaker.get(key);
+  if (!state) return "closed";
+  if (Date.now() - state.downSince < CONTROLLER_DOWN_COOLDOWN_MS) return "open";
+  if (state.probeInFlight) return "open";
+  state.probeInFlight = true;
+  return "probe";
+}
+
+function markControllerDown(key: string): void {
+  controllerBreaker.set(key, { downSince: Date.now(), probeInFlight: false });
+}
+
+function markControllerUp(key: string): void {
+  controllerBreaker.delete(key);
+}
+
+function recordBreakerOutcome(response: Response, key: string): void {
+  if (isUpstreamTimeoutResponse(response)) markControllerDown(key);
+  else markControllerUp(key);
+}
+
+function releaseControllerProbe(key: string): void {
+  const state = controllerBreaker.get(key);
+  if (state) state.probeInFlight = false;
+}
+
+function requestSignal(deadline: AbortSignal, caller?: AbortSignal | null): AbortSignal {
+  return caller ? AbortSignal.any([deadline, caller]) : deadline;
+}
+
+async function bufferNonStreamingResponse(response: Response): Promise<Response> {
+  if (
+    !response.body ||
+    (response.ok && response.headers.get("content-type")?.includes("text/event-stream"))
+  ) {
+    return response;
+  }
+  const body = await response.arrayBuffer();
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
 
 export const encodePathSegments = (path: string) =>
   path
@@ -109,9 +174,25 @@ export function createApiCore(params: {
     Boolean(headers["X-Backend-Url"]) &&
     !retriedWithoutBackendOverride;
 
-  const responseError = async (response: Response): Promise<Error> => {
-    const errorBody: unknown = await response.json().catch(() => ({ detail: "Request failed" }));
-    const error = new Error(formatHttpErrorMessage(response.status, errorBody));
+  const routeName = (endpoint: string): string =>
+    endpoint.startsWith(baseUrl) ? endpoint.slice(baseUrl.length) || "/" : endpoint;
+
+  const readErrorMessage = async (response: Response, endpoint: string): Promise<string> => {
+    const raw = (await response.text().catch(() => "")).trim();
+    const looksJson = raw.startsWith("{") || raw.startsWith("[");
+    let body: unknown = raw;
+    if (looksJson) {
+      try {
+        body = JSON.parse(raw) as unknown;
+      } catch {
+        body = raw;
+      }
+    }
+    return formatHttpErrorMessage(response.status, body, routeName(endpoint));
+  };
+
+  const responseError = async (response: Response, endpoint: string): Promise<Error> => {
+    const error = new Error(await readErrorMessage(response, endpoint));
     (error as Error & { status: number }).status = response.status;
     return error;
   };
@@ -189,64 +270,71 @@ export function createApiCore(params: {
     } = options;
 
     const headers = buildHeaders(fetchOptions.headers);
-    let lastError: Error | null = null;
-    let lastStatus: number | undefined;
+    const breakerKey =
+      headers["X-Backend-Url"] || backendUrlOverride || getStoredBackendUrl() || baseUrl;
+    const verdict = breakerVerdict(breakerKey);
+    if (verdict === "open") throw new ControllerUnreachableError(breakerKey);
     let retriedWithoutBackendOverride = false;
     const maxAttempts = retries + (useProxy && headers["X-Backend-Url"] ? 1 : 0);
 
     for (let attempt = 0; attempt <= maxAttempts; attempt++) {
       const controller = new AbortController();
+      const signal = requestSignal(controller.signal, fetchOptions.signal);
       const timeoutId = setTimeout(() => controller.abort(), timeout);
+      let response: Response;
 
       try {
-        const response = await fetch(url, {
+        response = await fetch(url, {
           ...fetchOptions,
           headers: { ...headers },
           credentials: "include",
-          signal: controller.signal,
+          signal,
         });
-
-        clearTimeout(timeoutId);
-        lastStatus = response.status;
-        maybeClearInvalidBackendOverride(response);
-
-        if (!response.ok) {
-          if (shouldRetryWithoutBackendOverride(response, headers, retriedWithoutBackendOverride)) {
-            retriedWithoutBackendOverride = true;
-            delete headers["X-Backend-Url"];
-            continue;
-          }
-
-          lastError = await responseError(response);
-          if (shouldRetryAttempt(lastError, response.status, attempt, retries)) {
-            await waitBeforeRetry(
-              endpoint,
-              attempt,
-              retries,
-              retryDelay,
-              `(status: ${response.status})`,
-            );
-            continue;
-          }
-
-          throw lastError;
-        }
-
-        return response;
+        response = await bufferNonStreamingResponse(response);
       } catch (error) {
-        clearTimeout(timeoutId);
-        lastError = normalizeRequestError(error, timeout);
-
-        if (shouldRetryAttempt(error, lastStatus, attempt, retries)) {
-          await waitBeforeRetry(endpoint, attempt, retries, retryDelay, `(${lastError.message})`);
+        const normalized = normalizeRequestError(error, timeout);
+        if (fetchOptions.signal?.aborted) {
+          releaseControllerProbe(breakerKey);
+          throw normalized;
+        }
+        markControllerDown(breakerKey);
+        if (shouldRetryAttempt(error, undefined, attempt, retries)) {
+          await waitBeforeRetry(endpoint, attempt, retries, retryDelay, `(${normalized.message})`);
           continue;
         }
-
-        throw lastError;
+        throw normalized;
+      } finally {
+        clearTimeout(timeoutId);
       }
-    }
 
-    throw lastError || new Error("Request failed after retries");
+      maybeClearInvalidBackendOverride(response);
+      recordBreakerOutcome(response, breakerKey);
+      if (shouldRetryWithoutBackendOverride(response, headers, retriedWithoutBackendOverride)) {
+        retriedWithoutBackendOverride = true;
+        delete headers["X-Backend-Url"];
+        continue;
+      }
+      if (!response.ok) {
+        const error = await responseError(response, endpoint);
+        if (
+          !isUpstreamTimeoutResponse(response) &&
+          shouldRetryAttempt(error, response.status, attempt, retries)
+        ) {
+          await waitBeforeRetry(
+            endpoint,
+            attempt,
+            retries,
+            retryDelay,
+            `(status: ${response.status})`,
+          );
+          continue;
+        }
+        throw error;
+      }
+      markControllerUp(breakerKey);
+      return response;
+    }
+    throw new Error("Request failed after retries");
   };
 
   const request = async <T>(endpoint: string, options: RequestOptions = {}): Promise<T> => {
@@ -350,10 +438,7 @@ export function createApiCore(params: {
     });
 
     if (!response.ok || !response.body) {
-      const errorBody = await response.json().catch(() => ({ detail: "Request failed" }));
-      const errorMessage =
-        errorBody.detail || errorBody.error?.message || `HTTP ${response.status}`;
-      throw new Error(errorMessage);
+      throw new Error(await readErrorMessage(response, endpoint));
     }
 
     const reader = response.body.getReader();
@@ -404,10 +489,7 @@ export function createApiCore(params: {
     maybeClearInvalidBackendOverride(response);
 
     if (!response.ok || !response.body) {
-      const errorBody = await response.json().catch(() => ({ detail: "Request failed" }));
-      const errorMessage =
-        errorBody.detail || errorBody.error?.message || `HTTP ${response.status}`;
-      throw new Error(errorMessage);
+      throw new Error(await readErrorMessage(response, endpoint));
     }
 
     const runId = response.headers.get("x-run-id");
@@ -447,6 +529,20 @@ export function createApiCore(params: {
     }
   };
 
+  const probe = async (endpoint: string): Promise<"supported" | "unsupported" | "unknown"> => {
+    try {
+      await fetchResponse(buildUrl(endpoint), endpoint, {
+        method: "GET",
+        timeout: 3_000,
+        retries: 0,
+      });
+      return "supported";
+    } catch (error) {
+      const status = (error as { status?: unknown }).status;
+      return status === 404 || status === 405 ? "unsupported" : "unknown";
+    }
+  };
+
   return {
     baseUrl,
     useProxy,
@@ -458,5 +554,6 @@ export function createApiCore(params: {
     postSseJson,
     getSseJson,
     healthPoll,
+    probe,
   };
 }

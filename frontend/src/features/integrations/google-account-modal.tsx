@@ -252,7 +252,7 @@ export function GoogleAccountModal({
       <div className="space-y-5 px-6 py-5">
         <Alert variant="info">
           Google&apos;s first-party Workspace MCP is in developer preview. Add a Desktop OAuth
-          client once; Local Studio encrypts it with the desktop keychain and exposes only declared
+          client once; CRIAs AI encrypts it with the desktop keychain and exposes only declared
           read-only tools.
         </Alert>
         {content}

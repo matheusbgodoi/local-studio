@@ -1,3 +1,4 @@
+import { isUncensoredBehaviorProfile } from "@shared/agent/behavior-profile";
 import {
   patchSession as patchSessionInMap,
   removeSession,
@@ -31,7 +32,18 @@ function chooseModelId(
   if (currentModelId && models.some((model) => model.id === currentModelId)) {
     return currentModelId;
   }
-  return models.find((model) => model.active)?.id || models[0]?.id || "";
+  const remembered = preferredModelId || currentModelId;
+  if (remembered) {
+    return remembered;
+  }
+  const allowed = models.filter((model) => !isUncensoredBehaviorProfile(model));
+  return (
+    allowed.find((model) => model.active && model.behaviorProfileDefault)?.id ||
+    allowed.find((model) => model.active)?.id ||
+    allowed.find((model) => model.behaviorProfileDefault)?.id ||
+    allowed[0]?.id ||
+    ""
+  );
 }
 
 function reduceWorkspaceStatus(

@@ -1,5 +1,7 @@
 import { useCallback, useState } from "react";
 import { StatusPill } from "@/ui";
+import { Schema } from "effect";
+import { SetupChecksResponseSchema, type SetupCheck } from "../../../../shared/agent/setup-checks";
 import {
   SettingsButton,
   SettingsFactRows,
@@ -25,6 +27,7 @@ export function ArchivedChatsSettings() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [restoringId, setRestoringId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const loadArchivedSessions = useCallback(async () => {
     setLoading(true);
     setError("");
@@ -70,6 +73,36 @@ export function ArchivedChatsSettings() {
       setRestoringId(null);
     }
   };
+  //
+  // Archiving deliberately leaves the transcript on disk; this is the only place
+  // that removes it, so it asks first, names the conversation, and says it
+  // cannot be undone. The cwd goes in the query string because the runtime
+  // resolves the session file inside a workspace, not by id alone.
+  //
+  const remove = async (session: Session) => {
+    const label = cleanSessionTitle(session.firstUserMessage) || session.id;
+    const confirmed = window.confirm(
+      `Delete "${label}"? This removes the conversation from disk and cannot be undone.`,
+    );
+    if (!confirmed) return;
+    setDeletingId(session.id);
+    setError("");
+    try {
+      const query = session.projectPath ? `?cwd=${encodeURIComponent(session.projectPath)}` : "";
+      const response = await fetch(
+        `/api/agent/sessions/${encodeURIComponent(session.id)}${query}`,
+        { method: "DELETE" },
+      );
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(payload.error || "Failed to delete chat");
+      setSessions((current) => current.filter((row) => row.id !== session.id));
+      window.dispatchEvent(new Event(SESSIONS_CHANGED_EVENT));
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Failed to delete chat");
+    } finally {
+      setDeletingId(null);
+    }
+  };
   const archiveRows: SettingsFactRow[] = error
     ? [
         {
@@ -100,12 +133,20 @@ export function ArchivedChatsSettings() {
           mono: true,
           status: { label: "archived", tone: "info" },
           actions: (
-            <SettingsButton
-              onClick={() => void unarchive(session)}
-              disabled={restoringId === session.id}
-            >
-              {restoringId === session.id ? "Restoring" : "Restore"}
-            </SettingsButton>
+            <div className="flex items-center gap-1.5">
+              <SettingsButton
+                onClick={() => void unarchive(session)}
+                disabled={restoringId === session.id || deletingId === session.id}
+              >
+                {restoringId === session.id ? "Restoring" : "Restore"}
+              </SettingsButton>
+              <SettingsButton
+                onClick={() => void remove(session)}
+                disabled={restoringId === session.id || deletingId === session.id}
+              >
+                {deletingId === session.id ? "Deleting" : "Delete"}
+              </SettingsButton>
+            </div>
           ),
           children: (
             <div className="text-[length:var(--fs-md)] text-(--dim)/55">
@@ -125,44 +166,71 @@ export function ArchivedChatsSettings() {
   );
 }
 export function SetupChecksSettings() {
-  type Check = { id: string; label: string; ok: boolean; value: string; guidance: string };
-  const [checks, setChecks] = useState<Check[]>([]);
+  const [checks, setChecks] = useState<SetupCheck[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const controllerStatus = useSidebarStatus();
 
   useMountSubscription(() => {
     void fetch("/api/agent/setup-checks", { cache: "no-store" })
-      .then((res) => res.json() as Promise<{ checks?: Check[] }>)
-      .then((payload) => setChecks(payload.checks ?? []))
-      .catch(() => setChecks([]));
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Setup checks are unavailable");
+        return Schema.decodeUnknownSync(SetupChecksResponseSchema)(await response.json());
+      })
+      .then((payload) => {
+        setChecks([...payload.checks]);
+        setLoadError(false);
+      })
+      .catch(() => {
+        setChecks([]);
+        setLoadError(true);
+      })
+      .finally(() => setLoading(false));
   }, []);
-  const controllerCheck: Check = {
+  const controllerCheck: SetupCheck = {
     id: "controller",
     label: "Controller connection",
     ok: controllerStatus.online,
     value: controllerStatus.online ? controllerStatus.activityLine : "offline",
-    guidance: "Set a reachable controller URL in Settings → Connection before using Agents.",
+    requirement: "required",
+    guidance: "Set a reachable controller URL in Settings → General before using Agents.",
   };
   const rows = [...checks, controllerCheck];
-  const blockers = rows.filter((check) => !check.ok);
+  const blockers = rows.filter((check) => check.requirement === "required" && !check.ok);
   const setupRows: SettingsFactRow[] = rows.map((check) => ({
     key: check.id,
     label: check.label,
     description: check.guidance,
     value: check.value,
     mono: true,
-    status: { label: check.ok ? "ok" : "missing", tone: check.ok ? "good" : "warning" },
+    status: {
+      label: check.ok ? "ready" : check.requirement,
+      tone: check.ok ? "good" : check.requirement === "required" ? "warning" : "info",
+    },
   }));
   return (
     <SettingsGroup
       title="First-time setup"
       description="Preflight checks prevent new users from landing in an empty Agent tab without explanation."
       actions={
-        <StatusPill tone={blockers.length ? "warning" : "good"}>
-          {blockers.length ? `${blockers.length} blockers` : "ready"}
+        <StatusPill tone={loadError || blockers.length ? "warning" : "good"}>
+          {loading
+            ? "checking"
+            : loadError
+              ? "check unavailable"
+              : blockers.length
+                ? `${blockers.length} blockers`
+                : "ready"}
         </StatusPill>
       }
     >
-      <SettingsFactRows rows={setupRows} />
+      {loadError ? (
+        <div className="px-1 py-4 text-[length:var(--fs-sm)] text-(--ui-warning)">
+          Setup checks could not be loaded. CRIAs AI has not marked this installation ready.
+        </div>
+      ) : (
+        <SettingsFactRows rows={setupRows} />
+      )}
     </SettingsGroup>
   );
 }

@@ -1,10 +1,12 @@
 import { Schema } from "effect";
+import { NetworkPolicySchema } from "@shared/agent/network-policy";
 
 export const RuntimeContextUsageSchema = Schema.Struct({
   tokens: Schema.Union([Schema.Null, Schema.Number]),
   contextWindow: Schema.Number,
   percent: Schema.Union([Schema.Null, Schema.Number]),
   shouldCompact: Schema.Boolean,
+  estimated: Schema.optional(Schema.Boolean),
 });
 
 const RuntimeLoggedEventSchema = Schema.Struct({
@@ -18,6 +20,8 @@ export const RuntimeStatusSchema = Schema.Struct({
   running: Schema.optional(Schema.Boolean),
   piSessionId: Schema.optional(Schema.Union([Schema.Null, Schema.String])),
   modelId: Schema.optional(Schema.Union([Schema.Null, Schema.String])),
+  behaviorProfile: Schema.optional(Schema.Union([Schema.Null, Schema.String])),
+  networkPolicy: Schema.optional(NetworkPolicySchema),
   eventSeq: Schema.optional(Schema.Number),
   events: Schema.optional(Schema.Array(RuntimeLoggedEventSchema)),
   contextUsage: Schema.optional(Schema.Union([Schema.Null, RuntimeContextUsageSchema])),
@@ -91,6 +95,4 @@ export function decodeRuntimeSessions(raw: unknown): RuntimeSessionSummary[] {
   return option._tag === "Some" ? [...(option.value.sessions ?? [])] : [];
 }
 
-// Canonical type lives in shared/agent/context-usage.ts (shared with the agent
-// runtime package); RuntimeContextUsageSchema above must stay in sync with it.
 export type { RuntimeContextUsage } from "@shared/agent/context-usage";

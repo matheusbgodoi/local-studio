@@ -8,6 +8,8 @@ import { log } from "../helpers/logger";
 import { registerOAuthVault } from "./oauth-vault";
 import { resolveStablePort } from "../helpers/ports";
 import { resolveAugmentedPath } from "../helpers/resolve-path";
+import { readFrontendToken, readRemoteHost, readRemoteUser } from "./frontend-token";
+import { repointTailnetServe } from "./tailnet-serve";
 import {
   startOrReuseAgentRuntime,
   stopAgentRuntime,
@@ -145,11 +147,19 @@ function copyDirectory(source: string, target: string): void {
   cpSync(source, target, { recursive: true, force: true });
 }
 
-async function waitForServer(url: string, timeoutMs: number): Promise<void> {
+//
+// The probe carries the token because there is no exemption for local callers.
+// An earlier attempt exempted anything presenting a loopback Host, which a
+// second tailnet device defeated by simply sending `Host: 127.0.0.1` —
+// `tailscale serve` forwards the client's Host rather than rewriting it. So
+// every caller authenticates, this one included.
+//
+async function waitForServer(url: string, timeoutMs: number, token: string | null): Promise<void> {
   const startedAt = Date.now();
+  const headers = token ? { "x-local-studio-token": token } : undefined;
   while (Date.now() - startedAt < timeoutMs) {
     try {
-      const response = await fetch(url, { redirect: "manual" });
+      const response = await fetch(url, { redirect: "manual", headers });
       if (response.ok || response.status === 307 || response.status === 308) {
         return;
       }
@@ -204,7 +214,18 @@ export async function startFrontendServer(
   const port = await resolveStablePort(options.port ?? readPersistedPort());
   persistPort(port);
   const url = `http://127.0.0.1:${port}`;
-  const agentRuntime = await startOrReuseAgentRuntime({ frontendUrl: url }, options.agentRuntime);
+  const frontendToken = readFrontendToken(DESKTOP_CONFIG.userDataDir);
+  //
+  // Read only when a token exists. The host allowlist and the token are two
+  // halves of one decision — widening the first without the second would open
+  // the app to anything that can reach the published name.
+  //
+  const remoteHost = frontendToken ? readRemoteHost(DESKTOP_CONFIG.userDataDir) : null;
+  const remoteUser = remoteHost ? readRemoteUser(DESKTOP_CONFIG.userDataDir) : null;
+  const agentRuntime = await startOrReuseAgentRuntime(
+    { frontendUrl: url, frontendToken },
+    options.agentRuntime,
+  );
 
   log.info(`Starting embedded frontend server from ${serverScript} on ${url}`);
 
@@ -235,6 +256,14 @@ export async function startFrontendServer(
       LOCAL_STUDIO_AGENT_CWD: process.env.LOCAL_STUDIO_AGENT_CWD || app.getPath("home"),
       LOCAL_STUDIO_AGENT_RUNTIME_URL: agentRuntime.url,
       LOCAL_STUDIO_FRONTEND_BASE: url,
+      //
+      // Present only when the owner has enabled remote access. Its presence is
+      // what makes the frontend demand a token for every request, including from
+      // this machine — see logic/frontend-token.ts.
+      //
+      ...(frontendToken ? { LOCAL_STUDIO_FRONTEND_TOKEN: frontendToken } : {}),
+      ...(remoteHost ? { ALLOWED_TAILSCALE_HOSTS: remoteHost } : {}),
+      ...(remoteUser ? { ALLOWED_TAILSCALE_USERS: remoteUser } : {}),
     },
   });
 
@@ -270,7 +299,7 @@ export async function startFrontendServer(
   currentEmbeddedServer = child;
 
   try {
-    await waitForServer(url, DESKTOP_CONFIG.startupTimeoutMs);
+    await waitForServer(url, DESKTOP_CONFIG.startupTimeoutMs, frontendToken);
   } catch (error) {
     await stopFrontendServer(
       {
@@ -283,6 +312,8 @@ export async function startFrontendServer(
     );
     throw error;
   }
+
+  if (remoteHost) void repointTailnetServe(remoteHost, port);
 
   return {
     agentRuntime,

@@ -1,0 +1,590 @@
+//
+// The process-wide durable runtime.
+//
+// It owns one store, reconciles unfinished Runs once at startup, resolves the
+// capability contract from the live catalogue, and drives each Run in a loop
+// whose every step is a persisted transition. Because `prompt()` resolves when
+// the turn is done, the loop IS the turn sequencing — one local inference at a
+// time, with no event listener able to advance a Run twice.
+//
+
+import {
+  resolveAgenticCapability,
+  withRuntimeContextWindow,
+  type AgenticCapability,
+} from "./capability";
+import {
+  computeContextBudget,
+  DEFAULT_CONTEXT_BUDGET_POLICY,
+  type ContextBudgetPolicy,
+} from "./context-budget";
+import type { AgenticAgent, AgenticRun, AgenticRunSnapshot } from "./contract";
+import { createPiAgenticSession } from "./pi-session-adapter";
+import {
+  createInferenceActivityRegistry,
+  type InferenceActivityObserver,
+  type InferenceActivityRegistry,
+} from "./inference-activity";
+import { settleDriveFailure } from "./recovery";
+import { createAgenticRunService, type StartRunInput } from "./run-service";
+import { setAgenticControlHost } from "./control-host";
+import { validateProposal, type ProgressReport, type ValidatedPlan } from "./control-plane";
+import { createRunFromPlan, reportProgressForTask, revisePlanForRun } from "./control-service";
+import { createAgenticStore, type AgenticStore } from "./store";
+import { resolveDataDir } from "../data-dir";
+import { getGlobalSingleton } from "../instances";
+import { piRuntimeManager } from "../pi-runtime";
+import { refreshPiModels } from "../pi-runtime-models";
+import {
+  forgetSessionMetadataMany,
+  readSessionListMetadata,
+  setSessionInternal,
+} from "../session-metadata-store";
+import type { AgentModel } from "../../../../shared/agent/models";
+import { networkService } from "../network";
+import { randomUUID } from "node:crypto";
+import { existsSync, renameSync, rmSync } from "node:fs";
+import { findSessionFile } from "../sessions-store";
+
+export const AGENTIC_USABLE_CONTEXT_ENV = "LOCAL_STUDIO_AGENTIC_USABLE_CONTEXT";
+
+//
+// A narrowing override for long end-to-end runs against a real card: it makes
+// the SCHEDULER behave as though its usable context were smaller, and touches
+// neither the model nor the served window. Unset in production, and it can
+// only ever narrow — computeContextBudget ignores a wider value.
+//
+export function usableContextOverride(env = process.env): number | null {
+  const raw = env[AGENTIC_USABLE_CONTEXT_ENV]?.trim();
+  if (!raw) return null;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.floor(parsed);
+}
+
+export function agenticBudgetPolicy(env = process.env): ContextBudgetPolicy {
+  return { ...DEFAULT_CONTEXT_BUDGET_POLICY, usableContextOverride: usableContextOverride(env) };
+}
+
+type RuntimeState = {
+  store: AgenticStore;
+  service: ReturnType<typeof createAgenticRunService>;
+  loops: Map<string, Promise<void>>;
+  cancellations: Map<string, Promise<void>>;
+  cancelled: Set<string>;
+  capabilities: Map<string, AgenticCapability>;
+  hiddenRollouts: Set<string>;
+  inferenceActivity: InferenceActivityRegistry;
+};
+
+//
+// A logical agent gets its own runtime session, so its working context, its
+// compaction history and its checkpoints are genuinely its own. The Run's own
+// session id is reserved for the conversation the owner started, which is what
+// keeps the chat that launched a Run readable afterwards.
+//
+const runtimeSessionKey = (run: AgenticRun, agent: AgenticAgent | null): string =>
+  agent ? `${run.sessionId}#${agent.id}` : run.sessionId;
+
+const piSessionFor = (run: AgenticRun, agent: AgenticAgent | null) =>
+  piRuntimeManager.getSessionForLookup(
+    runtimeSessionKey(run, agent),
+    agent ? agent.piSessionId : run.piSessionId,
+  ).session;
+
+const sessionFor = (
+  run: AgenticRun,
+  agent: AgenticAgent | null,
+  inferenceObserver?: InferenceActivityObserver,
+) =>
+  createPiAgenticSession({
+    session: piSessionFor(run, agent),
+    modelId: run.modelId,
+    cwd: run.cwd,
+    piSessionId: agent ? agent.piSessionId : run.piSessionId,
+    fallbackContextWindow: run.contextWindow,
+    startOptions: {
+      networkPolicy: run.networkPolicy,
+      executionPolicy: {
+        behaviorProfile: run.behaviorProfile,
+        networkPolicy: run.networkPolicy,
+      },
+      browserSessionId: runtimeSessionKey(run, agent),
+    },
+    inferenceObserver,
+  });
+
+const ROLLOUT_TITLE_CHARS = 72;
+
+const hideExecutionRollout = (
+  run: AgenticRun,
+  agent: AgenticAgent,
+  piSessionId: string,
+): Promise<void> => {
+  const goal = run.goal.replace(/\s+/g, " ").trim();
+  const short = goal.length > ROLLOUT_TITLE_CHARS ? `${goal.slice(0, ROLLOUT_TITLE_CHARS)}…` : goal;
+  return setSessionInternal(piSessionId, {
+    cwd: run.cwd,
+    title: `Run: ${short} — ${agent.name}`,
+  });
+};
+
+function createRuntime(): RuntimeState {
+  const store = createAgenticStore(resolveDataDir());
+  const capabilities = new Map<string, AgenticCapability>();
+  const hiddenRollouts = new Set<string>();
+  const cancelled = new Set<string>();
+  const inferenceActivity = createInferenceActivityRegistry();
+
+  const capabilityFor = (run: AgenticRun): AgenticCapability => {
+    const cached = capabilities.get(run.id);
+    if (cached) return cached;
+    const fallback = capabilityFromRun(run);
+    capabilities.set(run.id, fallback);
+    return fallback;
+  };
+
+  const service = createAgenticRunService({
+    store,
+    session: (run, agent) =>
+      sessionFor(run, agent, agent ? inferenceActivity.observer(run.id, agent.id) : undefined),
+    capabilityFor,
+    budgetPolicy: agenticBudgetPolicy(),
+    isCancelled: (runId) => cancelled.has(runId),
+  });
+
+  service.recover();
+
+  for (const run of store.listRuns()) {
+    for (const agent of store.listAgents(run.id)) {
+      if (!agent.piSessionId) continue;
+      const piSessionId = agent.piSessionId;
+      void hideExecutionRollout(run, agent, piSessionId)
+        .then(() => hiddenRollouts.add(piSessionId))
+        .catch(() => {});
+    }
+  }
+
+  return {
+    store,
+    service,
+    loops: new Map(),
+    cancellations: new Map(),
+    cancelled,
+    capabilities,
+    hiddenRollouts,
+    inferenceActivity,
+  };
+}
+
+const NETWORK_RECOVERY = new WeakSet<object>();
+
+//
+// Registers the Run's captured policy — which is what engages the boundary for
+// a Run recovered from disk — and answers whether it may take a turn now.
+//
+function egressPermitted(store: AgenticStore, run: AgenticRun): boolean {
+  const network = networkService();
+  if (run.networkPolicy !== "vpn_protected") return true;
+  network.setRunPolicy(run.id, run.networkPolicy);
+  if (network.mayEgress(run.networkPolicy)) return true;
+  if (run.status !== "PAUSED" && run.status !== "WAITING_USER") {
+    store.updateRun(run.id, { status: "PAUSED" });
+    store.appendEvent({
+      runId: run.id,
+      type: "RUN_INTERRUPTED",
+      summary: `protected network is ${network.currentState().toLowerCase()}; the run is paused until protection is restored`,
+    });
+  }
+  return false;
+}
+
+const FALLBACK_OUTPUT_SHARE = 0.2;
+
+//
+// For a Run whose model has left the catalogue. Derived from the window the
+// Run recorded rather than naming an output size, so one checkpoint's limits
+// never leak into another's budget. Tools stay true because reserving room for
+// a result nobody asked for is the safe direction.
+//
+export function capabilityFromRun(run: AgenticRun): AgenticCapability {
+  return {
+    modelId: run.modelId,
+    physicalModelId: run.physicalModelId,
+    displayName: run.modelDisplayName ?? run.physicalModelId,
+    behaviorProfile: run.behaviorProfile,
+    behaviorProfileLabel: null,
+    contextWindow: run.contextWindow,
+    maxOutputTokens: Math.max(512, Math.floor(run.contextWindow * FALLBACK_OUTPUT_SHARE)),
+    reasoning: false,
+    tools: true,
+    vision: false,
+    contextWindowDeclared: true,
+  };
+}
+const FINAL_TERMINAL = new Set(["COMPLETED", "FAILED", "CANCELLED"]);
+const DRIVE_STOPPED = new Set([...FINAL_TERMINAL, "WAITING_USER"]);
+const MAX_LOOP_STEPS = 10_000;
+const CANCEL_CONFIRMATION_TIMEOUT_MS = 15_000;
+
+async function settlesWithin(task: Promise<void>, timeoutMs: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), timeoutMs);
+  });
+  try {
+    return await Promise.race([task.then(() => true as const), deadline]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+export function agenticRuntime() {
+  const state = getGlobalSingleton("agenticRuntime", createRuntime);
+
+  //
+  // The capability is re-resolved from the live catalogue on every start and
+  // resume, so a backend restarted with a different -c moves the budget of a
+  // Run already in flight without a redeploy.
+  //
+  const resolveCapability = async (modelId: string): Promise<AgenticCapability> => {
+    const { models } = await refreshPiModels();
+    const model = models.find((entry: AgentModel) => entry.id === modelId);
+    if (!model) throw new Error(`Unknown model for an agentic run: ${modelId}`);
+    return resolveAgenticCapability(model);
+  };
+
+  const drive = async (runId: string): Promise<void> => {
+    for (let step = 0; step < MAX_LOOP_STEPS; step += 1) {
+      if (state.cancelled.has(runId)) return;
+      const run = state.store.requireRun(runId);
+      if (DRIVE_STOPPED.has(run.status)) return;
+      //
+      // THE GATE HAS TO BE HERE, because this is the loop that actually takes
+      // turns. run-service exposes startRun/resumeRun, but nothing in
+      // production calls them — this drive loop calls scheduler.advance
+      // directly, so a gate anywhere else is a gate on a road with no traffic.
+      // An adversarial review found exactly that.
+      //
+      // A turn runs tools and tools reach the network, so a protected Run may
+      // not take one while the boundary is not carrying traffic. It PAUSES,
+      // the way a lost backend pauses it: nothing about the goal was decided.
+      //
+      if (!egressPermitted(state.store, run)) return;
+      const capability = state.capabilities.get(runId) ?? (await resolveCapability(run.modelId));
+      const primaryAgent = state.store.listAgents(runId)[0] ?? null;
+      const observed = withRuntimeContextWindow(
+        capability,
+        (await state.service.scheduler.sessionFor(run, primaryAgent).readContext()).contextWindow,
+      );
+      state.capabilities.set(runId, observed);
+      if (observed.contextWindow !== run.contextWindow) {
+        //
+        // The window moved, so the budget derived from it moved too. Leaving
+        // the stored limit behind would show the owner a capacity the
+        // scheduler no longer uses.
+        //
+        state.store.updateRun(runId, {
+          contextWindow: observed.contextWindow,
+          usableLimit: computeContextBudget(observed, agenticBudgetPolicy()).usableLimit,
+        });
+      }
+      for (const agent of state.store.listAgents(runId)) {
+        const own = piSessionFor(run, agent).status.piSessionId;
+        if (own && own !== agent.piSessionId) {
+          state.store.updateAgent(agent.id, { piSessionId: own });
+        }
+        if (own && !state.hiddenRollouts.has(own)) {
+          try {
+            await hideExecutionRollout(run, agent, own);
+            state.hiddenRollouts.add(own);
+          } catch {}
+        }
+      }
+      if (state.cancelled.has(runId)) return;
+      await state.service.scheduler.advance(runId, observed);
+    }
+  };
+
+  const startLoop = (runId: string): void => {
+    if (state.loops.has(runId)) return;
+    state.cancelled.delete(runId);
+    const loop = drive(runId)
+      .catch((error: unknown) => {
+        if (state.cancelled.has(runId)) return;
+        //
+        // The backend going away is an accident of the moment, not a verdict
+        // on the goal, so it takes the road a killed process takes rather than
+        // ending the Run.
+        //
+        settleDriveFailure(state.store, runId, error);
+      })
+      .finally(() => {
+        state.loops.delete(runId);
+        //
+        // A finished Run stops asking for protection. Without this the boundary
+        // would stay up for the rest of the process's life after the last
+        // protected Run ended, routing everyone else through a tunnel nobody
+        // had asked for any more.
+        //
+        const status = state.store.getRun(runId)?.status;
+        if (status && FINAL_TERMINAL.has(status)) networkService().releaseRun(runId);
+      });
+    state.loops.set(runId, loop);
+  };
+
+  //
+  // A tunnel coming back is the mirror of the backend coming back: the Run was
+  // never wrong about anything, it simply had no route out. So it resumes by
+  // itself, the way it does after a compaction, instead of waiting for the
+  // owner to notice a paused Run and press something.
+  //
+  // Subscribed once per process. The runtime is a global singleton and a second
+  // subscription would start a second loop for every Run.
+  //
+  if (!NETWORK_RECOVERY.has(state)) {
+    NETWORK_RECOVERY.add(state);
+    networkService().onEvent((event) => {
+      if (event !== "vpn.protected" && event !== "vpn.reconnected") return;
+      for (const run of state.store.listUnfinishedRuns()) {
+        if (run.networkPolicy !== "vpn_protected" || run.status !== "PAUSED") continue;
+        //
+        // Only Runs this gate paused. A Run paused by crash reconciliation, by
+        // a lost backend, or by the owner was not waiting on the tunnel, and
+        // restoring the tunnel is no reason to start it running again — that
+        // would resume work the owner deliberately stopped.
+        //
+        const last = state.store.listEvents(run.id).at(-1);
+        if (last?.type !== "RUN_INTERRUPTED" || !last.summary.startsWith("protected network is")) {
+          continue;
+        }
+        state.store.appendEvent({
+          runId: run.id,
+          type: "RUN_RESUMED",
+          summary: "protected network was restored; the run continues",
+        });
+        state.store.updateRun(run.id, { status: "RUNNING" });
+        startLoop(run.id);
+      }
+    });
+  }
+
+  //
+  // A Run belongs to the chat session that started it. An agent's runtime
+  // session is that id with the agent appended, so a tool called from either
+  // finds the same Run.
+  //
+  const chatSessionOf = (sessionId: string): string => sessionId.split("#")[0] ?? sessionId;
+
+  const currentRunForConversation = (
+    sessionId: string,
+    piSessionId: string | null = null,
+  ): AgenticRun | null =>
+    state.store.currentRunForConversation({
+      sessionId: chatSessionOf(sessionId),
+      piSessionId,
+    });
+
+  const activeRunForSession = (
+    sessionId: string,
+    piSessionId: string | null = null,
+  ): AgenticRun | null => {
+    const run = currentRunForConversation(sessionId, piSessionId);
+    return run && !FINAL_TERMINAL.has(run.status) ? run : null;
+  };
+
+  //
+  // Publish the runtime for the control tools. They cannot import it directly
+  // without closing a module cycle, so it is pushed here once and pulled out
+  // when a tool handler runs.
+  //
+  setAgenticControlHost({
+    store: state.store,
+    activeRunForSession,
+    capabilityForRun: (run) => state.capabilities.get(run.id) ?? capabilityFromRun(run),
+    startRun: async (input) => {
+      const capability = await resolveCapability(input.modelId);
+      if (capability.behaviorProfile !== input.executionPolicy.behaviorProfile) {
+        throw new Error("The durable run behavior profile no longer matches its parent session.");
+      }
+      const committed = createRunFromPlan(state.store, {
+        plan: input.plan,
+        capability,
+        sessionId: input.sessionId,
+        piSessionId: input.piSessionId,
+        cwd: input.cwd,
+        networkPolicy: input.executionPolicy.networkPolicy,
+        budgetPolicy: agenticBudgetPolicy(),
+      });
+      state.capabilities.set(committed.run.id, capability);
+      startLoop(committed.run.id);
+      return {
+        run: committed.run,
+        tasks: committed.tasks,
+        agentNames: committed.agents.map((agent) => agent.name),
+      };
+    },
+    revisePlan: (input) => {
+      const run = state.store.requireRun(input.runId);
+      const capability = state.capabilities.get(run.id) ?? capabilityFromRun(run);
+      const committed = revisePlanForRun(state.store, {
+        runId: input.runId,
+        reason: input.reason,
+        plan: input.plan,
+        capability,
+      });
+      return {
+        run: committed.run,
+        tasks: committed.tasks,
+        agentNames: committed.agents.map((agent) => agent.name),
+      };
+    },
+    reportProgress: (input) =>
+      reportProgressForTask(state.store, { ...input, turnId: state.store.now() }),
+    readArtifact: (artifactId, offset, length) =>
+      state.store.readArtifactSlice(artifactId, offset, length),
+  });
+
+  return {
+    store: state.store,
+    service: state.service,
+    resolveCapability,
+    activeRunForSession,
+    currentRunForConversation,
+    listRuns: (): AgenticRun[] => state.store.listRuns(),
+    snapshot: (runId: string): AgenticRunSnapshot => {
+      const snapshot = state.service.snapshot(runId);
+      return {
+        ...snapshot,
+        inferenceActivity: state.inferenceActivity.snapshot(snapshot.run, snapshot.agents),
+      };
+    },
+    startRun: async (input: Omit<StartRunInput, "capability"> & { modelId: string }) => {
+      const capability = await resolveCapability(input.modelId);
+      const run = state.service.createRun({ ...input, capability });
+      state.capabilities.set(run.id, capability);
+      startLoop(run.id);
+      return run;
+    },
+    resumeRun: async (runId: string): Promise<AgenticRun> => {
+      const run = state.store.requireRun(runId);
+      if (FINAL_TERMINAL.has(run.status)) return run;
+      if (state.cancellations.has(runId) || state.loops.has(runId)) {
+        throw new Error("This Run is still settling. Wait a moment before resuming it.");
+      }
+      state.cancelled.delete(runId);
+      state.store.updateRun(runId, { status: "RUNNING" });
+      startLoop(runId);
+      return state.store.requireRun(runId);
+    },
+    cancelRun: async (
+      runId: string,
+    ): Promise<{ run: AgenticRun; cancellationPending: boolean }> => {
+      const initial = state.store.requireRun(runId);
+      if (FINAL_TERMINAL.has(initial.status)) {
+        return { run: initial, cancellationPending: false };
+      }
+      const existing = state.cancellations.get(runId);
+      if (existing) {
+        const settled = await settlesWithin(existing, CANCEL_CONFIRMATION_TIMEOUT_MS);
+        return { run: state.store.requireRun(runId), cancellationPending: !settled };
+      }
+      state.cancelled.add(runId);
+      const settle = (async () => {
+        await state.service.scheduler.abortRun(runId);
+        await state.loops.get(runId)?.catch(() => undefined);
+        const current = state.store.requireRun(runId);
+        if (!FINAL_TERMINAL.has(current.status)) state.service.cancelRun(runId);
+      })()
+        .catch((error: unknown) => {
+          const current = state.store.getRun(runId);
+          if (current && !FINAL_TERMINAL.has(current.status)) {
+            state.store.transaction(() => {
+              state.store.updateRun(runId, { status: "PAUSED" });
+              state.store.appendEvent({
+                runId,
+                type: "RUN_CANCELLATION_PAUSED",
+                summary: "cancellation could not confirm that inference became idle; Run paused",
+              });
+            });
+          }
+          throw error;
+        })
+        .finally(() => state.cancellations.delete(runId));
+      state.cancellations.set(runId, settle);
+      const settled = await settlesWithin(settle, CANCEL_CONFIRMATION_TIMEOUT_MS);
+      return {
+        run: state.store.requireRun(runId),
+        cancellationPending: !settled,
+      };
+    },
+    archiveRun: (runId: string, archived: boolean): AgenticRun =>
+      state.store.archiveRun(runId, archived),
+    deleteRun: async (runId: string): Promise<void> => {
+      if (state.loops.has(runId) || state.cancellations.has(runId)) {
+        throw new Error("The Run is still settling and cannot be deleted yet.");
+      }
+      const run = state.store.requireRun(runId);
+      const taskIds = state.store.listTasks(runId).map((task) => task.id);
+      const rolloutIds = state.store
+        .listAgents(runId)
+        .map((agent) => agent.piSessionId)
+        .filter((id): id is string => Boolean(id));
+      const usedElsewhere = new Set(
+        state.store
+          .listRuns()
+          .filter((entry) => entry.id !== runId)
+          .flatMap((entry) => state.store.listAgents(entry.id))
+          .map((agent) => agent.piSessionId)
+          .filter((id): id is string => Boolean(id)),
+      );
+      const metadataFor = readSessionListMetadata();
+      const targets: Array<{ source: string; quarantine: string }> = [];
+      for (const id of rolloutIds) {
+        if (id === run.piSessionId || usedElsewhere.has(id)) {
+          throw new Error(
+            "A Run rollout is shared with another durable record and was not deleted.",
+          );
+        }
+        const source = findSessionFile(run.cwd, id);
+        if (!source) continue;
+        if (!metadataFor(id).internal) {
+          throw new Error("A Run rollout is not marked internal and was not deleted.");
+        }
+        targets.push({ source, quarantine: `${source}.run-delete-${randomUUID()}` });
+      }
+      const quarantined: Array<{ source: string; quarantine: string }> = [];
+      try {
+        for (const target of targets) {
+          renameSync(target.source, target.quarantine);
+          quarantined.push(target);
+        }
+        state.store.deleteRun(runId);
+        state.service.forgetRun(runId, taskIds);
+        state.inferenceActivity.clearRun(runId);
+      } catch (error) {
+        for (const item of quarantined.reverse()) {
+          if (existsSync(item.quarantine)) renameSync(item.quarantine, item.source);
+        }
+        throw error;
+      }
+      for (const item of quarantined) {
+        try {
+          rmSync(item.quarantine, { force: true });
+        } catch {
+          // A quarantined rollout no longer appears in session listings. It is
+          // safer to leave an orphaned file than persist an arbitrary session
+          // path in the recursive artifact-cleanup manifest.
+        }
+      }
+      await forgetSessionMetadataMany(rolloutIds).catch((error) => {
+        console.warn("[agentic] Run deleted but internal rollout metadata cleanup failed", error);
+      });
+      for (const id of rolloutIds) state.hiddenRollouts.delete(id);
+      state.capabilities.delete(runId);
+      state.cancelled.delete(runId);
+    },
+    readArtifact: (artifactId: string, offset: number, length: number): string | null =>
+      state.store.readArtifactSlice(artifactId, offset, length),
+  };
+}

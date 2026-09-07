@@ -102,14 +102,24 @@ export function ModelLogo({
   label,
   size = "md",
   className,
+  remoteAvatar = true,
 }: {
   modelId: string;
   author?: string | null;
   label?: string;
   size?: "sm" | "md" | "lg";
   className?: string;
+  /**
+   * Fetch the owner's avatar from huggingface.co when an owner can be worked out.
+   *
+   * Pass `false` where guessing the owner would be a claim rather than a nicety. The guess is
+   * a substring match on the model string — `/llama/i` -> "meta-llama", `/gemma/i` -> "google"
+   * — so a locally served alias named `my-llama-helper` would wear Meta's mark on the say-so
+   * of its spelling. Off, the initials render and no request is made.
+   */
+  remoteAvatar?: boolean;
 }) {
-  const candidates = avatarOwnerCandidates(modelId, author, label);
+  const candidates = remoteAvatar ? avatarOwnerCandidates(modelId, author, label) : [];
   const imageKey = `${modelId}\u0000${candidates.join(",")}`;
   const [imageState, setImageState] = useState({ imageKey, index: 0, loaded: false });
   if (imageState.imageKey !== imageKey) setImageState({ imageKey, index: 0, loaded: false });

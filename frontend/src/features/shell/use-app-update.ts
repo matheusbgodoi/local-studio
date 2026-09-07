@@ -4,13 +4,25 @@ import { useCallback, useRef, useState } from "react";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 
 export type AppUpdatePhase = "idle" | "working" | "ready" | "failed";
+export type AppUpdateStatus =
+  | "idle"
+  | "checking"
+  | "available"
+  | "not-available"
+  | "downloading"
+  | "downloaded"
+  | "error";
 
 export type AppUpdate = {
   currentVersion: string | null;
   releaseChannel: "dev" | "stable" | null;
+  distribution: "owner-fork" | null;
+  updatePolicy: "manual-merge" | "owner-feed" | null;
   latestVersion: string | null;
   updateAvailable: boolean;
   phase: AppUpdatePhase;
+  status: AppUpdateStatus;
+  progress: number | null;
   startUpdate: () => void;
 };
 
@@ -24,19 +36,11 @@ export function isNewerVersion(candidate: string, current: string): boolean {
   return false;
 }
 
-export function isAppUpdateAvailable(
+function isAppUpdateAvailable(
   latestVersion: string | null,
   currentVersion: string | null,
 ): boolean {
   return Boolean(latestVersion && currentVersion && isNewerVersion(latestVersion, currentVersion));
-}
-
-export function isReleaseUpdateAvailable(
-  latestVersion: string | null,
-  currentVersion: string | null,
-  releaseChannel: "dev" | "stable" | null,
-): boolean {
-  return releaseChannel === "stable" && isAppUpdateAvailable(latestVersion, currentVersion);
 }
 
 const bridge = () => window.localStudioDesktop ?? {};
@@ -48,11 +52,39 @@ function phaseForStatus(status: string): AppUpdatePhase {
   return "idle";
 }
 
+function normalizedStatus(status: string): AppUpdateStatus {
+  if (
+    status === "checking" ||
+    status === "available" ||
+    status === "not-available" ||
+    status === "downloading" ||
+    status === "downloaded" ||
+    status === "error"
+  ) {
+    return status;
+  }
+  return "idle";
+}
+
+function snapshotProgress(snapshot: { progress?: number; message?: string }): number | null {
+  const parsed =
+    typeof snapshot.progress === "number"
+      ? snapshot.progress
+      : Number.parseFloat(snapshot.message ?? "");
+  if (!Number.isFinite(parsed)) return null;
+  return Math.min(100, Math.max(0, parsed));
+}
+
 export function useAppUpdate(): AppUpdate {
   const [currentVersion, setCurrentVersion] = useState<string | null>(null);
   const [releaseChannel, setReleaseChannel] = useState<"dev" | "stable" | null>(null);
-  const [latestVersion, setLatestVersion] = useState<string | null>(null);
+  const [distribution, setDistribution] = useState<"owner-fork" | null>(null);
+  const [updatePolicy, setUpdatePolicy] = useState<"manual-merge" | "owner-feed" | null>(null);
+  const [upstreamReferenceVersion, setUpstreamReferenceVersion] = useState<string | null>(null);
+  const [ownerFeedVersion, setOwnerFeedVersion] = useState<string | null>(null);
   const [phase, setPhase] = useState<AppUpdatePhase>("idle");
+  const [status, setStatus] = useState<AppUpdateStatus>("idle");
+  const [progress, setProgress] = useState<number | null>(null);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const syncDesktopPhase = useCallback(() => {
@@ -60,14 +92,22 @@ export function useAppUpdate(): AppUpdate {
     if (!getStatus) return;
     void getStatus().then(
       (snapshot) => {
-        const next = phaseForStatus(snapshot.status);
+        const nextStatus = normalizedStatus(snapshot.status);
+        const next = phaseForStatus(nextStatus);
+        setStatus(nextStatus);
         setPhase(next);
+        setProgress(nextStatus === "downloading" ? snapshotProgress(snapshot) : null);
+        if (snapshot.version) setOwnerFeedVersion(snapshot.version);
         if (next === "working") {
           if (pollTimer.current) clearTimeout(pollTimer.current);
           pollTimer.current = setTimeout(syncDesktopPhase, 2_000);
         }
       },
-      () => setPhase("failed"),
+      () => {
+        setStatus("error");
+        setPhase("failed");
+        setProgress(null);
+      },
     );
   }, []);
 
@@ -76,7 +116,7 @@ export function useAppUpdate(): AppUpdate {
     void fetch("/api/app-update", { cache: "no-store" })
       .then((response) => response.json() as Promise<{ latest?: string }>)
       .then((body) => {
-        if (!cancelled) setLatestVersion(body.latest ?? null);
+        if (!cancelled) setUpstreamReferenceVersion(body.latest ?? null);
       })
       .catch(() => undefined);
     void bridge()
@@ -85,6 +125,8 @@ export function useAppUpdate(): AppUpdate {
         if (!cancelled && runtime.packaged) {
           setCurrentVersion(runtime.appVersion);
           setReleaseChannel(runtime.releaseChannel);
+          setDistribution(runtime.distribution);
+          setUpdatePolicy(runtime.updatePolicy);
         }
       })
       .catch(() => undefined);
@@ -95,24 +137,41 @@ export function useAppUpdate(): AppUpdate {
     };
   }, [syncDesktopPhase]);
 
-  const updateAvailable = isReleaseUpdateAvailable(latestVersion, currentVersion, releaseChannel);
+  const latestVersion = updatePolicy === "owner-feed" ? ownerFeedVersion : upstreamReferenceVersion;
+  const ownerFeedHasNewerVersion = isAppUpdateAvailable(ownerFeedVersion, currentVersion);
+  const updateAvailable =
+    updatePolicy === "owner-feed" &&
+    releaseChannel === "stable" &&
+    ownerFeedHasNewerVersion &&
+    (status === "available" || status === "downloading" || status === "downloaded");
 
   const startUpdate = useCallback(() => {
     const desktop = bridge();
     if (!desktop.startUpdate) {
+      setStatus("error");
       setPhase("failed");
       return;
     }
+    setStatus("checking");
     setPhase("working");
-    void desktop.startUpdate().then(syncDesktopPhase, () => setPhase("failed"));
+    setProgress(null);
+    void desktop.startUpdate().then(syncDesktopPhase, () => {
+      setStatus("error");
+      setPhase("failed");
+      setProgress(null);
+    });
   }, [syncDesktopPhase]);
 
   return {
     currentVersion,
     releaseChannel,
+    distribution,
+    updatePolicy,
     latestVersion,
     updateAvailable,
     phase,
+    status,
+    progress,
     startUpdate,
   };
 }

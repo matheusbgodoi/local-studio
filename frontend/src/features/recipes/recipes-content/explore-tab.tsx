@@ -10,11 +10,14 @@ import {
 import { useExplore } from "./use-explore";
 import { useDownloads } from "@/hooks/use-downloads";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
+import { useControllerCapabilities } from "@/hooks/controller-capabilities-store";
 import api from "@/lib/api/client";
 import { LazyHuggingFaceModelCardPanel } from "@/ui/lazy-huggingface-model-card";
 import type { ModelFit } from "./hardware-profile";
 
 export function ExploreTab() {
+  const { capabilities } = useControllerCapabilities();
+  const catalogSupported = capabilities.features.catalog === "supported";
   const {
     groups,
     maxVramGb,
@@ -53,6 +56,10 @@ export function ExploreTab() {
   const completedSet = useRef<Set<string>>(new Set());
 
   const loadLocalModels = useCallback(async () => {
+    if (!catalogSupported) {
+      setLocalModelIds(new Set());
+      return;
+    }
     try {
       const data = await api.getModels();
       const ids = new Set<string>();
@@ -64,7 +71,7 @@ export function ExploreTab() {
       }
       setLocalModelIds(ids);
     } catch {}
-  }, []);
+  }, [catalogSupported]);
 
   useMountSubscription(() => {
     void loadLocalModels();

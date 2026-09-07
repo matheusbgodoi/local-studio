@@ -1,8 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Effect } from "effect";
-import { Check, Copy, ExternalLink, Smartphone, Upload } from "@/ui/icon-registry";
+import { Check, Upload } from "@/ui/icon-registry";
 import { Input } from "@/ui";
 import {
   PROFILE_HUES,
@@ -11,10 +10,7 @@ import {
   profileImageFromFile,
   useLocalProfile,
 } from "@/features/shell/local-profile";
-import { QrCode } from "@/features/shell/qr-code";
-import { useMountSubscription } from "@/hooks/use-mount-subscription";
-import { writeClipboardText } from "@/lib/clipboard";
-import { SettingsButton, SettingsGroup, SettingsLink } from "./settings-ui";
+import { SettingsButton, SettingsGroup } from "./settings-ui";
 
 export function ProfileSettings() {
   const [profile, updateProfile] = useLocalProfile();
@@ -114,137 +110,6 @@ export function ProfileSettings() {
           </div>
         </div>
       </SettingsGroup>
-      <PhonePairingSettings />
     </div>
-  );
-}
-
-function PhonePairingSettings() {
-  const [pairingJson, setPairingJson] = useState("");
-  const [copied, setCopied] = useState(false);
-  const [pairingError, setPairingError] = useState("");
-  const [pairingBusy, setPairingBusy] = useState(true);
-  const loadPairingJson = async (): Promise<string> => {
-    const desktop = window.localStudioDesktop?.getKittylitterPairingJson;
-    if (desktop) {
-      const result = await desktop();
-      if (!result.ok) throw new Error(result.error);
-      if (!result.pairingJson) throw new Error("Connection JSON is unavailable.");
-      setPairingJson(result.pairingJson);
-      setPairingError("");
-      return result.pairingJson;
-    }
-    const response = await fetch("/api/kittylitter/pairing", { method: "POST" });
-    const payload = (await response.json()) as { pairingJson?: unknown; error?: unknown };
-    if (!response.ok || typeof payload.pairingJson !== "string") {
-      throw new Error(
-        typeof payload.error === "string" ? payload.error : "Connection JSON is unavailable.",
-      );
-    }
-    setPairingJson(payload.pairingJson);
-    setPairingError("");
-    return payload.pairingJson;
-  };
-  const refreshPairing = (): Promise<void> =>
-    Effect.runPromise(
-      Effect.sync(() => {
-        setPairingBusy(true);
-        setPairingError("");
-      }).pipe(
-        Effect.andThen(Effect.tryPromise({ try: loadPairingJson, catch: (error) => error })),
-        Effect.asVoid,
-        Effect.catch((error) =>
-          Effect.sync(() =>
-            setPairingError(
-              error instanceof Error ? error.message : "Connection JSON is unavailable.",
-            ),
-          ),
-        ),
-        Effect.ensuring(Effect.sync(() => setPairingBusy(false))),
-      ),
-    );
-  useMountSubscription(() => {
-    void refreshPairing();
-  }, []);
-  const copy = async () => {
-    try {
-      const value = pairingJson || (await loadPairingJson());
-      const desktop = window.localStudioDesktop?.copyKittylitterPairingJson;
-      if (desktop) {
-        const result = await desktop(value);
-        if (!result.ok) throw new Error(result.error || "Connection JSON could not be copied.");
-      } else {
-        await writeClipboardText(value);
-      }
-      setCopied(true);
-      setPairingError("");
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch (error) {
-      setPairingError(error instanceof Error ? error.message : "Connection JSON is unavailable.");
-    }
-  };
-
-  return (
-    <SettingsGroup
-      title="Connect your phone"
-      description="Download the KittyLitter beta, then scan this code to connect it to your controller."
-    >
-      <div className="grid overflow-hidden sm:grid-cols-[240px_minmax(0,1fr)]">
-        <div className="flex items-center justify-center bg-(--ui-surface)/55 px-5 py-7 sm:min-h-[284px]">
-          <div className="flex h-48 w-48 items-center justify-center rounded-2xl bg-(--qr-surface) p-2.5 shadow-[var(--qr-shadow)]">
-            {pairingJson ? (
-              <QrCode value={pairingJson} label="KittyLitter controller connection QR code" />
-            ) : (
-              <span className="px-4 text-center text-[length:var(--fs-sm)] text-(--qr-placeholder)">
-                {pairingError && !pairingBusy ? "Controller unavailable" : "Preparing connection"}
-              </span>
-            )}
-          </div>
-        </div>
-        <div className="flex min-w-0 flex-col justify-center px-1 py-7 sm:px-8">
-          <div className="mb-5 flex h-9 w-9 items-center justify-center rounded-full bg-(--ui-hover) text-(--ui-fg)">
-            <Smartphone className="h-4.5 w-4.5" />
-          </div>
-          <h4 className="text-[length:var(--fs-lg)] font-medium tracking-[-0.01em] text-(--ui-fg)">
-            Get the KittyLitter beta
-          </h4>
-          <p className="mt-1.5 max-w-md text-[length:var(--fs-sm)] leading-relaxed text-(--ui-muted)">
-            Download and open KittyLitter on your phone, then use its scanner on this QR code. The
-            QR code and copied JSON grant access to all agents enabled on this controller, not only
-            Local Studio. Share them only with devices you trust.
-          </p>
-          <div className="mt-5 flex min-w-0 flex-wrap items-center gap-2">
-            <SettingsLink
-              href="https://kittylitter.app/"
-              tone="primary"
-              aria-label="Download the KittyLitter beta"
-            >
-              Download KittyLitter beta
-              <ExternalLink className="h-3.5 w-3.5" aria-hidden />
-            </SettingsLink>
-            <SettingsButton
-              onClick={() => void copy()}
-              disabled={pairingBusy}
-              aria-label="Copy KittyLitter connection JSON"
-            >
-              {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-              {copied ? "Copied" : "Copy connection JSON"}
-            </SettingsButton>
-          </div>
-          {pairingError && !pairingBusy ? (
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <p className="text-[length:var(--fs-sm)] text-(--err)">{pairingError}</p>
-              <SettingsButton
-                onClick={() => void refreshPairing()}
-                disabled={pairingBusy}
-                aria-label="Retry KittyLitter pairing"
-              >
-                Try again
-              </SettingsButton>
-            </div>
-          ) : null}
-        </div>
-      </div>
-    </SettingsGroup>
   );
 }

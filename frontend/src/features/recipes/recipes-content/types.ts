@@ -4,6 +4,7 @@ export type RecipesTableProps = {
   recipes: RecipeWithStatus[];
   pinnedRecipes: Set<string>;
   recipeMenuOpen: string | null;
+  lifecycleSupported: boolean;
   launching: boolean;
   runningRecipeId: string | null;
   onTogglePin: (recipeId: string) => void;

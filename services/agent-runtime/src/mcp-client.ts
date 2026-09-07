@@ -2,6 +2,15 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Tool, ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
+import { protectedEnvironment, protectedFetch, protectedSpawn } from "./network";
+import { assertNoInheritedDescriptors } from "./network/jail";
+
+//
+// Named once and asserted against the same name, so the assertion cannot drift
+// from the value actually handed to the child — checking a separate constant
+// would have passed while this said "inherit".
+//
+const STDIO_STDERR = "pipe" as const;
 
 export type McpToolAnnotations = ToolAnnotations;
 export type McpToolInfo = Tool;
@@ -47,11 +56,18 @@ const combinedSignal = (
 
 const authorizedFetch = (target: HttpTarget): typeof fetch =>
   async (input, init) => {
+    //
+    // Resolved per call, not captured once: protection can be engaged or
+    // released while a connector is pooled, and the transport outlives either
+    // transition. Resolving here means the next request follows the policy in
+    // force now, and throws rather than going direct if it cannot.
+    //
     const send = async (forceRefresh: boolean): Promise<Response> => {
+      const routed = protectedFetch(`the remote MCP connector at ${new URL(target.url).host}`);
       const headers = new Headers(init?.headers);
       const authorization = target.authorize ? await target.authorize(forceRefresh) : {};
       for (const [name, value] of Object.entries(authorization)) headers.set(name, value);
-      return fetch(input, {
+      return routed(input, {
         ...init,
         headers,
         redirect: target.authorize ? "error" : "follow",
@@ -64,14 +80,38 @@ const authorizedFetch = (target: HttpTarget): typeof fetch =>
 
 const transportFor = (target: McpTarget) => {
   if (target.transport === "stdio") {
+    //
+    // A local MCP server is an arbitrary program the owner installed, and it
+    // opens whatever sockets it likes. It runs on the session's behalf, so it
+    // goes inside the same boundary as everything else the agent starts —
+    // otherwise "protected" would mean protected except for connectors.
+    //
+    const jailed = protectedSpawn(target.command, target.args ?? []);
+    //
+    // `stderr: "pipe"` below is not a logging preference, it is the boundary.
+    // The SDK defaults that slot to "inherit", which hands the child the
+    // runtime's own fd 2 — measured, a connector given that inherited a live
+    // TCP socket and wrote through it from inside the jail while its own
+    // connect() returned EPERM. Asserted here so a future edit that "tidies"
+    // the option away fails loudly instead of quietly reopening it.
+    //
+    assertNoInheritedDescriptors(["pipe", "pipe", STDIO_STDERR]);
     return new StdioClientTransport({
-      command: target.command,
-      args: target.args ?? [],
-      env: { ...processEnvironment(), ...(target.env ?? {}) },
+      command: jailed.command,
+      args: jailed.args,
+      env: { ...processEnvironment(), ...protectedEnvironment(), ...(target.env ?? {}) },
       ...(target.cwd ? { cwd: target.cwd } : {}),
-      stderr: "pipe",
+      stderr: STDIO_STDERR,
     });
   }
+  //
+  // Routed rather than refused. A remote MCP server is reached with a fetch, and
+  // the global one takes no agent — so this hands the transport a fetch built on
+  // node:https whose only socket factory is the CONNECT tunnel. Measured against
+  // the real Gmail and Calendar endpoints: the full StreamableHTTP lifecycle,
+  // SSE included, crosses the tunnel, and with the tunnel killed it throws
+  // instead of finding another way out.
+  //
   return new StreamableHTTPClientTransport(new URL(target.url), {
     requestInit: { headers: target.headers ?? {} },
     fetch: authorizedFetch(target),

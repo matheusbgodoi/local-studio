@@ -1,6 +1,15 @@
 "use client";
 
-import { createContext, useContext, useId, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
+import { createPortal } from "react-dom";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 import { X } from "@/ui/icon-registry";
 import { POPOVER_PANEL_CLASS } from "./popover";
@@ -12,6 +21,7 @@ interface UiModalProps {
   children: ReactNode;
   className?: string;
   maxWidth?: string;
+  returnFocusRef?: RefObject<HTMLElement | null>;
 }
 
 const UiModalTitleIdContext = createContext<string | null>(null);
@@ -32,7 +42,14 @@ function focusableElements(dialog: HTMLDivElement): HTMLElement[] {
   );
 }
 
-function UiModal({ isOpen, onClose, children, className, maxWidth = "max-w-lg" }: UiModalProps) {
+function UiModal({
+  isOpen,
+  onClose,
+  children,
+  className,
+  maxWidth = "max-w-lg",
+  returnFocusRef,
+}: UiModalProps) {
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
   const [callbacks] = useState(() => ({ onClose }));
@@ -43,6 +60,16 @@ function UiModal({ isOpen, onClose, children, className, maxWidth = "max-w-lg" }
     const dialog = dialogRef.current;
     if (!dialog) return;
     const previousFocus = document.activeElement;
+    const modalRoot = dialog.parentElement;
+    const inerted = Array.from(document.body.children).flatMap((element) => {
+      if (element === modalRoot || !(element instanceof HTMLElement) || element.inert) return [];
+      element.inert = true;
+      return [element];
+    });
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousDocumentOverflow = document.documentElement.style.overflow;
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
     const focusables = focusableElements(dialog);
     (focusables[0] ?? dialog).focus();
     const onKeyDown = (event: KeyboardEvent) => {
@@ -71,22 +98,42 @@ function UiModal({ isOpen, onClose, children, className, maxWidth = "max-w-lg" }
         first.focus();
       }
     };
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("keydown", onKeyDown);
-      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
+    const containFocus = (event: FocusEvent) => {
+      if (dialog.contains(event.target as Node)) return;
+      const current = focusableElements(dialog);
+      (current[0] ?? dialog).focus();
     };
-  }, [isOpen]);
+    const blockOutsidePaste = (event: ClipboardEvent) => {
+      if (dialog.contains(event.target as Node)) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    document.addEventListener("focusin", containFocus, true);
+    document.addEventListener("paste", blockOutsidePaste, true);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown, true);
+      document.removeEventListener("focusin", containFocus, true);
+      document.removeEventListener("paste", blockOutsidePaste, true);
+      inerted.forEach((element) => {
+        element.inert = false;
+      });
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overflow = previousDocumentOverflow;
+      const returnTarget = returnFocusRef?.current ?? previousFocus;
+      if (returnTarget instanceof HTMLElement && returnTarget.isConnected) returnTarget.focus();
+    };
+  }, [isOpen, returnFocusRef]);
 
-  if (!isOpen) return null;
+  if (!isOpen || typeof document === "undefined") return null;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6">
+  return createPortal(
+    <div className="fixed inset-0 z-[1100] flex items-center justify-center overflow-y-auto bg-black/45 px-4 py-6 backdrop-blur-[2px] sm:px-6">
       <button
         type="button"
         tabIndex={-1}
         aria-hidden="true"
-        className="absolute inset-0 z-0 bg-(--color-background)"
+        className="absolute inset-0 z-0 cursor-default"
         onClick={onClose}
       />
       <div
@@ -96,14 +143,15 @@ function UiModal({ isOpen, onClose, children, className, maxWidth = "max-w-lg" }
         aria-modal="true"
         aria-labelledby={titleId}
         className={cx(
-          `relative z-10 max-h-full w-full outline-none ${POPOVER_PANEL_CLASS}`,
+          `relative z-10 max-h-[calc(100dvh-3rem)] w-full overflow-y-auto outline-none ${POPOVER_PANEL_CLASS}`,
           maxWidth,
           className,
         )}
       >
         <UiModalTitleIdContext.Provider value={titleId}>{children}</UiModalTitleIdContext.Provider>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

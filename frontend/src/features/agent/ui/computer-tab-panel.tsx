@@ -6,6 +6,7 @@ import {
   GitBranch,
   Globe2,
   MessageSquarePlus,
+  Target,
   TerminalSquare,
 } from "@/ui/icon-registry";
 import type { ToolsContextValue } from "@/features/agent/tools/context";
@@ -15,6 +16,12 @@ import type { Session, UpdateSession } from "@/features/agent/runtime/types";
 import type { AgentModel } from "@/features/agent/workspace/types";
 import { AgentModelPicker } from "@/features/agent/ui/agent-model-picker";
 import { ChatPane } from "@/features/agent/ui/chat-pane";
+import { thinkingAfterModelSelection } from "@/features/agent/messages/thinking-level-pref";
+import {
+  browserThinkingStorage,
+  readModelThinkingLevel,
+  writeModelThinkingLevel,
+} from "@/features/agent/workspace/thinking-level-preference";
 
 const LazyAgentBrowser = lazy(() =>
   import("@/features/agent/ui/agent-browser").then(({ AgentBrowser }) => ({
@@ -34,6 +41,11 @@ const LazyFilesystemPanel = lazy(() =>
 const LazyGitDiffPanel = lazy(() =>
   import("@/features/agent/ui/git-diff-panel").then(({ GitDiffPanel }) => ({
     default: GitDiffPanel,
+  })),
+);
+const LazyRunSessionPanel = lazy(() =>
+  import("@/features/runs/run-session-panel").then(({ RunSessionPanel }) => ({
+    default: RunSessionPanel,
   })),
 );
 
@@ -64,6 +76,7 @@ export function ComputerTabPanel(props: ComputerTabPanelProps) {
   const panels: Record<ComputerTab, ReactNode> = {
     status: <StatusTab {...props} />,
     tools: <ComputerLauncherPanel activeTab={props.tools.computer.tab} {...props} />,
+    run: <RunTab focusedSession={props.focusedSession} />,
     "side-chat": <SideChatTab {...props} />,
     browser: <BrowserTab {...props} />,
     files: <FilesTab cwd={focusedCwd} />,
@@ -119,7 +132,6 @@ function SideChatTab({
       <ChatPane
         paneId="computer-side-chat"
         modelId={modelId}
-        modelName={selectedModel?.name ?? modelId}
         modelSupportsVision={selectedModel?.vision ?? false}
         modelThinkingLevels={selectedModel?.thinkingLevels ?? ["off"]}
         modelsLoading={modelsLoading}
@@ -130,17 +142,35 @@ function SideChatTab({
           <AgentModelPicker
             models={models}
             selectedModel={modelId}
-            onSelect={(nextModelId) =>
-              onUpdateSideChatTabs((tabs) => tabs.map((tab) => ({ ...tab, modelId: nextModelId })))
-            }
+            onSelect={(selection) => {
+              const levels = models.find((model) => model.id === selection.modelId)
+                ?.thinkingLevels ?? ["off"];
+              const thinking = thinkingAfterModelSelection(
+                selection,
+                levels,
+                readModelThinkingLevel(browserThinkingStorage(), selection.modelId),
+              );
+              onUpdateSideChatTabs((tabs) =>
+                tabs.map((tab) => ({
+                  ...tab,
+                  modelId: selection.modelId,
+                  thinkingLevel: thinking.level,
+                })),
+              );
+              if (thinking.remember) {
+                writeModelThinkingLevel(
+                  browserThinkingStorage(),
+                  selection.modelId,
+                  thinking.level,
+                );
+              }
+            }}
             loading={modelsLoading}
             {...reasoning}
           />
         )}
-        browserToolEnabled={tools.browser.enabled}
         browserBackend={tools.browser.backend}
         onToggleBrowserBackend={tools.toggleBrowserBackend}
-        onToggleBrowserTool={tools.toggleBrowser}
         isFocused
         onFocus={() => undefined}
         tabs={[sideChatSession]}
@@ -156,9 +186,11 @@ function SideChatTab({
   );
 }
 
-function BrowserTab({ onNavigateBrowser, tools }: ComputerTabPanelProps) {
+function BrowserTab({ onNavigateBrowser, tools, focusedSession }: ComputerTabPanelProps) {
   return (
     <LazyAgentBrowser
+      key={focusedSession?.id ?? "default-browser"}
+      sessionId={focusedSession?.id}
       url={tools.browser.url}
       inputValue={tools.browser.input}
       onInputChange={tools.setBrowserInput}
@@ -166,6 +198,15 @@ function BrowserTab({ onNavigateBrowser, tools }: ComputerTabPanelProps) {
       onLocationChange={(next) => tools.setBrowserUrl(next, next)}
       onClose={() => tools.setComputerOpen(false)}
       visible={tools.computer.open}
+    />
+  );
+}
+
+function RunTab({ focusedSession }: { focusedSession: Session | null }) {
+  return (
+    <LazyRunSessionPanel
+      sessionId={focusedSession?.id ?? null}
+      piSessionId={focusedSession?.piSessionId ?? null}
     />
   );
 }
@@ -195,6 +236,13 @@ function ComputerLauncherPanel({
   tools,
 }: ComputerTabPanelProps & { activeTab: ComputerTab }) {
   const cards = [
+    {
+      key: "run",
+      title: "Run",
+      description: "Follow this conversation's durable Run",
+      icon: Target,
+      onClick: () => tools.setComputerTab("run"),
+    },
     {
       key: "files",
       title: "Files",

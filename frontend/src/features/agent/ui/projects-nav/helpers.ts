@@ -9,8 +9,10 @@ import {
 import { ADD_PROJECT_EVENT, SESSIONS_CHANGED_EVENT } from "@/lib/workspace-events";
 import type { Project as ProjectEntry } from "@/features/agent/projects/types";
 import type { ActiveAgentSession } from "./types";
+import type { NetworkPolicy } from "@shared/agent/network-policy";
 
 const SESSION_NAV_TITLE_PREFIX = "local-studio.agent.sessionNavTitle:";
+const SESSION_NAV_STATE_PREFIX = "local-studio.agent.sessionNavState:";
 let lastNavigationTimestamp = 0;
 let navigationSequence = 0;
 
@@ -130,6 +132,88 @@ export function consumeAgentSessionNavTitle(sessionId: string | null | undefined
   } catch {
     return undefined;
   }
+}
+
+export type AgentSessionNavState = {
+  title: string;
+  modelId: string | null;
+  networkPolicy: NetworkPolicy | null;
+};
+
+export function rememberAgentSessionNavState(sessionId: string, state: AgentSessionNavState): void {
+  rememberAgentSessionNavTitle(sessionId, state.title);
+  try {
+    window.sessionStorage.setItem(`${SESSION_NAV_STATE_PREFIX}${sessionId}`, JSON.stringify(state));
+  } catch {
+    return;
+  }
+}
+
+export function consumeAgentSessionNavState(
+  sessionId: string | null | undefined,
+): AgentSessionNavState | null {
+  if (typeof window === "undefined" || !sessionId) return null;
+  const key = `${SESSION_NAV_STATE_PREFIX}${sessionId}`;
+  try {
+    const raw = window.sessionStorage.getItem(key);
+    window.sessionStorage.removeItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<AgentSessionNavState>;
+    const networkPolicy =
+      parsed.networkPolicy === "direct" || parsed.networkPolicy === "vpn_protected"
+        ? parsed.networkPolicy
+        : null;
+    return {
+      title: typeof parsed.title === "string" ? parsed.title : "",
+      modelId: typeof parsed.modelId === "string" ? parsed.modelId : null,
+      networkPolicy,
+    };
+  } catch {
+    return null;
+  }
+}
+
+//
+// Irreversible, unlike archiving: the transcript is removed from disk and the
+// metadata that described it is forgotten. The confirmation lives at the call
+// site rather than here, so this stays a plain client call.
+//
+export async function deleteSession(sessionId: string, project: ProjectEntry): Promise<void> {
+  const response = await fetch(
+    `/api/agent/sessions/${encodeURIComponent(sessionId)}?cwd=${encodeURIComponent(project.path)}`,
+    { method: "DELETE" },
+  );
+  const payload = await safeJson<{ error?: string }>(response);
+  if (!response.ok) {
+    throw new Error(payload.error || "Failed to delete session");
+  }
+}
+
+//
+// A conversation's project is where its transcript lives on disk, not a field
+// beside it, so this is its own route rather than a variation of the archive
+// PATCH — see handleSessionMove. Both ends are sent because the runtime has to
+// find the file under the source project before it can put it under the target.
+//
+// There is no separate "remove from project": the Chats project is where a
+// conversation with no project of its own lives, so moving there is what taking
+// it out means.
+//
+export async function moveSessionToProject(
+  sessionId: string,
+  from: ProjectEntry,
+  to: ProjectEntry,
+): Promise<void> {
+  const response = await fetch(`/api/agent/sessions/${encodeURIComponent(sessionId)}/project`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ from: from.path, to: to.path }),
+  });
+  const payload = await safeJson<{ error?: string }>(response);
+  if (!response.ok) {
+    throw new Error(payload.error || "Failed to move session");
+  }
+  window.dispatchEvent(new Event(SESSIONS_CHANGED_EVENT));
 }
 
 export async function setSessionArchive(

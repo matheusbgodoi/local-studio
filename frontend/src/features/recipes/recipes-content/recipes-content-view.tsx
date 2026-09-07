@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { Compass, Download, HardDrive, Sparkles } from "@/ui/icon-registry";
+import { Compass, Cpu, Download, HardDrive, Sparkles } from "@/ui/icon-registry";
 import type { ModelDownload, ModelInfo, RecipeWithStatus, RuntimeTarget } from "@/lib/types";
 import type { RecipeEditor } from "@/features/recipes/recipe-editor";
 import { RefreshButton, TabbedPage, Tabs } from "@/ui";
@@ -13,13 +13,19 @@ import { RecipeModal } from "../recipe-modal/recipe-modal";
 import { ExploreTab } from "./explore-tab";
 import { DownloadsTab } from "./downloads-tab";
 import { PicksTab } from "./picks-tab";
+import { LocalModelsTab } from "./local-models-tab";
 
 type Props = {
   embedded?: boolean;
   tab: RecipesContentTab;
+  lifecycleSupported: boolean;
+  modelIndexSupported: boolean;
+  downloadQueueSupported: boolean;
+  recipesSupported: boolean;
   setTab: (tab: RecipesContentTab) => void;
   loading: boolean;
   refreshing: boolean;
+  recipesError: string | null;
   filter: string;
   setFilter: (value: string) => void;
   modalOpen: boolean;
@@ -35,25 +41,31 @@ type Props = {
   availableModels: ModelInfo[];
   runtimeTargets: RuntimeTarget[];
   sortedRecipes: RecipeWithStatus[];
-  onRefresh: () => void;
+  onRefreshRecipes: () => void;
   onNewRecipe: () => void;
-  onCreateServeFromDownload: (download: ModelDownload) => void;
+  onCreateServeFromDownload?: (download: ModelDownload) => void;
   onSaveRecipe: () => void;
   onCloseRecipeModal: () => void;
   onCancelDelete: () => void;
   onConfirmDelete: () => void;
-  onEvictModel: () => void;
+  onEvictModel: () => Promise<void> | void;
   table: RecipesTableProps;
 };
 
 const MODEL_TABS: Array<{ id: RecipesContentTab; label: string; icon: ReactNode }> = [
+  { id: "local", label: "Local", icon: <Cpu className="h-3.5 w-3.5" /> },
   { id: "picks", label: "Picks", icon: <Sparkles className="h-3.5 w-3.5" /> },
   { id: "get", label: "Get", icon: <Compass className="h-3.5 w-3.5" /> },
-  { id: "serves", label: "Serves", icon: <HardDrive className="h-3.5 w-3.5" /> },
+  { id: "serves", label: "Launch profiles", icon: <HardDrive className="h-3.5 w-3.5" /> },
   { id: "downloads", label: "Downloads", icon: <Download className="h-3.5 w-3.5" /> },
 ];
 
 const TAB_HEADINGS: Record<RecipesContentTab, { title: string; description: string }> = {
+  local: {
+    title: "Local models",
+    description:
+      "The models this backend is serving right now, the GPUs behind them, and which one is resident.",
+  },
   picks: {
     title: "Picks",
     description: "Curated model catalog grouped by hardware tier, with per-variant downloads.",
@@ -63,8 +75,8 @@ const TAB_HEADINGS: Record<RecipesContentTab, { title: string; description: stri
     description: "Find the right model, check hardware fit, and download its weights.",
   },
   serves: {
-    title: "Serves",
-    description: "Saved model, runtime, and configuration combinations ready to launch.",
+    title: "Launch profiles",
+    description: "Saved combinations of model weights, runtime, and launch settings.",
   },
   downloads: {
     title: "Downloads",
@@ -76,9 +88,14 @@ export function RecipesContentView(props: Props) {
   const {
     embedded = false,
     tab,
+    lifecycleSupported,
+    modelIndexSupported,
+    downloadQueueSupported,
+    recipesSupported,
     setTab,
     loading,
     refreshing,
+    recipesError,
     filter,
     setFilter,
     modalOpen,
@@ -94,7 +111,7 @@ export function RecipesContentView(props: Props) {
     availableModels,
     runtimeTargets,
     sortedRecipes,
-    onRefresh,
+    onRefreshRecipes,
     onNewRecipe,
     onCreateServeFromDownload,
     onSaveRecipe,
@@ -105,6 +122,12 @@ export function RecipesContentView(props: Props) {
     table,
   } = props;
   const heading = TAB_HEADINGS[tab];
+  const modelTabs = MODEL_TABS.filter((candidate) => {
+    if (candidate.id === "local") return true;
+    if (candidate.id === "serves") return recipesSupported;
+    if (candidate.id === "picks") return modelIndexSupported;
+    return downloadQueueSupported;
+  });
   const content = (
     <section>
       <h2 className="text-[length:var(--fs-2xl)] font-medium tracking-[-0.015em] text-(--ui-fg)">
@@ -112,9 +135,12 @@ export function RecipesContentView(props: Props) {
       </h2>
       <p className="mt-1 text-[length:var(--fs-sm)] text-(--ui-muted)">{heading.description}</p>
       <div className="mt-6">
-        {tab === "serves" ? (
+        {tab === "local" ? (
+          <LocalModelsTab />
+        ) : tab === "serves" ? (
           <RecipesTab
             loading={loading}
+            loadError={recipesError}
             filter={filter}
             setFilter={setFilter}
             recipes={recipes}
@@ -137,18 +163,21 @@ export function RecipesContentView(props: Props) {
     </section>
   );
 
+  const showHeaderRefresh = tab === "serves" && recipesSupported;
   return (
     <>
       {embedded ? (
         <div className="space-y-6">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-(--ui-separator) pb-3">
-            <Tabs variant="pill" items={MODEL_TABS} activeTab={tab} onSelectTab={setTab} />
-            <RefreshButton
-              onRefresh={onRefresh}
-              loading={refreshing || loading}
-              label="Refresh models"
-              className="h-8 w-8"
-            />
+            <Tabs variant="pill" items={modelTabs} activeTab={tab} onSelectTab={setTab} />
+            {showHeaderRefresh ? (
+              <RefreshButton
+                onRefresh={onRefreshRecipes}
+                loading={refreshing || loading}
+                label="Refresh launch profiles"
+                className="h-8 w-8"
+              />
+            ) : null}
           </div>
           {content}
         </div>
@@ -156,18 +185,24 @@ export function RecipesContentView(props: Props) {
         <TabbedPage
           eyebrow="Model library"
           title="Models"
-          description="Manage model profiles, downloads, and the model marketplace available to Local Studio."
+          description={
+            modelIndexSupported || downloadQueueSupported || recipesSupported
+              ? "Models currently served, plus catalogs, downloads, and launch profiles."
+              : "Models currently served by this inference gateway."
+          }
           width="md"
-          tabs={MODEL_TABS}
+          tabs={modelTabs}
           activeTab={tab}
           onSelectTab={setTab}
           actions={
-            <RefreshButton
-              onRefresh={onRefresh}
-              loading={refreshing || loading}
-              label="Refresh models"
-              className="h-8 w-8"
-            />
+            showHeaderRefresh ? (
+              <RefreshButton
+                onRefresh={onRefreshRecipes}
+                loading={refreshing || loading}
+                label="Refresh launch profiles"
+                className="h-8 w-8"
+              />
+            ) : null
           }
         >
           {content}

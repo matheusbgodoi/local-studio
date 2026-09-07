@@ -13,6 +13,7 @@ import {
   evaluateRequestBoundary,
   splitAllowedValues,
 } from "@/lib/security/request-boundary";
+import { redeemPairingTicket } from "@/lib/auth/pairing-ticket";
 
 const TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 const PROCESS_CSRF_TOKEN = crypto.randomUUID();
@@ -27,6 +28,79 @@ function denyResponse(isApi: boolean, status: number, message: string): NextResp
   return new NextResponse(message, { status });
 }
 
+//
+// The 401 a browser gets is a page it can act on, not a dead end.
+//
+// Pairing normally happens by opening a one-time `?token=` URL, but a cookie
+// only pairs the container it was set in — and on iOS a Home Screen web app has
+// its own, separate from Safari. So the app installed from a paired Safari tab
+// still opens to "Unauthorized" with no way forward. This gives every container
+// the same self-service way in: paste the token once, and the existing query
+// pairing takes it from there.
+//
+// No script, and the field is a password input with autocapitalise and
+// autocorrect off — iOS will otherwise capitalise the first character of the
+// token and the paste silently fails.
+//
+function pairingPage(): NextResponse {
+  const html = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>CRIAs AI</title>
+<style>
+  :root { color-scheme: dark }
+  body { margin:0; min-height:100dvh; display:grid; place-items:center;
+         background:#1a1917; color:#e8e6e3;
+         font:16px/1.5 -apple-system, system-ui, sans-serif; padding:24px }
+  form { width:100%; max-width:22rem }
+  h1 { font-size:19px; margin:0 0 8px; font-weight:600 }
+  p { margin:0 0 20px; color:#e8e6e3a0; font-size:14px }
+  input, button { width:100%; box-sizing:border-box; font-size:16px;
+                  border-radius:10px; padding:12px 14px; margin-bottom:10px }
+  input { background:#26241f; color:#e8e6e3; border:1px solid #3a372f }
+  button { background:#e8e6e3; color:#1a1917; border:0; font-weight:600; min-height:44px }
+</style></head>
+<body><form method="GET">
+  <h1>Pair this device</h1>
+  <p>This browser has not been paired yet. Paste the access token to continue.</p>
+  <input name="token" type="password" inputmode="text" autocomplete="current-password"
+         autocapitalize="off" autocorrect="off" spellcheck="false"
+         placeholder="Access token" aria-label="Access token" required autofocus>
+  <button type="submit">Pair</button>
+</form></body></html>`;
+  return new NextResponse(html, {
+    status: 401,
+    headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
+  });
+}
+
+function effectiveRequestProtocol(request: NextRequest): string {
+  return (
+    request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase() ||
+    request.nextUrl.protocol.replace(/:$/, "")
+  );
+}
+
+function pairedRedirect(
+  request: NextRequest,
+  queryKey: "token" | "pair",
+  token: string,
+): NextResponse {
+  const clean = request.nextUrl.clone();
+  clean.searchParams.delete(queryKey);
+  const response = NextResponse.redirect(clean);
+  response.cookies.set(STUDIO_TOKEN_COOKIE, token, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: effectiveRequestProtocol(request) === "https",
+    path: "/",
+    maxAge: TOKEN_MAX_AGE_SECONDS,
+  });
+  response.headers.set("Cache-Control", "no-store");
+  response.headers.set("Referrer-Policy", "no-referrer");
+  return response;
+}
+
 function enforceAccess(request: NextRequest): NextResponse | null {
   const posture = resolveAccessPosture();
   if (posture.kind === "allow") return null;
@@ -36,17 +110,12 @@ function enforceAccess(request: NextRequest): NextResponse | null {
 
   const queryToken = url.searchParams.get("token");
   if (queryToken && timingSafeStringEqual(queryToken.trim(), posture.token)) {
-    const clean = url.clone();
-    clean.searchParams.delete("token");
-    const redirect = NextResponse.redirect(clean);
-    redirect.cookies.set(STUDIO_TOKEN_COOKIE, posture.token, {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: url.protocol === "https:",
-      path: "/",
-      maxAge: TOKEN_MAX_AGE_SECONDS,
-    });
-    return redirect;
+    return pairedRedirect(request, "token", posture.token);
+  }
+
+  const pairingTicket = url.searchParams.get("pair");
+  if (pairingTicket && redeemPairingTicket(pairingTicket, posture.token)) {
+    return pairedRedirect(request, "pair", posture.token);
   }
 
   const presented = presentedToken(
@@ -55,7 +124,7 @@ function enforceAccess(request: NextRequest): NextResponse | null {
   );
   if (presented && timingSafeStringEqual(presented, posture.token)) return null;
 
-  return denyResponse(isApi, 401, "Unauthorized");
+  return isApi ? denyResponse(true, 401, "Unauthorized") : pairingPage();
 }
 
 export function proxy(request: NextRequest) {
@@ -107,7 +176,7 @@ function clientIpOf(request: NextRequest): string {
 /** Credentials routinely arrive as query parameters; they must never be logged. */
 function redactedQuery(request: NextRequest): string {
   const sanitizedUrl = request.nextUrl.clone();
-  for (const sensitiveKey of ["api_key", "key", "token", "access_token"]) {
+  for (const sensitiveKey of ["api_key", "key", "token", "pair", "access_token"]) {
     if (sanitizedUrl.searchParams.has(sensitiveKey)) {
       sanitizedUrl.searchParams.set(sensitiveKey, "[redacted]");
     }
@@ -151,13 +220,10 @@ function applySecurityHeaders(request: NextRequest, response: NextResponse): voi
   // `secure` must follow the scheme the browser actually sees (cloudflared
   // forwards https as x-forwarded-proto) — a Secure cookie over plain-http
   // Tailscale access is silently dropped and every mutation then fails CSRF.
-  const effectiveProto =
-    request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase() ||
-    request.nextUrl.protocol.replace(/:$/, "");
   response.cookies.set(CSRF_COOKIE, PROCESS_CSRF_TOKEN, {
     httpOnly: false,
     sameSite: "strict",
-    secure: effectiveProto === "https",
+    secure: effectiveRequestProtocol(request) === "https",
     path: "/",
   });
 }

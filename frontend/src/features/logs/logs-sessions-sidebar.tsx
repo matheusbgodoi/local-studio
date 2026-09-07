@@ -70,13 +70,15 @@ export function LogsSessionsSidebar({
         <Button
           variant="icon"
           size="sm"
-          disabled={session.id === "controller"}
+          disabled={session.id === "controller" || session.deletable === false}
           onClick={(event) => {
             event.stopPropagation();
             onDeleteSession(session.id);
           }}
           className={`p-1 text-(--dim) opacity-0 group-hover:opacity-100 transition-all ${
-            session.id === "controller" ? "cursor-not-allowed opacity-20" : "hover:text-(--err)"
+            session.id === "controller" || session.deletable === false
+              ? "cursor-not-allowed opacity-20"
+              : "hover:text-(--err)"
           }`}
         >
           <Trash2 className="h-3.5 w-3.5" />

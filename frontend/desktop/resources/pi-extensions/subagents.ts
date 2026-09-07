@@ -1,17 +1,14 @@
-// Subagent tool for Local Studio.
-//
-// Registers a `subagent` tool that spawns an independent child agent session
-// in the runtime (same project, own context) and returns its final report as
-// the tool result. Multiple calls in one turn run in parallel. The runtime
-// enforces a concurrency cap and forbids subagents from spawning their own.
-//
-// Calls proxy through the frontend like the connectors bridge, so this file
-// stays a plain pi extension with no runtime imports.
-
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 const FRONTEND_BASE = process.env.LOCAL_STUDIO_FRONTEND_BASE ?? "http://127.0.0.1:3000";
+// Present only while the app is published; the frontend then requires it of
+// every caller, with no exemption for ones running on this machine.
+const FRONTEND_TOKEN = process.env.LOCAL_STUDIO_FRONTEND_TOKEN;
+const STUDIO_HEADERS: Record<string, string> = {
+  "Content-Type": "application/json",
+  ...(FRONTEND_TOKEN ? { "x-local-studio-token": FRONTEND_TOKEN } : {}),
+};
 const RUN_TIMEOUT_MS = 15 * 60_000;
 
 type ToolResult = {
@@ -62,7 +59,7 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
       try {
         const response = await fetch(`${FRONTEND_BASE}/api/agent/subagents`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: STUDIO_HEADERS,
           body: JSON.stringify({
             parentPiSessionId: sessionId,
             name: args.name ?? "Subagent",

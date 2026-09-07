@@ -1,4 +1,10 @@
 import type { DesktopUpdateSnapshot } from "./types";
+import type {
+  DictationShortcutMode,
+  DictationShortcutRequest,
+  DictationShortcutResult,
+  DictationShortcutState,
+} from "./dictation-shortcut-contract";
 
 export interface ProjectEntry {
   id: string;
@@ -61,15 +67,30 @@ export interface QuickPanelBridge {
   setHotkey(hotkey: string): Promise<QuickPanelHotkeyResult>;
 }
 
+export type {
+  DictationShortcutMode,
+  DictationShortcutRequest,
+  DictationShortcutResult,
+  DictationShortcutState,
+} from "./dictation-shortcut-contract";
+
+export interface DictationShortcutBridge {
+  get(): Promise<DictationShortcutState>;
+  set(input: { mode: DictationShortcutMode; hotkey: string }): Promise<DictationShortcutResult>;
+  registerTarget(ownerId: string, active: boolean): Promise<void>;
+  reportRecording(ownerId: string, recording: boolean): Promise<void>;
+  onRequest(listener: (request: DictationShortcutRequest) => void): () => void;
+}
+
 export interface ControllerDeployResultPayload {
   ok: boolean;
   url?: string;
-  apiKey?: string;
+  hasApiKey?: boolean;
   error?: string;
 }
 
 export interface ControllerDeployBridge {
-  /** Deploy a controller to an ssh host; resolves with url + api key. */
+  /** Deploy a controller to an ssh host. */
   start(options: {
     host: string;
     port?: number;
@@ -79,27 +100,65 @@ export interface ControllerDeployBridge {
   onLog(listener: (line: string) => void): () => void;
 }
 
-export interface KittylitterPairingResult {
+export interface SaveTextFileRequest {
+  defaultFileName: string;
+  content: string;
+}
+
+export interface SaveTextFileResult {
   ok: boolean;
-  pairingJson?: string;
+  canceled?: boolean;
+  filePath?: string;
   error?: string;
 }
 
-export interface KittylitterCopyResult {
-  ok: boolean;
-  error?: string;
+export type SessionTitleResult = { ok: true; title: string } | { ok: false; reason: string };
+
+export interface RemoteAccessInfo {
+  enabled: boolean;
+  url: string | null;
+  tokenAvailable: boolean;
 }
+
+export type RemoteAccessPairingCodeResult =
+  | { ok: true; dataUrl: string }
+  | { ok: false; reason: string };
+
+/** On-device dictation. The audio never enters the renderer and never leaves the machine —
+ *  the helper opens the microphone itself and only ever sends back text. */
+export type DictationProbeResult = {
+  available: boolean;
+  locale?: string;
+  localeMatch?: string;
+  assetStatus?: string;
+  reason?: string;
+};
+
+export type DictationBridgeEvent =
+  | { type: "ready"; locale: string }
+  | { type: "partial"; text: string }
+  | { type: "final"; text: string }
+  | { type: "error"; code: string; message: string }
+  | { type: "done" };
 
 export interface DesktopBridge {
+  probeDictation(locale: string): Promise<DictationProbeResult>;
+  startDictation(locale: string): Promise<{ started: boolean; reason?: string }>;
+  stopDictation(mode: "stop" | "cancel"): Promise<{ ok: boolean }>;
+  /** Returns its own unsubscribe. */
+  onDictationEvent(listener: (event: DictationBridgeEvent) => void): () => void;
   getRuntime(): Promise<{
     platform: NodeJS.Platform;
     appVersion: string;
     packaged: boolean;
     releaseChannel: "dev" | "stable";
+    distribution: "owner-fork";
+    updatePolicy: "manual-merge" | "owner-feed";
     chromeVersion: string;
     electronVersion: string;
   }>;
   openExternal(url: string): Promise<boolean>;
+  notify(payload: { title: string; body: string }): Promise<boolean>;
   /** Reveal a file in Finder/Explorer. Returns false when outside the home tree. */
   revealPath(target: string): Promise<boolean>;
   /** Open a file with its default application. False when outside the home tree. */
@@ -107,6 +166,11 @@ export interface DesktopBridge {
   getUpdateStatus(): Promise<DesktopUpdateSnapshot>;
   startUpdate(): Promise<DesktopUpdateSnapshot>;
   openDirectory(): Promise<ProjectEntry | null>;
+  saveTextFile(request: SaveTextFileRequest): Promise<SaveTextFileResult>;
+  generateSessionTitle(excerpt: string, locale: string): Promise<SessionTitleResult>;
+  getRemoteAccessInfo(): Promise<RemoteAccessInfo>;
+  getRemoteAccessPairingCode(): Promise<RemoteAccessPairingCodeResult>;
+  copyRemoteAccessToken(): Promise<{ ok: boolean }>;
   getPathForFile(file: File): string;
   listProjects(): Promise<ProjectEntry[]>;
   addProject(directoryPath: string): Promise<ProjectEntry>;
@@ -117,9 +181,8 @@ export interface DesktopBridge {
   /** Durable backup for renderer localStorage UI prefs (theme, font, layout). */
   loadUiPreferences(): Promise<UiPreferencesPayload>;
   saveUiPreferences(prefs: UiPreferencesPayload): Promise<void>;
-  getKittylitterPairingJson(): Promise<KittylitterPairingResult>;
-  copyKittylitterPairingJson(pairingJson: string): Promise<KittylitterCopyResult>;
   terminal: PtyBridge;
   quickPanel: QuickPanelBridge;
+  dictationShortcut: DictationShortcutBridge;
   controllerDeploy: ControllerDeployBridge;
 }

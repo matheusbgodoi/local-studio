@@ -7,6 +7,8 @@ import {
 } from "./settings-ui";
 import type { ApiConnectionSettings } from "./types";
 import type { CompatibilityCheck, CompatibilityReport, ConfigData, ServiceInfo } from "@/lib/types";
+import { useRealtimeStatusStore } from "@/hooks/realtime-status-store";
+import type { CapabilityState } from "@local-studio/contracts/capabilities";
 
 export function ServicesSettings({
   data,
@@ -20,7 +22,6 @@ export function ServicesSettings({
   error: string | null;
 }) {
   const services = data?.services ?? [];
-  const rows = services.length ? services : fallbackServices(data, apiSettings, loading);
   const tone = services.length ? "good" : error ? "warning" : "info";
 
   return (
@@ -29,14 +30,14 @@ export function ServicesSettings({
       description="Controller, inference, and desktop endpoints used by this installation."
       actions={
         <StatusPill tone={tone}>
-          {services.length ? `${services.length} live` : "fallback"}
+          {services.length ? `${services.length} live` : loading ? "checking" : "unavailable"}
         </StatusPill>
       }
       collapsible
       defaultOpen={false}
     >
       <SettingsFactRows
-        rows={[...rows.map(serviceFactRow), ...endpointFactRows(data, apiSettings)]}
+        rows={[...services.map(serviceFactRow), ...endpointFactRows(data, apiSettings)]}
       />
     </SettingsGroup>
   );
@@ -47,22 +48,43 @@ export function SystemOverview({
   compatibilityReport,
   loading,
   error,
+  configCapability,
+  compatibilityCapability,
 }: {
   data: ConfigData | null;
   compatibilityReport: CompatibilityReport | null;
   loading: boolean;
   error: string | null;
+  configCapability: CapabilityState;
+  compatibilityCapability: CapabilityState;
 }) {
-  const runtime = data?.runtime;
+  const realtime = useRealtimeStatusStore();
+  const supportedData = configCapability === "supported" ? data : null;
+  const runtime = supportedData?.runtime;
   const checks = compatibilityReport?.checks ?? [];
   const actionableChecks = checks.filter((check) => check.severity !== "info");
-  const controllerState = data ? "Synced" : loading ? "Checking" : "Fallback";
-  const controllerTone: StatusTone = data ? "good" : error ? "warning" : "info";
-  const compatibilityState = !compatibilityReport
-    ? "Checking"
-    : actionableChecks.length
-      ? `${actionableChecks.length} issue${actionableChecks.length === 1 ? "" : "s"}`
-      : "Clear";
+  const controllerState = controllerSnapshotState(
+    realtime.connected,
+    Boolean(supportedData),
+    loading,
+  );
+  const controllerTone = controllerSnapshotTone(
+    realtime.connected,
+    Boolean(supportedData),
+    Boolean(error),
+  );
+  const platform =
+    runtime?.platform.kind ??
+    realtime.runtimeSummary?.platform.kind ??
+    realtime.platformKind ??
+    platformFromGpus(realtime.gpus.map((gpu) => gpu.name));
+  const gpuCount = runtime?.gpus.count ?? (realtime.gpus.length ? realtime.gpus.length : null);
+  const compatibilityState = compatibilitySnapshotState(
+    compatibilityReport,
+    actionableChecks.length,
+    loading,
+  );
+  const showCompatibility = compatibilityCapability === "supported";
 
   return (
     <section className="mb-10">
@@ -79,9 +101,9 @@ export function SystemOverview({
       </div>
       <dl className="grid grid-cols-2 border-y border-(--ui-separator) py-4 sm:grid-cols-4">
         <Stat label="Controller" value={controllerState} />
-        <Stat label="Platform" value={runtime?.platform.kind ?? "Unknown"} />
-        <Stat label="GPUs" value={runtime?.gpus.count ?? "—"} />
-        <Stat label="Compatibility" value={compatibilityState} />
+        {platform ? <Stat label="Platform" value={platform} /> : null}
+        {gpuCount !== null ? <Stat label="GPUs" value={gpuCount} /> : null}
+        {showCompatibility ? <Stat label="Compatibility" value={compatibilityState} /> : null}
       </dl>
       {error ? (
         <p className="mt-2 px-1 text-[length:var(--fs-sm)] text-(--ui-warning)">{error}</p>
@@ -93,62 +115,50 @@ export function SystemOverview({
 export function SystemDetails({
   data,
   compatibilityReport,
+  configCapability,
+  compatibilityCapability,
 }: {
   data: ConfigData | null;
   compatibilityReport: CompatibilityReport | null;
+  configCapability: CapabilityState;
+  compatibilityCapability: CapabilityState;
 }) {
+  const realtime = useRealtimeStatusStore();
+  const supportedData = configCapability === "supported" ? data : null;
+  const machineRows = machineFactRows(supportedData, realtime, configCapability);
   return (
     <div>
-      <SettingsGroup
-        title="Machine details"
-        description="Ports, paths, platform versions, and GPU inventory reported by the controller."
-        collapsible
-        defaultOpen={false}
-      >
-        <SettingsFactRows rows={machineFactRows(data)} />
-      </SettingsGroup>
-      <CompatibilitySettings
-        checks={compatibilityReport?.checks ?? []}
-        report={compatibilityReport}
-      />
+      {machineRows.length ? (
+        <SettingsGroup
+          title="Machine details"
+          description="Ports, paths, platform versions, and GPU inventory reported by the controller."
+          collapsible
+          defaultOpen={false}
+        >
+          <SettingsFactRows rows={machineRows} />
+        </SettingsGroup>
+      ) : null}
+      {compatibilityCapability === "supported" && compatibilityReport ? (
+        <CompatibilitySettings checks={compatibilityReport.checks} />
+      ) : null}
     </div>
   );
 }
 
-function CompatibilitySettings({
-  checks,
-  report,
-}: {
-  checks: CompatibilityCheck[];
-  report: CompatibilityReport | null;
-}) {
+function CompatibilitySettings({ checks }: { checks: CompatibilityCheck[] }) {
   const ordered = [...checks].sort((a, b) => severityRank(a.severity) - severityRank(b.severity));
   const actionableChecks = ordered.filter((check) => check.severity !== "info");
-  const tone: StatusTone = !report ? "info" : actionableChecks.length ? "warning" : "good";
+  const tone: StatusTone = actionableChecks.length ? "warning" : "good";
 
   return (
     <SettingsGroup
       title="Compatibility"
       description="Diagnostics and suggested fixes from the controller probe."
-      actions={
-        <StatusPill tone={tone}>
-          {!report ? "pending" : actionableChecks.length ? "review" : "clear"}
-        </StatusPill>
-      }
+      actions={<StatusPill tone={tone}>{actionableChecks.length ? "review" : "clear"}</StatusPill>}
       collapsible
       defaultOpen={actionableChecks.length > 0}
     >
-      {!report ? (
-        <SettingsFactRows
-          rows={[
-            {
-              label: "Report",
-              value: "Waiting for the compatibility probe",
-              dim: true,
-            },
-          ]}
-        />
-      ) : ordered.length === 0 ? (
+      {ordered.length === 0 ? (
         <SettingsFactRows rows={[{ label: "Report", value: "No issues detected" }]} />
       ) : (
         <SettingsFactRows rows={ordered.map(compatibilityFactRow)} />
@@ -161,112 +171,178 @@ function endpointFactRows(
   data: ConfigData | null,
   apiSettings: ApiConnectionSettings,
 ): SettingsFactRow[] {
-  return [
+  const rows: SettingsFactRow[] = [
     {
       label: "Controller URL",
       value: data?.environment.controller_url ?? apiSettings.backendUrl,
       mono: true,
       status: { label: data ? "live" : "saved", tone: data ? "good" : "info" },
     },
-    {
-      label: "Inference URL",
-      value: data?.environment.inference_url ?? "http://127.0.0.1:8000",
-      mono: true,
-    },
-    {
-      label: "Frontend URL",
-      value: data?.environment.frontend_url ?? "http://localhost:3001",
-      mono: true,
-    },
   ];
+  if (data?.environment.inference_url) {
+    rows.push({ label: "Inference URL", value: data.environment.inference_url, mono: true });
+  }
+  if (data?.environment.frontend_url) {
+    rows.push({ label: "Frontend URL", value: data.environment.frontend_url, mono: true });
+  }
+  return rows;
 }
 
-function machineFactRows(data: ConfigData | null): SettingsFactRow[] {
-  return [...networkFactRows(data), ...storageFactRows(data), ...runtimeFactRows(data)];
+function machineFactRows(
+  data: ConfigData | null,
+  realtime: ReturnType<typeof useRealtimeStatusStore>,
+  configCapability: CapabilityState,
+): SettingsFactRow[] {
+  return [
+    ...(configCapability === "supported" ? networkFactRows(data) : []),
+    ...(configCapability === "supported" ? storageFactRows(data) : []),
+    ...runtimeFactRows(data, realtime),
+  ];
 }
 
 function networkFactRows(data: ConfigData | null): SettingsFactRow[] {
   const config = data?.config;
 
-  return [
-    { label: "Host", value: config?.host ?? "127.0.0.1", mono: true },
-    { label: "Controller port", value: config?.port ?? 8080, mono: true },
-    { label: "Inference port", value: config?.inference_port ?? 8000, mono: true },
-  ];
+  if (!config) return [];
+  const rows: SettingsFactRow[] = [];
+  if (config.host) rows.push({ label: "Host", value: config.host, mono: true });
+  if (config.port !== undefined) {
+    rows.push({ label: "Controller port", value: config.port, mono: true });
+  }
+  if (config.inference_port !== undefined) {
+    rows.push({ label: "Inference port", value: config.inference_port, mono: true });
+  }
+  return rows;
 }
 
 function storageFactRows(data: ConfigData | null): SettingsFactRow[] {
   const config = data?.config;
 
-  return [
-    {
+  if (!config) return [];
+  const rows: SettingsFactRow[] = [];
+  if (config.models_dir) {
+    rows.push({
       label: "Models directory",
-      value: config?.models_dir ?? "~/models",
+      value: config.models_dir,
       mono: true,
       truncate: true,
-    },
-    { label: "Data directory", value: config?.data_dir ?? "data/", mono: true, truncate: true },
-    { label: "Database", value: config?.db_path ?? "data/studio.db", mono: true, truncate: true },
+    });
+  }
+  if (config.data_dir) {
+    rows.push({
+      label: "Data directory",
+      value: config.data_dir,
+      mono: true,
+      truncate: true,
+    });
+  }
+  if (config.db_path) {
+    rows.push({
+      label: "Database",
+      value: config.db_path,
+      mono: true,
+      truncate: true,
+    });
+  }
+  return rows;
+}
+
+function runtimeFactRows(
+  data: ConfigData | null,
+  realtime: ReturnType<typeof useRealtimeStatusStore>,
+): SettingsFactRow[] {
+  const runtime = data?.runtime;
+  const gpuCount = runtime?.gpus.count ?? (realtime.gpus.length ? realtime.gpus.length : undefined);
+  const gpuNames = [...new Set(realtime.gpus.map((gpu) => gpu.name).filter(Boolean))];
+  const platform =
+    runtime?.platform.kind ??
+    realtime.runtimeSummary?.platform.kind ??
+    realtime.platformKind ??
+    platformFromGpus(gpuNames);
+
+  return [
+    ...runtimePlatformRows(platform),
+    ...runtimeGpuRows(runtime?.gpus.types ?? [], gpuNames, gpuCount),
+    ...runtimeDriverRows(runtime),
   ];
 }
 
-function runtimeFactRows(data: ConfigData | null): SettingsFactRow[] {
-  const runtime = data?.runtime;
-  const gpuCount = runtime?.gpus.count ?? 0;
+function runtimePlatformRows(platform: string | null | undefined): SettingsFactRow[] {
+  return platform ? [{ label: "Platform", value: platform }] : [];
+}
 
-  return [
-    { label: "Platform", value: runtime?.platform.kind ?? "unknown" },
-    {
+function runtimeGpuRows(
+  reportedTypes: string[],
+  realtimeTypes: string[],
+  gpuCount: number | undefined,
+): SettingsFactRow[] {
+  const rows: SettingsFactRow[] = [];
+  if (reportedTypes.length || realtimeTypes.length) {
+    rows.push({
       label: "GPU types",
-      value: runtime?.gpus.types.length ? runtime.gpus.types.join(", ") : "Unknown",
+      value: (reportedTypes.length ? reportedTypes : realtimeTypes).join(", "),
       truncate: true,
-    },
-    {
+    });
+  }
+  if (gpuCount !== undefined) {
+    rows.push({
       label: "GPU count",
       value: gpuCount,
       mono: true,
       status: {
-        label: gpuCount ? "detected" : "not detected",
-        tone: gpuCount ? "good" : "default",
+        label: gpuCount ? "detected" : "none reported",
+        tone: gpuCount ? ("good" as const) : ("default" as const),
       },
-    },
-    { label: "CUDA driver", value: runtime?.cuda.driver_version ?? "Unknown", mono: true },
-    { label: "CUDA runtime", value: runtime?.cuda.cuda_version ?? "Unknown", mono: true },
-    { label: "ROCm", value: runtime?.platform.rocm?.rocm_version ?? "Not in use", mono: true },
-  ];
+    });
+  }
+  return rows;
 }
 
-function fallbackServices(
-  data: ConfigData | null,
-  apiSettings: ApiConnectionSettings,
+function runtimeDriverRows(runtime: ConfigData["runtime"] | undefined): SettingsFactRow[] {
+  const rows: SettingsFactRow[] = [];
+  if (runtime?.cuda.driver_version) {
+    rows.push({ label: "CUDA driver", value: runtime.cuda.driver_version, mono: true });
+  }
+  if (runtime?.cuda.cuda_version) {
+    rows.push({ label: "CUDA runtime", value: runtime.cuda.cuda_version, mono: true });
+  }
+  if (runtime?.platform.rocm?.rocm_version) {
+    rows.push({ label: "ROCm", value: runtime.platform.rocm.rocm_version, mono: true });
+  }
+  return rows;
+}
+
+function controllerSnapshotState(connected: boolean, synced: boolean, loading: boolean): string {
+  if (connected) return "Online";
+  if (synced) return "Synced";
+  return loading ? "Checking" : "Unavailable";
+}
+
+function controllerSnapshotTone(
+  connected: boolean,
+  synced: boolean,
+  hasError: boolean,
+): StatusTone {
+  if (connected || synced) return "good";
+  return hasError ? "warning" : "info";
+}
+
+function compatibilitySnapshotState(
+  report: CompatibilityReport | null,
+  issueCount: number,
   loading: boolean,
-): ServiceInfo[] {
-  return [
-    {
-      name: "Controller",
-      port: portFromUrl(apiSettings.backendUrl) ?? 8080,
-      internal_port: 8080,
-      protocol: "http",
-      status: loading ? "checking" : data ? "ready" : "fallback",
-      description: apiSettings.backendUrl || "Controller URL not saved yet",
-    },
-    {
-      name: "Inference",
-      port: data?.config.inference_port ?? 8000,
-      internal_port: data?.config.inference_port ?? 8000,
-      protocol: "http",
-      status: data ? "ready" : "fallback",
-      description: data?.environment.inference_url ?? "Model server endpoint hydrates from /config",
-    },
-    {
-      name: "Frontend",
-      port: portFromUrl(data?.environment.frontend_url ?? "") ?? 3001,
-      internal_port: 3001,
-      protocol: "http",
-      status: "ready",
-      description: data?.environment.frontend_url ?? "Local desktop/web shell",
-    },
-  ];
+): string {
+  if (!report) return loading ? "Checking" : "Unavailable";
+  if (!issueCount) return "Clear";
+  return `${issueCount} issue${issueCount === 1 ? "" : "s"}`;
+}
+
+function platformFromGpus(names: readonly string[]): string | null {
+  const joined = names.join(" ").toLowerCase();
+  if (joined.includes("nvidia")) return "cuda";
+  if (joined.includes("amd") || joined.includes("radeon")) return "rocm";
+  if (joined.includes("apple")) return "metal";
+  return null;
 }
 
 function serviceFactRow(service: ServiceInfo): SettingsFactRow {
@@ -291,16 +367,6 @@ function compatibilityFactRow(check: CompatibilityCheck): SettingsFactRow {
     dim: true,
     status: { label: check.severity, tone: severityTone(check.severity) },
   };
-}
-
-function portFromUrl(value: string): number | null {
-  try {
-    const parsed = new URL(value);
-    if (parsed.port) return Number(parsed.port);
-    return parsed.protocol === "https:" ? 443 : 80;
-  } catch {
-    return null;
-  }
 }
 
 function toneForStatus(status: string): StatusTone {

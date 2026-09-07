@@ -10,6 +10,7 @@ import {
   type LucideIcon,
 } from "@/ui/icon-registry";
 import type { ToolBlock } from "@/features/agent/messages";
+import { useToolsActions } from "@/features/agent/tools/context";
 import {
   FILE_WRITE_TOOL_NAMES,
   classifyTool,
@@ -459,6 +460,49 @@ function execCommand(block: ToolBlock): string | null {
   return command && command.trim() ? command : null;
 }
 
+type VerificationNotice = { site: string; reason: string };
+
+/* A site asking for a human is not a tool failure, and rendering it as one sends
+   the reader looking for a bug. It is a handover: the row says which site and
+   why, and offers the one action that helps — opening the Browser panel, where
+   the same session is already sitting on the challenge. Nothing here solves it. */
+function verificationNotice(block: ToolBlock): VerificationNotice | null {
+  const source = block.resultText || block.text || "";
+  if (!source.includes("verificationRequired")) return null;
+  try {
+    const parsed = JSON.parse(source) as Record<string, unknown>;
+    if (parsed.verificationRequired !== true) return null;
+    return {
+      site: typeof parsed.site === "string" ? parsed.site : "this site",
+      reason: typeof parsed.reason === "string" ? parsed.reason : "human verification required",
+    };
+  } catch {
+    return null;
+  }
+}
+
+function VerificationBanner({ notice }: { notice: VerificationNotice }) {
+  const { setComputerTab } = useToolsActions();
+  return (
+    <div className="mb-1.5 rounded-md border border-(--ui-border) bg-(--ui-surface-2) px-3 py-2">
+      <p className="text-[length:var(--fs-sm)] font-medium text-(--ui-fg)">
+        Human verification required
+      </p>
+      <p className="mt-0.5 text-[length:var(--fs-xs)] leading-relaxed text-(--ui-muted)">
+        {notice.site} — {notice.reason}. Automated retries are stopped. Complete it in the browser,
+        then ask to continue; the session is preserved.
+      </p>
+      <button
+        type="button"
+        onClick={() => setComputerTab("browser")}
+        className="mt-2 rounded-full border border-(--ui-border) px-2.5 py-1 text-[length:var(--fs-2xs)] font-medium text-(--ui-fg) transition-colors hover:bg-(--ui-hover)"
+      >
+        Open Browser
+      </button>
+    </div>
+  );
+}
+
 function BrowserPreview({ block }: { block: ToolBlock }) {
   const args = browserToolArgs(block);
   const display =
@@ -492,6 +536,14 @@ function compactBrowserResult(result: string | null | undefined): string | null 
 }
 
 export function ToolBlockView({ block }: { block: ToolBlock }) {
+  const verification = verificationNotice(block);
+  if (verification) {
+    return (
+      <ToolSummary block={block} open>
+        <VerificationBanner notice={verification} />
+      </ToolSummary>
+    );
+  }
   const fileWritePreview = FILE_WRITE_TOOL_NAMES.has(block.name.toLowerCase())
     ? fileWritePreviewData(block)
     : null;

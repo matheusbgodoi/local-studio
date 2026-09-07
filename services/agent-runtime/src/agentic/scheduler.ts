@@ -1,0 +1,724 @@
+import { criterionIsSatisfied, acceptanceReviewReason } from "../../../../shared/agent/acceptance";
+import {
+  computeContextBudget,
+  preflightContext,
+  resolvePostCompactionTarget,
+  type ContextBudget,
+  type ContextBudgetPolicy,
+  DEFAULT_CONTEXT_BUDGET_POLICY,
+} from "./context-budget";
+import type { AgenticCapability } from "./capability";
+import type { AgenticAgent, AgenticRun, AgenticRunStatus, AgenticTask } from "./contract";
+import { selectNextTask, validatePlan, type TaskNode } from "./dag";
+import { applyReadiness as sharedApplyReadiness } from "./readiness";
+import { runCompaction, type AgenticInferenceSession } from "./scheduler-session";
+import {
+  DEFAULT_STALL_POLICY,
+  errorSignature,
+  evaluateStall,
+  progressFingerprint,
+  type StallPolicy,
+  type StallState,
+} from "./stall";
+import type { AgenticStore, TaskSeed } from "./store";
+import {
+  applyEvidence,
+  acceptanceRejection,
+  parseTurnReport,
+  type TurnReport,
+} from "./turn-report";
+import type { AgenticTurnSignal } from "./store-signals";
+import { buildWorkingSet, renderWorkingSet, workingSetTokens } from "./working-set";
+import { settleTerminalWork } from "./terminal-settlement";
+
+export const MAX_INEFFECTIVE_COMPACTIONS = 2;
+
+export const TERMINAL_RUN_STATUSES: readonly AgenticRunStatus[] = [
+  "COMPLETED",
+  "FAILED",
+  "CANCELLED",
+];
+
+export type SchedulerStep =
+  | { kind: "idle"; reason: string }
+  | { kind: "resumed"; taskId: string; compacted: boolean }
+  | { kind: "waiting-user"; taskId: string; question: string }
+  | { kind: "replanned"; revision: number; reason: string }
+  | { kind: "completed" }
+  | { kind: "failed"; reason: string };
+
+export type ReplanInput = {
+  run: AgenticRun;
+  tasks: AgenticTask[];
+  failingTask: AgenticTask;
+  reason: string;
+};
+
+export type InferenceGate = <T>(task: () => Promise<T>) => Promise<T>;
+
+export function createSerialGate(): InferenceGate {
+  return <T>(task: () => Promise<T>): Promise<T> => task();
+}
+
+export type AgenticSchedulerOptions = {
+  store: AgenticStore;
+  session: (run: AgenticRun, agent: AgenticAgent | null) => AgenticInferenceSession;
+  inferenceGate?: InferenceGate;
+  budgetPolicy?: ContextBudgetPolicy;
+  stallPolicy?: StallPolicy;
+  replan?: (input: ReplanInput) => TaskSeed[];
+  isCancelled?: (runId: string) => boolean;
+};
+
+const defaultReplan = ({ tasks, failingTask, reason }: ReplanInput): TaskSeed[] => {
+  const diagnosticTitle = `Diagnose: ${failingTask.title}`;
+  if (tasks.some((task) => task.title === diagnosticTitle)) {
+    return tasks.map((task) => ({
+      id: task.id,
+      title: task.title,
+      description: task.description,
+      dependencies: task.dependencies,
+      acceptance: task.acceptance,
+    }));
+  }
+  const seeds: TaskSeed[] = [];
+  for (const task of tasks) {
+    if (task.id === failingTask.id) {
+      seeds.push({
+        title: diagnosticTitle,
+        description: `Establish why the previous approach made no progress. ${reason}`,
+        dependencies: task.dependencies,
+        acceptance: [
+          {
+            id: "diagnosis",
+            description: "A stated cause backed by concrete observed evidence",
+            kind: "assertion",
+            satisfied: false,
+            evidence: null,
+          },
+        ],
+      });
+      seeds.push({
+        id: task.id,
+        title: task.title,
+        description: task.description,
+        dependencies: [...task.dependencies, diagnosticTitle],
+        acceptance: task.acceptance,
+      });
+      continue;
+    }
+    seeds.push({
+      id: task.id,
+      title: task.title,
+      description: task.description,
+      dependencies: task.dependencies,
+      acceptance: task.acceptance,
+    });
+  }
+  return seeds;
+};
+
+export function createAgenticScheduler(options: AgenticSchedulerOptions) {
+  const store = options.store;
+  const budgetPolicy = options.budgetPolicy ?? DEFAULT_CONTEXT_BUDGET_POLICY;
+  const stallPolicy = options.stallPolicy ?? DEFAULT_STALL_POLICY;
+  const replan = options.replan ?? defaultReplan;
+  const stallByTask = new Map<string, StallState>();
+  const ineffectiveCompactions = new Map<string, number>();
+  const sessions = new Map<string, AgenticInferenceSession>();
+  const consumedTurns = new Map<string, number>();
+
+  const sessionFor = (run: AgenticRun, agent: AgenticAgent | null): AgenticInferenceSession => {
+    const key = agent ? `${run.id}#${agent.id}` : run.id;
+    const existing = sessions.get(key);
+    if (existing) return existing;
+    const created = options.session(run, agent);
+    sessions.set(key, created);
+    return created;
+  };
+
+  const gate = options.inferenceGate ?? createSerialGate();
+
+  const agentForTask = (runId: string, task: AgenticTask | null): AgenticAgent | null => {
+    const agents = store.listAgents(runId);
+    if (task?.agentId) {
+      const owner = agents.find((entry) => entry.id === task.agentId);
+      if (owner) return owner;
+    }
+    return agents[0] ?? null;
+  };
+
+  const nodesOf = (tasks: AgenticTask[]): TaskNode[] =>
+    tasks.map((task) => ({ id: task.id, status: task.status, dependencies: task.dependencies }));
+
+  const budgetFor = (run: AgenticRun, capability: AgenticCapability): ContextBudget =>
+    computeContextBudget({ ...capability, contextWindow: run.contextWindow }, budgetPolicy);
+
+  const applyReadiness = (runId: string): AgenticTask[] => sharedApplyReadiness(store, runId);
+
+  const currentWorkingSet = (
+    run: AgenticRun,
+    activeTask: AgenticTask | null,
+    tail: string[],
+    errors: string[],
+  ) =>
+    buildWorkingSet({
+      run,
+      tasks: store.listTasks(run.id),
+      activeTask,
+      operations: store.listOperations(run.id),
+      artifacts: store.listArtifacts(run.id),
+      events: store.listEvents(run.id),
+      recentTail: tail,
+      unresolvedErrors: errors,
+    });
+
+  const compactAndRebuild = async (
+    run: AgenticRun,
+    task: AgenticTask | null,
+    session: AgenticInferenceSession,
+    budget: ContextBudget,
+    reason: string,
+    tail: string[],
+    errors: string[],
+  ): Promise<{ prompt: string; effective: boolean | null; recorded: boolean }> => {
+    const workingSet = currentWorkingSet(run, task, tail, errors);
+    const rendered = renderWorkingSet(workingSet);
+    const required = workingSetTokens(workingSet);
+    const target = resolvePostCompactionTarget(budget, required);
+    const compactingAgent = task ? agentForTask(run.id, task) : null;
+
+    if (compactingAgent) {
+      store.updateAgent(compactingAgent.id, {
+        status: "COMPACTING",
+        currentTaskId: task?.id ?? null,
+        lastHeartbeatMs: store.now(),
+      });
+    }
+
+    store.appendEvent({
+      runId: run.id,
+      taskId: task?.id ?? null,
+      type: "COMPACTION_STARTED",
+      summary: reason,
+    });
+
+    let outcome;
+    try {
+      outcome = await runCompaction(session, rendered, store.now(), store.now);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      store.appendEvent({
+        runId: run.id,
+        taskId: task?.id ?? null,
+        type: "COMPACTION_REFUSED",
+        summary: message,
+      });
+      if (compactingAgent) {
+        store.updateAgent(compactingAgent.id, {
+          status: "WORKING",
+          lastHeartbeatMs: store.now(),
+        });
+      }
+      return { prompt: rendered, effective: false, recorded: false };
+    }
+    if (compactingAgent) {
+      store.updateAgent(compactingAgent.id, {
+        status: "WORKING",
+        lastHeartbeatMs: store.now(),
+      });
+    }
+    const checkpoint = store.recordCheckpoint({
+      runId: run.id,
+      taskId: task?.id ?? null,
+      reason,
+      tokensBefore: outcome.tokensBefore,
+      tokensAfter: outcome.tokensAfter,
+      beforeMeasured: outcome.beforeMeasured,
+      afterMeasured: outcome.afterMeasured,
+      targetTokens: target.target,
+      usableLimit: budget.usableLimit,
+      durationMs: outcome.durationMs,
+      workingSet,
+    });
+    store.updateRun(run.id, {
+      compactionCount: run.compactionCount + 1,
+      latestCheckpointId: checkpoint.id,
+    });
+    const measuredAfter = outcome.afterMeasured;
+    const estimatedAfter = !measuredAfter && outcome.tokensAfter > 0 ? outcome.tokensAfter : null;
+    const beforeLabel = `${outcome.beforeMeasured ? "" : "~"}${outcome.tokensBefore}`;
+    const afterLabel = measuredAfter
+      ? String(outcome.tokensAfter)
+      : estimatedAfter === null
+        ? "unknown"
+        : `~${estimatedAfter}`;
+    store.appendEvent({
+      runId: run.id,
+      taskId: task?.id ?? null,
+      type: "COMPACTED",
+      summary: `${beforeLabel} -> ${afterLabel} tokens · checkpoint #${checkpoint.sequence}`,
+      detail: {
+        tokensBefore: outcome.tokensBefore,
+        tokensAfter: measuredAfter ? outcome.tokensAfter : null,
+        tokensAfterEstimated: estimatedAfter,
+        beforeMeasured: outcome.beforeMeasured,
+        effectiveness: outcome.effective,
+        afterMeasured: measuredAfter,
+        targetTokens: target.target,
+        usableLimit: budget.usableLimit,
+        belowFloor: target.belowFloor,
+        aboveCeiling: target.aboveCeiling,
+        durationMs: outcome.durationMs,
+      },
+    });
+    return { prompt: rendered, effective: outcome.effective, recorded: true };
+  };
+
+  const launch = async (
+    run: AgenticRun,
+    task: AgenticTask,
+    capability: AgenticCapability,
+    tail: string[],
+    errors: string[],
+  ): Promise<SchedulerStep> => {
+    if (options.isCancelled?.(run.id)) return { kind: "idle", reason: "run is cancelling" };
+    const agent = agentForTask(run.id, task);
+    const session = sessionFor(run, agent);
+    const budget = budgetFor(run, capability);
+    const workingSet = currentWorkingSet(run, task, tail, errors);
+    let prompt = renderWorkingSet(workingSet);
+    const reading = await session.readContext();
+    const required = workingSetTokens(workingSet);
+    const decision = preflightContext({
+      budget,
+      activeTokens: reading.tokens,
+      expectedNextOperationTokens: required,
+    });
+
+    let compacted = false;
+    let compactionRecorded = false;
+    if (decision.action !== "proceed" && reading.tokens <= required) {
+      store.appendEvent({
+        runId: run.id,
+        taskId: task.id,
+        type: "BUDGET_EXCEEDED",
+        summary: "the working set itself exceeds the usable budget; proceeding without compacting",
+        detail: {
+          activeTokens: reading.tokens,
+          requiredTokens: required,
+          usableLimit: budget.usableLimit,
+        },
+      });
+    } else if (decision.action !== "proceed") {
+      const result = await compactAndRebuild(
+        run,
+        task,
+        session,
+        budget,
+        decision.action === "externalize"
+          ? "pending payload exceeds the tool reserve"
+          : "context preflight",
+        tail,
+        errors,
+      );
+      prompt = result.prompt;
+      compacted = true;
+      compactionRecorded = result.recorded;
+      const previousStrikes = ineffectiveCompactions.get(run.id) ?? 0;
+      const strikes =
+        result.effective === null ? previousStrikes : result.effective ? 0 : previousStrikes + 1;
+      ineffectiveCompactions.set(run.id, strikes);
+      if (strikes >= MAX_INEFFECTIVE_COMPACTIONS) {
+        const reason = `compaction cannot create headroom: the usable budget is ${budget.usableLimit} tokens and the session will not go below ${reading.tokens}; refusing to compact in a circle`;
+        store.transaction(() => {
+          settleTerminalWork(store, run.id, "FAILED", reason);
+          store.updateRun(run.id, { status: "FAILED", failureReason: reason });
+          store.appendEvent({
+            runId: run.id,
+            taskId: task.id,
+            type: "RUN_FAILED",
+            summary: reason,
+          });
+        });
+        return { kind: "failed", reason };
+      }
+    }
+
+    if (options.isCancelled?.(run.id)) return { kind: "idle", reason: "run is cancelling" };
+    const refreshed = store.requireRun(run.id);
+    if (TERMINAL_RUN_STATUSES.includes(refreshed.status)) {
+      return { kind: "idle", reason: `run is ${refreshed.status.toLowerCase()}` };
+    }
+    store.updateTask(task.id, {
+      status: "RUNNING",
+      attemptCount: task.attemptCount + 1,
+      startedAtMs: task.startedAtMs ?? store.now(),
+    });
+    store.updateRun(refreshed.id, { status: "RUNNING", activeTaskId: task.id });
+
+    if (agent) {
+      store.startAttempt({
+        runId: refreshed.id,
+        taskId: task.id,
+        agentId: agent.id,
+        attempt: task.attemptCount + 1,
+      });
+      store.updateAgent(agent.id, {
+        status: "WORKING",
+        currentTaskId: task.id,
+        activeContextTokens: reading.tokens,
+        contextLimit: budget.usableLimit,
+        lastHeartbeatMs: store.now(),
+        compactionCount: compactionRecorded ? agent.compactionCount + 1 : agent.compactionCount,
+      });
+    }
+
+    store.appendEvent({
+      runId: refreshed.id,
+      taskId: task.id,
+      type: compacted ? "AGENT_RESUMED" : "AGENT_STARTED",
+      summary: compacted ? `resumed ${task.title} automatically after compaction` : task.title,
+    });
+
+    try {
+      await gate(() => session.prompt(prompt));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      for (const open of store
+        .listAttempts(task.id)
+        .filter((entry) => entry.status === "RUNNING")) {
+        store.settleAttempt(open.id, {
+          status: "FAILED",
+          outcome: "the turn was rejected",
+          error: message,
+        });
+      }
+      store.updateTask(task.id, { status: "PENDING", blocker: message });
+      if (agent) store.updateAgent(agent.id, { status: "INTERRUPTED", currentTaskId: null });
+      store.appendEvent({
+        runId: refreshed.id,
+        taskId: task.id,
+        type: "TASK_FAILED",
+        summary: message,
+      });
+      throw error;
+    }
+    return { kind: "resumed", taskId: task.id, compacted };
+  };
+
+  const advance = async (runId: string, capability: AgenticCapability): Promise<SchedulerStep> => {
+    const run = store.requireRun(runId);
+    if (TERMINAL_RUN_STATUSES.includes(run.status)) {
+      return { kind: "idle", reason: `run is ${run.status.toLowerCase()}` };
+    }
+    const settledTask = run.activeTaskId ? store.getTask(run.activeTaskId) : null;
+    const agent = agentForTask(run.id, settledTask);
+    const session = sessionFor(run, agent);
+
+    const lastError = session.lastError();
+    const errors = lastError ? [lastError] : [];
+    const finalText = session.lastAssistantText();
+    const turnKey = `${run.id}#${agent?.id ?? "-"}`;
+    const turnId = session.turnId();
+    const alreadyConsumed = consumedTurns.get(turnKey) === turnId;
+    consumedTurns.set(turnKey, turnId);
+
+    if (!alreadyConsumed) {
+      const usage = session.lastTurnUsage();
+      store.addRunUsage(run.id, usage);
+      if (agent) store.addAgentUsage(agent.id, usage);
+    }
+
+    const signals = alreadyConsumed ? [] : store.takePendingSignals(run.id);
+    const report = alreadyConsumed
+      ? {
+          evidence: [],
+          claimedComplete: false,
+          blockedReason: null,
+          userQuestion: null,
+          errors: [],
+        }
+      : signals.length > 0
+        ? reportFromSignals(signals, run.activeTaskId)
+        : parseTurnReport(finalText);
+    const tail: string[] = [];
+
+    let tasks = store.listTasks(run.id);
+    const activeTask = run.activeTaskId ? (store.getTask(run.activeTaskId) ?? null) : null;
+
+    if (activeTask && !alreadyConsumed) {
+      const outcome = applyEvidence(activeTask.acceptance, report);
+      store.updateTask(activeTask.id, { acceptance: outcome.acceptance });
+      for (const criterionId of outcome.newlySatisfied) {
+        store.appendEvent({
+          runId: run.id,
+          taskId: activeTask.id,
+          type: "ACCEPTANCE_SATISFIED",
+          summary: criterionId,
+        });
+        tail.push(`acceptance ${criterionId} satisfied`);
+      }
+
+      const openAttempts = store.listAttempts(activeTask.id).filter((a) => a.status === "RUNNING");
+      const settle = (status: "SUCCEEDED" | "FAILED" | "ABANDONED", error: string | null) => {
+        for (const attempt of openAttempts) {
+          store.settleAttempt(attempt.id, {
+            status,
+            outcome: status,
+            evidence: outcome.acceptance
+              .filter(criterionIsSatisfied)
+              .map((c) => `${c.id}: ${c.evidence ?? ""}`),
+            error,
+          });
+        }
+      };
+
+      const review = acceptanceReviewReason(outcome.acceptance);
+      if (review && (report.claimedComplete || report.evidence.length > 0))
+        report.userQuestion = review;
+      if (report.userQuestion) {
+        settle("ABANDONED", null);
+        store.updateTask(activeTask.id, { status: "WAITING_USER", blocker: report.userQuestion });
+        store.updateRun(run.id, { status: "WAITING_USER" });
+        if (agent) store.updateAgent(agent.id, { status: "WAITING" });
+        store.appendEvent({
+          runId: run.id,
+          taskId: activeTask.id,
+          type: "TASK_WAITING_USER",
+          summary: report.userQuestion,
+        });
+        return { kind: "waiting-user", taskId: activeTask.id, question: report.userQuestion };
+      }
+
+      if (outcome.satisfied) {
+        settle("SUCCEEDED", null);
+        store.updateTask(activeTask.id, {
+          status: "SUCCEEDED",
+          resultSummary: firstLine(finalText),
+          settledAtMs: store.now(),
+          evidence: outcome.acceptance.map((c) => `${c.id}: ${c.evidence ?? ""}`),
+        });
+        store.appendEvent({
+          runId: run.id,
+          taskId: activeTask.id,
+          type: "TASK_SUCCEEDED",
+          summary: activeTask.title,
+        });
+        stallByTask.delete(activeTask.id);
+        if (agent) store.updateAgent(agent.id, { status: "IDLE", currentTaskId: null });
+      } else {
+        const rejection = acceptanceRejection(outcome, report);
+        if (rejection) {
+          store.appendEvent({
+            runId: run.id,
+            taskId: activeTask.id,
+            type: "ACCEPTANCE_REJECTED",
+            summary: rejection,
+          });
+          errors.push(rejection);
+        }
+        if (report.blockedReason) errors.push(`blocked: ${report.blockedReason}`);
+        settle("FAILED", rejection ?? report.blockedReason ?? lastError);
+
+        const fingerprint = progressFingerprint({
+          task: store.requireTask(activeTask.id),
+          operations: store.listOperations(run.id),
+          artifacts: store.listArtifacts(run.id),
+          errorSignature: errorSignature(rejection ?? report.blockedReason ?? lastError),
+        });
+        const evaluated = evaluateStall({
+          state: stallByTask.get(activeTask.id) ?? { fingerprint: null, repeats: 0 },
+          fingerprint,
+          attemptCount: store.requireTask(activeTask.id).attemptCount,
+          planRevisions: run.planRevision - 1,
+          policy: stallPolicy,
+        });
+        stallByTask.set(activeTask.id, evaluated.state);
+
+        if (evaluated.verdict.kind === "give-up") {
+          const reason = evaluated.verdict.reason;
+          store.transaction(() => {
+            store.updateTask(activeTask.id, {
+              status: "FAILED",
+              blocker: reason,
+              settledAtMs: store.now(),
+            });
+            settleTerminalWork(store, run.id, "FAILED", reason);
+            store.updateRun(run.id, {
+              status: "FAILED",
+              failureReason: reason,
+            });
+            store.appendEvent({
+              runId: run.id,
+              taskId: activeTask.id,
+              type: "RUN_FAILED",
+              summary: reason,
+            });
+          });
+          return { kind: "failed", reason };
+        }
+
+        if (evaluated.verdict.kind === "replan") {
+          const seeds = replan({
+            run,
+            tasks: store.listTasks(run.id),
+            failingTask: store.requireTask(activeTask.id),
+            reason: evaluated.verdict.reason,
+          });
+          const validation = validatePlan(seedNodes(seeds));
+          if (validation.ok) {
+            const revised = store.recordPlanRevision({
+              runId: run.id,
+              reason: evaluated.verdict.reason,
+              tasks: seeds,
+            });
+            store.appendEvent({
+              runId: run.id,
+              taskId: activeTask.id,
+              type: "REPLAN",
+              summary: evaluated.verdict.reason,
+            });
+            stallByTask.delete(activeTask.id);
+            store.updateTask(activeTask.id, { status: "PENDING" });
+            if (agent) store.updateAgent(agent.id, { status: "IDLE", currentTaskId: null });
+            applyReadiness(run.id);
+            return {
+              kind: "replanned",
+              revision: revised.revision,
+              reason: evaluated.verdict.reason,
+            };
+          }
+        }
+
+        store.updateTask(activeTask.id, { status: "PENDING" });
+        if (agent) store.updateAgent(agent.id, { status: "IDLE", currentTaskId: null });
+      }
+    }
+
+    tasks = applyReadiness(run.id);
+    const nextTaskId = selectNextTask(nodesOf(tasks));
+    if (!nextTaskId) {
+      const settledRun = store.requireRun(run.id);
+      const waiting = tasks.filter((task) => task.status === "WAITING_USER");
+      if (waiting.length > 0) {
+        store.updateRun(settledRun.id, {
+          status: "WAITING_USER",
+          activeTaskId: waiting[0]?.id ?? null,
+        });
+        if (agent) store.updateAgent(agent.id, { status: "WAITING" });
+        return {
+          kind: "waiting-user",
+          taskId: waiting[0]?.id ?? "",
+          question: waiting[0]?.blocker ?? "a human decision is required",
+        };
+      }
+      const allSucceeded = tasks.every((task) => task.status === "SUCCEEDED");
+      const status = allSucceeded ? "COMPLETED" : "FAILED";
+      store.transaction(() => {
+        settleTerminalWork(
+          store,
+          settledRun.id,
+          status,
+          allSucceeded ? "all tasks satisfied" : "no runnable task remains",
+        );
+        store.updateRun(settledRun.id, {
+          status,
+          activeTaskId: null,
+          resultSummary: allSucceeded ? firstLine(finalText) : null,
+          failureReason: allSucceeded ? null : "no task is runnable and the plan is not satisfied",
+        });
+        store.appendEvent({
+          runId: settledRun.id,
+          type: allSucceeded ? "RUN_COMPLETED" : "RUN_FAILED",
+          summary: allSucceeded ? "all tasks satisfied" : "no runnable task remains",
+        });
+      });
+      return allSucceeded
+        ? { kind: "completed" }
+        : { kind: "failed", reason: "no runnable task remains" };
+    }
+
+    const nextTask = store.requireTask(nextTaskId);
+    return launch(store.requireRun(run.id), nextTask, capability, tail, errors);
+  };
+
+  return {
+    advance,
+    applyReadiness,
+    launch,
+    budgetFor,
+    sessionFor,
+    abortRun: async (runId: string): Promise<void> => {
+      const targets = [...sessions.entries()]
+        .filter(([key]) => key === runId || key.startsWith(`${runId}#`))
+        .map(([, session]) => session.abort?.())
+        .filter((request): request is Promise<void> => Boolean(request));
+      const results = await Promise.allSettled(targets);
+      const failures = results.filter(
+        (result): result is PromiseRejectedResult => result.status === "rejected",
+      );
+      if (failures.length > 0) {
+        throw new AggregateError(
+          failures.map((failure) => failure.reason),
+          "The Run could not confirm that every inference session became idle",
+        );
+      }
+    },
+    forgetRun: (runId: string, taskIds?: readonly string[]): void => {
+      for (const key of [...sessions.keys()]) {
+        if (key === runId || key.startsWith(`${runId}#`)) sessions.delete(key);
+      }
+      for (const taskId of taskIds ?? store.listTasks(runId).map((task) => task.id)) {
+        stallByTask.delete(taskId);
+      }
+      ineffectiveCompactions.delete(runId);
+      for (const key of [...consumedTurns.keys()]) {
+        if (key === runId || key.startsWith(`${runId}#`)) consumedTurns.delete(key);
+      }
+    },
+  };
+}
+
+export function reportFromSignals(
+  signals: readonly AgenticTurnSignal[],
+  activeTaskId: string | null,
+): TurnReport {
+  const report: TurnReport = {
+    evidence: [],
+    claimedComplete: false,
+    blockedReason: null,
+    userQuestion: null,
+    errors: [],
+  };
+  for (const signal of signals) {
+    if (signal.taskId && activeTaskId && signal.taskId !== activeTaskId) continue;
+    if (signal.kind === "evidence" && signal.detail.criterion) {
+      report.evidence.push({
+        criterionId: signal.detail.criterion,
+        evidence: signal.detail.evidence ?? "",
+      });
+      continue;
+    }
+    if (signal.kind === "complete") report.claimedComplete = true;
+    if (signal.kind === "blocked") report.blockedReason = signal.detail.reason ?? "no reason given";
+    if (signal.kind === "needs_user") {
+      report.userQuestion = signal.detail.question ?? "a decision is required";
+    }
+  }
+  return report;
+}
+
+const firstLine = (text: string): string => {
+  const line = text.split("\n").find((entry) => entry.trim().length > 0);
+  return (line ?? "").trim().slice(0, 400);
+};
+
+export function seedNodes(seeds: readonly TaskSeed[]): TaskNode[] {
+  const keyByTitle = new Map(seeds.map((seed, index) => [seed.title, seed.id ?? `seed_${index}`]));
+  return seeds.map((seed, index) => ({
+    id: seed.id ?? `seed_${index}`,
+    status: "PENDING" as const,
+    dependencies: seed.dependencies.map((dependency) => keyByTitle.get(dependency) ?? dependency),
+  }));
+}

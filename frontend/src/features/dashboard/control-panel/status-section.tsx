@@ -4,11 +4,19 @@ import type { GPU, Metrics, ProcessInfo, RecipeWithStatus, RuntimePlatformKind }
 import { StatusHeader, StatusMetricStrip } from "./status-section-parts";
 import { MetricTrends, useMetricSamples } from "./status-section-trends";
 import { resolveStatusSectionView } from "./status-section-view";
+import {
+  displayNameForModel,
+  physicalIdForModel,
+  useServedModels,
+} from "@/hooks/served-models-store";
+import { useControllerCapabilities } from "@/hooks/controller-capabilities-store";
 
 interface StatusSectionProps {
   currentProcess: ProcessInfo | null;
   currentRecipe: RecipeWithStatus | null;
   metrics: Metrics | null;
+  metricsObservedAt: number;
+  gpusObservedAt: number;
   gpus: GPU[];
   isConnected: boolean;
   isStatusLoading: boolean;
@@ -30,6 +38,8 @@ export function StatusSection({
   currentProcess,
   currentRecipe,
   metrics,
+  metricsObservedAt,
+  gpusObservedAt,
   gpus,
   isConnected,
   isStatusLoading,
@@ -46,15 +56,25 @@ export function StatusSection({
   onNewRecipe,
   onViewAll,
 }: StatusSectionProps) {
+  const { controllerKey } = useControllerCapabilities();
+  const { physicalModels } = useServedModels();
+  const modelDisplayName = displayNameForModel(physicalModels, currentProcess?.served_model_name);
+  const physicalModelId = physicalIdForModel(physicalModels, currentProcess?.served_model_name);
   const view = resolveStatusSectionView({
     currentProcess,
     currentRecipe,
     gpus,
     inferencePort,
     metrics,
+    modelDisplayName,
+    physicalModelId,
     platformKind,
   });
-  const trendData = useMetricSamples(view.sampleInput);
+  const trendData = useMetricSamples(
+    view.sampleInput,
+    { gpus: gpusObservedAt, metrics: metricsObservedAt },
+    controllerKey,
+  );
 
   return (
     <section className="px-2 pt-2 pb-5">
@@ -79,7 +99,12 @@ export function StatusSection({
         recipes={recipes}
       />
       <StatusMetricStrip compactMetrics={view.compactMetrics} metricColumns={view.metricColumns} />
-      <MetricTrends samples={trendData.samples} peaks={trendData.peaks} />
+      <MetricTrends
+        key={controllerKey}
+        controllerKey={controllerKey}
+        samples={trendData.samples}
+        peaks={trendData.peaks}
+      />
     </section>
   );
 }

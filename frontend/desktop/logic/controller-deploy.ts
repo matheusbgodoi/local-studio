@@ -19,6 +19,7 @@ const MARKER = "LOCAL_STUDIO_CONTROLLER ";
 const INSTALL_SCRIPT_URL =
   "https://raw.githubusercontent.com/sybil-solutions/local-studio/main/scripts/install-controller.sh";
 const DEPLOY_TIMEOUT_MS = 15 * 60_000;
+const SENSITIVE_DEPLOY_OUTPUT = /api[_-]?key|authorization|bearer|credential|secret|token/i;
 
 // "user@host" / "host" / tailnet names; conservative charset keeps the value
 // safe to place inside the ssh argv (never inside a shell string).
@@ -53,6 +54,17 @@ export const parseDeployMarker = (line: string): { url: string; apiKey: string }
     return null;
   }
   return null;
+};
+
+const redactDeployOutput = (line: string, secrets: ReadonlySet<string>): string => {
+  let redacted = line;
+  for (const secret of secrets) {
+    if (secret) redacted = redacted.replaceAll(secret, "[REDACTED]");
+  }
+  if (redacted.includes(MARKER) || SENSITIVE_DEPLOY_OUTPUT.test(redacted)) {
+    return "[sensitive deploy output redacted]";
+  }
+  return redacted;
 };
 
 /**
@@ -100,25 +112,42 @@ export const deployController = (
 
     let result: ControllerDeployResult | null = null;
     let stderrTail = "";
-    let buffered = "";
+    let stdoutBuffer = "";
+    let stderrBuffer = "";
+    const secrets = new Set<string>();
+
+    const handleLine = (line: string, isError: boolean) => {
+      if (!line) return;
+      const marker = parseDeployMarker(line);
+      if (marker) {
+        secrets.add(marker.apiKey);
+        result = { ok: true, url: marker.url, apiKey: marker.apiKey };
+        onLog("controller registered");
+        return;
+      }
+      const safeLine = redactDeployOutput(line, secrets);
+      if (isError) stderrTail = `${stderrTail}\n${safeLine}`.slice(-2000);
+      onLog(safeLine);
+    };
 
     const handleChunk = (chunk: Buffer, isError: boolean) => {
-      buffered += chunk.toString("utf8");
+      let buffered = (isError ? stderrBuffer : stdoutBuffer) + chunk.toString("utf8");
       let newline = buffered.indexOf("\n");
       while (newline !== -1) {
         const line = buffered.slice(0, newline).trimEnd();
         buffered = buffered.slice(newline + 1);
         newline = buffered.indexOf("\n");
-        if (!line) continue;
-        const marker = parseDeployMarker(line);
-        if (marker) {
-          result = { ok: true, url: marker.url, apiKey: marker.apiKey };
-          onLog("controller registered");
-          continue;
-        }
-        if (isError) stderrTail = `${stderrTail}\n${line}`.slice(-2000);
-        onLog(line);
+        handleLine(line, isError);
       }
+      if (isError) stderrBuffer = buffered;
+      else stdoutBuffer = buffered;
+    };
+
+    const flushBuffers = () => {
+      handleLine(stdoutBuffer.trimEnd(), false);
+      handleLine(stderrBuffer.trimEnd(), true);
+      stdoutBuffer = "";
+      stderrBuffer = "";
     };
 
     child.stdout.on("data", (chunk: Buffer) => handleChunk(chunk, false));
@@ -131,10 +160,11 @@ export const deployController = (
 
     child.on("error", (error) => {
       clearTimeout(timeout);
-      resolvePromise({ ok: false, error: error.message });
+      resolvePromise({ ok: false, error: redactDeployOutput(error.message, secrets) });
     });
     child.on("close", (code) => {
       clearTimeout(timeout);
+      flushBuffers();
       if (result) return resolvePromise(result);
       resolvePromise({
         ok: false,

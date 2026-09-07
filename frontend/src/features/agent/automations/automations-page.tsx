@@ -10,11 +10,13 @@ import type { Automation } from "@shared/agent/automation";
 import {
   createAutomation,
   deleteAutomation,
+  listAutomationConnectors,
   listAutomationModels,
   listAutomations,
   runAutomation,
   updateAutomation,
   type AutomationModel,
+  type AutomationConnector,
 } from "./automation-api";
 import { AutomationEditor } from "./automation-editor";
 import { AutomationList } from "./automation-list";
@@ -29,6 +31,7 @@ export default function AutomationsPage() {
   const creating = searchParams.get("new") === "1";
   const [automations, setAutomations] = useState<Automation[] | null>(null);
   const [models, setModels] = useState<AutomationModel[]>([]);
+  const [connectors, setConnectors] = useState<AutomationConnector[]>([]);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<AutomationFilter>("all");
   const [action, setAction] = useState<EditorAction>(null);
@@ -55,11 +58,14 @@ export default function AutomationsPage() {
   }, [reload]);
 
   useMountSubscription(() => {
-    void Effect.runPromise(listAutomationModels())
-      .then(setModels)
-      .catch((modelError) => {
-        setError(modelError instanceof Error ? modelError.message : "Could not load models");
-      });
+    void Promise.all([
+      Effect.runPromise(listAutomationModels()).then(setModels),
+      Effect.runPromise(listAutomationConnectors()).then(setConnectors),
+    ]).catch((loadError) => {
+      setError(
+        loadError instanceof Error ? loadError.message : "Could not load automation options",
+      );
+    });
   }, []);
 
   useMountSubscription(() => {
@@ -190,6 +196,7 @@ export default function AutomationsPage() {
             automation={selected}
             creating={creating}
             models={models}
+            connectors={connectors}
             action={action}
             error={error}
             onClose={() => navigate("index")}
@@ -215,7 +222,9 @@ function AutomationWelcome({ onCreate }: { onCreate: () => void }) {
         </span>
         <h2 className="mt-4 text-[length:var(--fs-lg)] font-medium">Select an automation</h2>
         <p className="mt-1.5 text-[length:var(--fs-sm)] leading-5 text-(--ui-muted)">
-          Review its task and schedule, run it now, pause it, or change its configuration.
+          Scheduled work is saved on this Mac. Missed schedules catch up once after restart;
+          interrupted runs are recorded as failed. Required connections are checked before the model
+          starts, and the desktop notifies when a result arrives in the background.
         </p>
         <Button
           size="sm"

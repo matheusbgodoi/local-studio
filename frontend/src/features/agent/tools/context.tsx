@@ -25,6 +25,7 @@ import {
   type BrowserState,
   type ComputerState,
   type ComputerTab,
+  type ConnectorCatalogueRow,
   type ContextAttachRequest,
   type FileOpenRequest,
   type ToolSelection,
@@ -38,7 +39,6 @@ import {
   migrateToolStorage,
   uniqueComputerTabs,
   writeBrowserBackend,
-  writeBrowserEnabled,
   writeComputerTab,
   writeComputerTabs,
   writeComputerWidth,
@@ -57,10 +57,8 @@ import {
 // every assistant-markdown block. `useTools()` composes all four for the
 // pass-through consumers whose downstream prop contracts take the full value.
 type ToolsActions = {
-  setBrowserEnabled: (enabled: boolean) => void;
   setBrowserBackend: (backend: BrowserBackend) => void;
   toggleBrowserBackend: () => void;
-  toggleBrowser: () => void;
   setBrowserUrl: (url: string, input?: string) => void;
   setBrowserInput: (input: string) => void;
   setComputerOpen: (open: boolean) => void;
@@ -85,6 +83,9 @@ type ToolSelectionsValue = {
   contextAttachRequest: ContextAttachRequest | null;
   skillCatalogue: ComposerSkillRef[];
   promptTemplateCatalogue: ComposerPromptTemplateRef[];
+  /** Personal MCP connectors registered in connectors.json. Registered, not
+   *  active — `/mcp <name>` arms one for a single session. */
+  connectorCatalogue: ConnectorCatalogueRow[];
   selectionFor: (sessionId: SessionId | null | undefined) => ToolSelection;
 };
 
@@ -107,6 +108,7 @@ type ToolsEffectsBridgeProps = {
   onCatalogueLoaded: (payload: {
     skills: ComposerSkillRef[];
     promptTemplates: ComposerPromptTemplateRef[];
+    connectors: ConnectorCatalogueRow[];
   }) => void;
 };
 
@@ -143,7 +145,7 @@ function LazyToolsEffectsBridge(props: ToolsEffectsBridgeProps) {
 
 function buildInitialBrowser(): BrowserState {
   if (typeof window === "undefined") {
-    return { enabled: false, backend: "embedded", url: "", input: "" };
+    return { backend: "embedded", url: "", input: "" };
   }
   migrateToolStorage();
   return loadBrowserState();
@@ -175,6 +177,7 @@ export function ToolsProvider({ children }: { children: ReactNode }) {
   const [promptTemplateCatalogue, setPromptTemplateCatalogue] = useState<
     ComposerPromptTemplateRef[]
   >([]);
+  const [connectorCatalogue, setConnectorCatalogue] = useState<ConnectorCatalogueRow[]>([]);
   const selectionsRef = useRef<Map<SessionId, ToolSelection>>(new Map());
   const [selectionVersion, setSelectionVersion] = useState(0);
   const updateComputer = useCallback<Dispatch<SetStateAction<ComputerState>>>((update) => {
@@ -192,20 +195,18 @@ export function ToolsProvider({ children }: { children: ReactNode }) {
     ({
       skills,
       promptTemplates,
+      connectors,
     }: {
       skills: ComposerSkillRef[];
       promptTemplates: ComposerPromptTemplateRef[];
+      connectors: ConnectorCatalogueRow[];
     }) => {
       setSkillCatalogue(skills);
       setPromptTemplateCatalogue(promptTemplates);
+      setConnectorCatalogue(connectors);
     },
     [],
   );
-
-  const setBrowserEnabled = useCallback((enabled: boolean) => {
-    setBrowser((current) => (current.enabled === enabled ? current : { ...current, enabled }));
-    writeBrowserEnabled(enabled);
-  }, []);
 
   const setBrowserBackend = useCallback((backend: BrowserBackend) => {
     setBrowser((current) => (current.backend === backend ? current : { ...current, backend }));
@@ -217,14 +218,6 @@ export function ToolsProvider({ children }: { children: ReactNode }) {
       const backend = current.backend === "sitegeist" ? "embedded" : "sitegeist";
       writeBrowserBackend(backend);
       return { ...current, backend };
-    });
-  }, []);
-
-  const toggleBrowser = useCallback(() => {
-    setBrowser((current) => {
-      const next = !current.enabled;
-      writeBrowserEnabled(next);
-      return { ...current, enabled: next };
     });
   }, []);
 
@@ -263,13 +256,6 @@ export function ToolsProvider({ children }: { children: ReactNode }) {
           : { ...current, open: true, tab, tabs };
       });
       writeComputerTab(tab);
-      if (tab === "browser") {
-        setBrowser((current) => {
-          if (current.enabled) return current;
-          writeBrowserEnabled(true);
-          return { ...current, enabled: true };
-        });
-      }
     },
     [updateComputer],
   );
@@ -286,13 +272,6 @@ export function ToolsProvider({ children }: { children: ReactNode }) {
         writeComputerTab(tab);
         return current.tab === tab && current.tabs === tabs ? current : { ...current, tab, tabs };
       });
-      if (tab === "browser") {
-        setBrowser((current) => {
-          if (current.enabled) return current;
-          writeBrowserEnabled(true);
-          return { ...current, enabled: true };
-        });
-      }
     },
     [updateComputer],
   );
@@ -300,13 +279,6 @@ export function ToolsProvider({ children }: { children: ReactNode }) {
   const closeComputerTab = useCallback(
     (tab: ComputerTab) => {
       if (tab === "status" || tab === "tools") return;
-      if (tab === "browser") {
-        setBrowser((current) => {
-          if (!current.enabled) return current;
-          writeBrowserEnabled(false);
-          return { ...current, enabled: false };
-        });
-      }
       updateComputer((current) => {
         const tabs = uniqueComputerTabs(current.tabs.filter((item) => item !== tab));
         const activeTab = current.tab === tab ? (tabs[tabs.length - 1] ?? "status") : current.tab;
@@ -390,7 +362,8 @@ export function ToolsProvider({ children }: { children: ReactNode }) {
       if (
         current &&
         current.skills === selection.skills &&
-        current.promptTemplates === selection.promptTemplates
+        current.promptTemplates === selection.promptTemplates &&
+        current.connectors === selection.connectors
       ) {
         return;
       }
@@ -408,7 +381,8 @@ export function ToolsProvider({ children }: { children: ReactNode }) {
       if (
         existing &&
         existing.skills === selection.skills &&
-        existing.promptTemplates === selection.promptTemplates
+        existing.promptTemplates === selection.promptTemplates &&
+        existing.connectors === selection.connectors
       ) {
         continue;
       }
@@ -423,10 +397,8 @@ export function ToolsProvider({ children }: { children: ReactNode }) {
   // panel opens/closes — action-only consumers stay untouched by state churn.
   const actions = useMemo<ToolsActions>(
     () => ({
-      setBrowserEnabled,
       setBrowserBackend,
       toggleBrowserBackend,
-      toggleBrowser,
       setBrowserUrl,
       setBrowserInput,
       setComputerOpen,
@@ -442,10 +414,8 @@ export function ToolsProvider({ children }: { children: ReactNode }) {
       hydrateSelections,
     }),
     [
-      setBrowserEnabled,
       setBrowserBackend,
       toggleBrowserBackend,
-      toggleBrowser,
       setBrowserUrl,
       setBrowserInput,
       setComputerOpen,
@@ -468,9 +438,17 @@ export function ToolsProvider({ children }: { children: ReactNode }) {
       contextAttachRequest,
       skillCatalogue,
       promptTemplateCatalogue,
+      connectorCatalogue,
       selectionFor,
     }),
-    [fileOpenRequest, contextAttachRequest, skillCatalogue, promptTemplateCatalogue, selectionFor],
+    [
+      fileOpenRequest,
+      contextAttachRequest,
+      skillCatalogue,
+      promptTemplateCatalogue,
+      connectorCatalogue,
+      selectionFor,
+    ],
   );
 
   // Latest-value ref for imperative readers (use-workspace's event handlers).
@@ -519,7 +497,7 @@ export function useComputerTools(): ComputerState {
   return useToolsSlice(ComputerToolsContext, "useComputerTools");
 }
 
-/** Browser pane state (enabled/backend/url/input). */
+/** Browser pane state (backend/url/input). */
 export function useBrowserTools(): BrowserState {
   return useToolsSlice(BrowserToolsContext, "useBrowserTools");
 }
@@ -554,6 +532,7 @@ export function useTools(): ToolsContextValue {
 }
 
 export type {
+  ConnectorCatalogueRow,
   ToolSelection,
   ToolSelectionMap,
   BrowserState,

@@ -4,7 +4,6 @@ import { useState, type ReactNode } from "react";
 import {
   AppPage,
   Button,
-  buttonClasses,
   Input,
   RefreshIconButton,
   SectionNav,
@@ -73,7 +72,7 @@ export function SettingsLayout<Id extends SettingsSectionId = SettingsSectionId>
     <AppPage>
       <div
         className={cx(
-          "mx-auto grid w-full grid-cols-1 gap-4 px-4 py-4 sm:px-6 lg:justify-center lg:gap-8 lg:py-6",
+          "mx-auto grid w-full grid-cols-1 gap-4 px-4 py-4 sm:px-6 lg:justify-center lg:gap-6 lg:py-5",
           layoutWidth,
         )}
       >
@@ -93,8 +92,8 @@ export function SettingsLayout<Id extends SettingsSectionId = SettingsSectionId>
             onSelectItem={onSelectSection}
           />
         </aside>
-        <section className="min-w-0 pb-12">
-          <header className="mb-6 flex min-h-8 items-start justify-between gap-4">
+        <section className="min-w-0 pb-10">
+          <header className="mb-5 flex min-h-8 items-start justify-between gap-4">
             <div className="min-w-0">
               {eyebrow ? (
                 <div className="mb-1 text-[length:var(--fs-xs)] uppercase tracking-[0.12em] text-(--ui-muted)">
@@ -147,7 +146,7 @@ export function SettingsGroup({
   const showBody = collapsible ? open : true;
 
   return (
-    <section className="mb-8 last:mb-0">
+    <section className="mb-6 last:mb-0">
       <div className="mb-2 flex items-start justify-between gap-4 px-1">
         <div className="min-w-0">
           {collapsible ? (
@@ -286,40 +285,6 @@ export function SettingsButton({
     >
       {children}
     </Button>
-  );
-}
-
-export function SettingsLink({
-  href,
-  children,
-  tone = "default",
-  "aria-label": ariaLabel,
-}: {
-  href: string;
-  children: ReactNode;
-  tone?: "default" | "primary" | "danger";
-  "aria-label"?: string;
-}) {
-  return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      aria-label={ariaLabel}
-      style={
-        tone === "primary"
-          ? { color: "var(--color-primary-foreground)" }
-          : tone === "danger"
-            ? { color: "var(--destructive-foreground)" }
-            : undefined
-      }
-      className={buttonClasses(
-        tone === "primary" ? "primary" : tone === "danger" ? "danger" : "ghost",
-        "sm",
-      )}
-    >
-      {children}
-    </a>
   );
 }
 

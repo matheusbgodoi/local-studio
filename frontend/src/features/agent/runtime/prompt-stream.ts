@@ -16,6 +16,7 @@ import type {
   AgentToolAccess,
 } from "@/features/agent/contracts";
 import type { BrowserBackend, ToolSelection } from "@/features/agent/tools/types";
+import type { NetworkPolicy } from "@shared/agent/network-policy";
 import * as api from "@/features/agent/runtime/api";
 import type { RuntimeStatus } from "@/features/agent/runtime/api";
 import { sessionRuntimeController } from "@/features/agent/runtime/session-runtime-controller";
@@ -29,13 +30,14 @@ type MutableRef<T> = { current: T };
 
 export type SubmitArgs = {
   text: string;
-  /** Pre-resolved prompt text (with attachments / context already merged). */
+
   prompt: string;
   displayText: string;
   userText: string;
   images?: AgentImageInput[];
   attachments?: ChatMessageAttachment[];
-  browserToolEnabled?: boolean;
+
+  networkPolicy?: NetworkPolicy;
   skills?: ComposerSkillRef[];
   promptTemplates?: ComposerPromptTemplateRef[];
   targetSessionId?: SessionId;
@@ -43,7 +45,7 @@ export type SubmitArgs = {
 
 export type PromptStreamDeps = {
   activeTabId: SessionId;
-  browserToolEnabled: boolean;
+  networkPolicy: NetworkPolicy;
   browserBackend: BrowserBackend;
   cwd: string;
   modelId: string;
@@ -57,7 +59,7 @@ export type PromptStreamDeps = {
 
 type PromptTurnContext = {
   assistantId: string;
-  browserEnabledForTurn: boolean;
+  networkPolicyForTurn: NetworkPolicy;
   promptTemplates: ComposerPromptTemplateRef[];
   runtime: string;
   selected: Session;
@@ -108,10 +110,8 @@ function createPromptTurnContext(
 
   return {
     assistantId: newId("assistant"),
-    browserEnabledForTurn: args.browserToolEnabled ?? deps.browserToolEnabled,
+    networkPolicyForTurn: args.networkPolicy ?? deps.networkPolicy,
     promptTemplates,
-    // The session id is the opaque runtime key the server addresses this
-    // session by.
     runtime: selected.id,
     selected,
     sessionId,
@@ -203,7 +203,7 @@ function startPromptCommand(
         }
         const message = error instanceof Error ? error.message : "Agent request failed";
         deps.updateSession(context.sessionId, (session) =>
-          settleFailedTurn(session, context.assistantId, message),
+          settleFailedTurn(session, context.assistantId, message, args.text),
         );
       }),
     ),
@@ -211,18 +211,14 @@ function startPromptCommand(
   return Effect.runPromise(program);
 }
 
-/**
- * Settle a turn whose submit failed and whose runtime probe confirmed it never
- * took. A second prompt may have superseded this turn while the failed POST and
- * the liveness probe were in flight (both are awaited), giving the session a new
- * `activeAssistantId` and `starting`/`running` status. Only surface the error and
- * idle the session when it is STILL on this turn's bubble; otherwise the newer
- * turn owns the intent state and clobbering it would strand the in-flight turn
- * with no live-target bubble. Mirrors the success path's non-clobbering guard.
- */
-export function settleFailedTurn(session: Session, assistantId: string, message: string): Session {
+export function settleFailedTurn(
+  session: Session,
+  assistantId: string,
+  message: string,
+  draft = "",
+): Session {
   if (session.activeAssistantId && session.activeAssistantId !== assistantId) return session;
-  return { ...settleTurn(session), error: message };
+  return { ...settleTurn(session), error: message, input: session.input || draft };
 }
 
 function promptTurnRequest(
@@ -241,7 +237,7 @@ function promptTurnRequest(
     piSessionId:
       deps.tabsRef.current.find((tab) => tab.id === context.sessionId)?.piSessionId ??
       context.selected.piSessionId,
-    browserToolEnabled: context.browserEnabledForTurn,
+    networkPolicy: context.networkPolicyForTurn,
     browserSessionId: context.runtime,
     browserBackend: deps.browserBackend,
     skills: context.skills,

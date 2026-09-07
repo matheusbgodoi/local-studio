@@ -7,14 +7,17 @@ import type { RecipeWithStatus } from "@/lib/types";
 import { ModelRow, ModelSection, ModelStatus, ModelValue } from "./model-page";
 import { AttachLocalAgentsDialog } from "@/features/settings/attach-local-agents-dialog";
 import { RecipeRow } from "./recipe-row";
+import { displayNameForModel, useServedModels } from "@/hooks/served-models-store";
 
 type Props = {
   recipes: RecipeWithStatus[];
   pinnedRecipes: Set<string>;
   recipeMenuOpen: string | null;
+  lifecycleSupported: boolean;
   launching: boolean;
   runningRecipeId: string | null;
   loading: boolean;
+  loadError: string | null;
   filter: string;
   onTogglePin: (recipeId: string) => void;
   onToggleMenu: (recipeId: string) => void;
@@ -28,7 +31,7 @@ type Props = {
 const TEMPLATE_ROWS = [
   {
     label: "vLLM default",
-    description: "CUDA-first OpenAI-compatible Serve.",
+    description: "CUDA-first OpenAI-compatible launch profile.",
     value: "backend vLLM · tp/pp 1/1",
     status: "template",
   },
@@ -46,13 +49,44 @@ const TEMPLATE_ROWS = [
   },
 ];
 
+function profileSummary(count: number, loadError: string | null, loading: boolean) {
+  if (loadError) {
+    return { tone: "danger" as const, label: count ? "refresh failed" : "unreachable" };
+  }
+  if (count) return { tone: "good" as const, label: `${count} rows` };
+  if (loading) return { tone: "info" as const, label: "syncing" };
+  return { tone: "default" as const, label: "defaults" };
+}
+
+function ProfileLoadError({ error, hasProfiles }: { error: string | null; hasProfiles: boolean }) {
+  if (!error) return null;
+  return (
+    <ModelRow
+      label={
+        hasProfiles
+          ? "Launch profiles could not be refreshed"
+          : "Launch profiles could not be read from this backend"
+      }
+      description={
+        hasProfiles
+          ? "The last successful profile list remains visible below."
+          : "Nothing is listed because the request failed, not because there are no launch profiles."
+      }
+      value={<ModelValue dim>{error}</ModelValue>}
+      status={<ModelStatus tone="danger">unreachable</ModelStatus>}
+    />
+  );
+}
+
 export function RecipesTable({
   recipes,
   pinnedRecipes,
   recipeMenuOpen,
+  lifecycleSupported,
   launching,
   runningRecipeId,
   loading,
+  loadError,
   filter,
   onTogglePin,
   onToggleMenu,
@@ -62,29 +96,33 @@ export function RecipesTable({
   onRequestDelete,
   onNewRecipe,
 }: Props) {
+  const { physicalModels } = useServedModels();
   const [attachRecipe, setAttachRecipe] = useState<RecipeWithStatus | null>(null);
   const emptyBecauseSearch = Boolean(filter.trim()) && recipes.length === 0;
-  const launchDisabledReason = launching
-    ? "A launch is already in progress."
-    : runningRecipeId
-      ? "Stop the running model before launching another Serve."
-      : null;
+  const summary = profileSummary(recipes.length, loadError, loading);
+  const launchDisabledReason = !lifecycleSupported
+    ? "Model lifecycle controls are unavailable on this controller."
+    : launching
+      ? "A launch is already in progress."
+      : runningRecipeId
+        ? "Unload the running model before launching another one."
+        : null;
 
   return (
     <ModelSection
-      title="Saved Serves"
-      description="Launch-ready model, runtime, and configuration combinations."
-      actions={
-        <ModelStatus tone={recipes.length ? "good" : loading ? "info" : "default"}>
-          {recipes.length ? `${recipes.length} rows` : loading ? "syncing" : "defaults"}
-        </ModelStatus>
+      title="Saved launch profiles"
+      description={
+        lifecycleSupported
+          ? "Launch-ready model, runtime, and configuration combinations."
+          : "Profiles can be managed here, but this controller cannot launch or unload models."
       }
+      actions={<ModelStatus tone={summary.tone}>{summary.label}</ModelStatus>}
     >
       {loading ? (
         <ModelRow
           label="Controller sync"
-          description="Serve requests are still in flight; stable defaults stay visible below."
-          value={<ModelValue dim>Loading controller Serves…</ModelValue>}
+          description="Launch profile requests are still in flight; stable defaults stay visible below."
+          value={<ModelValue dim>Loading launch profiles…</ModelValue>}
           status={<ModelStatus tone="info">syncing</ModelStatus>}
         />
       ) : null}
@@ -100,6 +138,8 @@ export function RecipesTable({
         />
       ) : null}
 
+      <ProfileLoadError error={loadError} hasProfiles={recipes.length > 0} />
+
       {recipes.length
         ? recipes.map((recipe) => (
             <RecipeRow
@@ -107,7 +147,8 @@ export function RecipesTable({
               recipe={recipe}
               isPinned={pinnedRecipes.has(recipe.id)}
               isMenuOpen={recipeMenuOpen === recipe.id}
-              launchDisabled={launching || Boolean(runningRecipeId)}
+              lifecycleSupported={lifecycleSupported}
+              launchDisabled={!lifecycleSupported || launching || Boolean(runningRecipeId)}
               launchDisabledReason={launchDisabledReason}
               onTogglePin={onTogglePin}
               onToggleMenu={onToggleMenu}
@@ -116,27 +157,33 @@ export function RecipesTable({
               onEdit={onEdit}
               onRequestDelete={onRequestDelete}
               onAttachAgents={setAttachRecipe}
+              modelDisplayName={
+                displayNameForModel(physicalModels, recipe.served_model_name) ??
+                "Model identity unavailable"
+              }
             />
           ))
-        : TEMPLATE_ROWS.map((row) => (
-            <ModelRow
-              key={row.label}
-              label={row.label}
-              description={
-                emptyBecauseSearch
-                  ? `No exact match for "${filter.trim()}". ${row.description}`
-                  : row.description
-              }
-              value={<ModelValue mono>{row.value}</ModelValue>}
-              status={<ModelStatus>{row.status}</ModelStatus>}
-              actions={
-                <ModelButton onClick={onNewRecipe}>
-                  <Plus className="h-3 w-3" />
-                  Use
-                </ModelButton>
-              }
-            />
-          ))}
+        : loadError
+          ? null
+          : TEMPLATE_ROWS.map((row) => (
+              <ModelRow
+                key={row.label}
+                label={row.label}
+                description={
+                  emptyBecauseSearch
+                    ? `No exact match for "${filter.trim()}". ${row.description}`
+                    : row.description
+                }
+                value={<ModelValue mono>{row.value}</ModelValue>}
+                status={<ModelStatus>{row.status}</ModelStatus>}
+                actions={
+                  <ModelButton onClick={onNewRecipe}>
+                    <Plus className="h-3 w-3" />
+                    Use
+                  </ModelButton>
+                }
+              />
+            ))}
 
       {attachRecipe ? (
         <AttachLocalAgentsDialog

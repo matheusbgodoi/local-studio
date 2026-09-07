@@ -23,8 +23,14 @@ export type ToolBlock = {
   args?: Record<string, unknown>;
   // Tool execution output (separate from args so we can render both).
   resultText?: string;
+  resultImages?: ToolResultImage[];
   // Back-compat single-text field used by legacy renderers / replays.
   text: string;
+};
+
+export type ToolResultImage = {
+  data: string;
+  mimeType: string;
 };
 
 export type TextBlock = { kind: "text"; id: string; text: string };
@@ -86,6 +92,8 @@ export type QueuedMessage = {
   // is reserved for local fallback work that Pi did not accept.
   mode: "steer" | "follow_up";
   text: string;
+  runtimeText?: string;
+  attachments?: ChatMessageAttachment[];
   sent?: boolean;
 };
 
@@ -100,6 +108,8 @@ export type SessionTab = {
   cwd?: string;
   modelId?: string;
   thinkingLevel?: import("@/features/agent/contracts").AgentThinkingLevel;
+  // Per-conversation network boundary choice; see `Session.networkPolicy`.
+  networkPolicy?: import("@shared/agent/network-policy").NetworkPolicy;
   title: string;
   messages: ChatMessage[];
   status: import("@/features/agent/runtime/types").SessionStatus;

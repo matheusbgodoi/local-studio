@@ -77,7 +77,7 @@ export function GoogleAccountSetup({
       )}
       {awaiting ? (
         <Alert variant="success">
-          Finish consent in your browser. Local Studio is checking for the connection.
+          Finish consent in your browser. CRIAs AI is checking for the connection.
         </Alert>
       ) : null}
       <div className="flex flex-wrap items-center justify-between gap-3">

@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import type { RecipeWithStatus } from "@/lib/types";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 import { POPOVER_PANEL_CLASS } from "@/ui/popover";
+import { displayNameForModel, useServedModels } from "@/hooks/served-models-store";
 
 export function ModelsDropdown({
   recipes,
@@ -20,6 +21,7 @@ export function ModelsDropdown({
   onNewRecipe?: () => void;
   onViewAll?: () => void;
 }) {
+  const { physicalModels } = useServedModels();
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
   const ref = useRef<HTMLDivElement | null>(null);
@@ -34,9 +36,32 @@ export function ModelsDropdown({
   }, [open]);
 
   const q = filter.toLowerCase();
+  const identifiedRecipes = new Set<string>();
+  const identified = physicalModels.flatMap((physical) => {
+    const matches = recipes.filter((recipe) =>
+      physical.profiles.some((profile) => profile.id === recipe.served_model_name),
+    );
+    const recipe =
+      matches.find((candidate) => candidate.served_model_name === physical.primary.id) ??
+      matches[0];
+    if (!recipe) return [];
+    for (const match of matches) identifiedRecipes.add(match.id);
+    return [
+      {
+        recipe,
+        displayName:
+          displayNameForModel(physicalModels, recipe.served_model_name) ??
+          "Model identity unavailable",
+      },
+    ];
+  });
+  for (const recipe of recipes) {
+    if (identifiedRecipes.has(recipe.id)) continue;
+    identified.push({ recipe, displayName: "Model identity unavailable" });
+  }
   const filtered = q
-    ? recipes.filter((r) => r.name.toLowerCase().includes(q) || r.id.toLowerCase().includes(q))
-    : recipes;
+    ? identified.filter(({ displayName }) => displayName.toLowerCase().includes(q))
+    : identified;
   const visible = filtered.slice(0, q ? 8 : 6);
 
   return (
@@ -76,13 +101,14 @@ export function ModelsDropdown({
                 No models found.
               </div>
             ) : null}
-            {visible.map((recipe) => (
+            {visible.map(({ recipe, displayName }) => (
               <ModelDropdownRow
                 key={recipe.id}
                 currentRecipeId={currentRecipeId}
                 lifecycleStatus={lifecycleStatus}
                 onLaunch={onLaunch}
                 recipe={recipe}
+                modelDisplayName={displayName}
                 setOpen={setOpen}
               />
             ))}
@@ -111,12 +137,14 @@ function ModelDropdownRow({
   lifecycleStatus,
   onLaunch,
   recipe,
+  modelDisplayName,
   setOpen,
 }: {
   currentRecipeId?: string;
   lifecycleStatus: "idle" | "starting" | "ready" | "error";
   onLaunch: (id: string) => Promise<void>;
   recipe: RecipeWithStatus;
+  modelDisplayName: string;
   setOpen: (open: boolean) => void;
 }) {
   const isCurrent = recipe.id === currentRecipeId;
@@ -134,8 +162,11 @@ function ModelDropdownRow({
       <span
         className={`h-3 w-0.5 shrink-0 ${isCurrent ? "bg-(--fg)" : running ? "bg-(--fg)/60" : "bg-(--dim)/40"}`}
       />
-      <span className="flex-1 truncate text-[length:var(--fs-sm)] text-(--fg)" title={recipe.name}>
-        {recipe.name}
+      <span
+        className="flex-1 truncate text-[length:var(--fs-sm)] text-(--fg)"
+        title={modelDisplayName}
+      >
+        {modelDisplayName}
       </span>
       {running ? <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> : null}
       <span className="text-[length:var(--fs-2xs)] text-(--dim)">

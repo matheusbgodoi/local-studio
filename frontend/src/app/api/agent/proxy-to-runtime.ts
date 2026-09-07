@@ -1,3 +1,4 @@
+import { longRuntimeRequest } from "./long-runtime-request";
 import { readRequestBytesWithinLimit } from "@shared/agent/agent-turn-body";
 
 const HOP_BY_HOP_REQUEST_HEADERS = ["host", "connection", "content-length", "accept-encoding"];
@@ -5,6 +6,7 @@ const DEFAULT_AGENT_RUNTIME_URL = "http://127.0.0.1:8081";
 
 type AgentRuntimeProxyOptions = {
   bodyLimitBytes?: number;
+  responseTimeoutMs?: number;
 };
 
 export function agentRuntimeBaseUrl(): string {
@@ -37,13 +39,19 @@ export async function proxyToAgentRuntime(
 
   let upstream: Response;
   try {
-    upstream = await fetch(target, {
-      method: request.method,
-      headers,
-      body,
-      signal: request.signal,
-      cache: "no-store",
-    });
+    upstream = options.responseTimeoutMs
+      ? await longRuntimeRequest(
+          target,
+          { method: request.method, headers, body, signal: request.signal },
+          options.responseTimeoutMs,
+        )
+      : await fetch(target, {
+          method: request.method,
+          headers,
+          body,
+          signal: request.signal,
+          cache: "no-store",
+        });
   } catch (error) {
     if (request.signal.aborted) throw error;
     return Response.json(
@@ -58,7 +66,7 @@ export async function proxyToAgentRuntime(
 
   const responseHeaders = new Headers(upstream.headers);
   responseHeaders.delete("content-length");
-  responseHeaders.delete("content-encoding");
+  if (!options.responseTimeoutMs) responseHeaders.delete("content-encoding");
   responseHeaders.delete("transfer-encoding");
   return new Response(upstream.body, { status: upstream.status, headers: responseHeaders });
 }

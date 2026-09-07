@@ -33,20 +33,30 @@ export function downloadCompletedText(
 export function DownloadsTab({
   onCreateServe,
 }: {
-  onCreateServe: (download: ModelDownload) => void;
+  onCreateServe?: (download: ModelDownload) => void;
 }) {
-  const { downloads, error, pauseDownload, resumeDownload, cancelDownload } = useDownloads();
+  const { downloads, error, unsupported, pauseDownload, resumeDownload, cancelDownload } =
+    useDownloads();
   return (
     <ModelSection
       title="Downloads"
       description="Models the user requested, with server-side state, progress, speed, errors, and controls."
       actions={
-        <ModelStatus tone={error ? "danger" : downloads.length ? "info" : "default"}>
-          {error ? "error" : `${downloads.length} rows`}
+        <ModelStatus
+          tone={unsupported ? "warning" : error ? "danger" : downloads.length ? "info" : "default"}
+        >
+          {unsupported ? "unavailable" : error ? "error" : `${downloads.length} rows`}
         </ModelStatus>
       }
     >
-      {error ? (
+      {unsupported ? (
+        <ModelRow
+          label="This backend has no download queue"
+          description="The route the queue is read from is not implemented here, so nothing can be queued, paused, or retried from CRIAs AI."
+          value={<ModelValue dim>{error ?? "Route not implemented."}</ModelValue>}
+          status={<ModelStatus tone="warning">unavailable</ModelStatus>}
+        />
+      ) : error ? (
         <ModelRow
           label="Download worker"
           description="Controller download endpoint returned an error."
@@ -54,7 +64,11 @@ export function DownloadsTab({
           status={<ModelStatus tone="danger">error</ModelStatus>}
         />
       ) : null}
-      {downloads.length === 0 ? (
+      {/* `!error` as well as `!unsupported`. Guarded on `unsupported` alone, a 500 from the
+          download endpoint rendered the red error row AND "No downloads — Queue is empty"
+          directly beneath it: the honest sentence and the confident lie, together. An empty
+          list is only news when the list was actually read. */}
+      {downloads.length === 0 && !unsupported && !error ? (
         <ModelRow
           label="No downloads"
           description="Click Download from Search Models to populate this section."
@@ -99,10 +113,10 @@ export function DownloadsTab({
                       <X className="h-3 w-3" />
                     </ModelButton>
                   ) : null}
-                  {download.status === "completed" ? (
+                  {download.status === "completed" && onCreateServe ? (
                     <ModelButton tone="primary" onClick={() => onCreateServe(download)}>
                       <Plus className="h-3 w-3" />
-                      Create Serve
+                      Create launch profile
                     </ModelButton>
                   ) : null}
                 </>

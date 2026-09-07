@@ -9,6 +9,7 @@ import type { ProcessInfo, RecipeWithStatus, RuntimePlatformKind } from "@/lib/t
 import { useAppStore } from "@/store";
 import { ModelsDropdown } from "./status-section-models-dropdown";
 import type { CompactMetricView, MetricColumnView } from "./status-section-view";
+import { useControllerCapabilities } from "@/hooks/controller-capabilities-store";
 
 export function StatusHeader({
   backend,
@@ -49,6 +50,10 @@ export function StatusHeader({
   onViewAll?: () => void;
   recipes?: RecipeWithStatus[];
 }) {
+  const { capabilities } = useControllerCapabilities();
+  const lifecycleSupported = capabilities.features.lifecycle === "supported";
+  const recipesSupported = capabilities.features.recipes === "supported";
+  const logsSupported = capabilities.features.logs === "supported";
   return (
     // Stacks on phone widths: the five header actions would otherwise crush
     // the status line and model name into overlapping slivers.
@@ -86,6 +91,9 @@ export function StatusHeader({
         onNewRecipe={onNewRecipe}
         onViewAll={onViewAll}
         recipes={recipes}
+        lifecycleSupported={lifecycleSupported}
+        recipesSupported={recipesSupported}
+        logsSupported={logsSupported}
       />
     </div>
   );
@@ -136,6 +144,9 @@ function StatusHeaderActions({
   onNewRecipe,
   onViewAll,
   recipes,
+  lifecycleSupported,
+  recipesSupported,
+  logsSupported,
 }: {
   benchmarking: boolean;
   benchmarkResult: number | null;
@@ -148,12 +159,15 @@ function StatusHeaderActions({
   onNewRecipe?: () => void;
   onViewAll?: () => void;
   recipes?: RecipeWithStatus[];
+  lifecycleSupported: boolean;
+  recipesSupported: boolean;
+  logsSupported: boolean;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       <HeaderThemeToggle />
-      <HeaderStopButton running={isRunning} />
-      {recipes && onLaunch ? (
+      {lifecycleSupported ? <HeaderStopButton running={isRunning} /> : null}
+      {lifecycleSupported && recipesSupported && recipes && recipes.length > 0 && onLaunch ? (
         <ModelsDropdown
           currentRecipeId={currentRecipeId}
           lifecycleStatus={lifecycleStatus}
@@ -163,7 +177,7 @@ function StatusHeaderActions({
           recipes={recipes}
         />
       ) : null}
-      <ActionBtn label="Logs" onClick={onNavigateLogs} />
+      {logsSupported ? <ActionBtn label="Logs" onClick={onNavigateLogs} /> : null}
       <ActionBtn
         label={benchmarkButtonLabel(benchmarking, benchmarkResult)}
         onClick={onBenchmark}
@@ -214,10 +228,10 @@ function HeaderStopButton({ running }: { running: boolean }) {
           onClick={open}
           disabled={stopping}
           className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs text-(--err) hover:bg-(--err)/10 disabled:opacity-40"
-          title="Stop model"
+          title="Unload model and free GPU memory"
         >
           <Square className="h-3.5 w-3.5" fill="currentColor" />
-          {stopping ? "Stopping" : "Stop"}
+          {stopping ? "Unloading" : "Unload model"}
         </button>
       )}
     />
@@ -237,7 +251,7 @@ export function StatusMetricStrip({
         <MetricCell
           key={metric.label}
           label={metric.label}
-          value={metric.value ?? "0"}
+          value={metric.value ?? "—"}
           unit={metric.value ? metric.unit : undefined}
           detail={metric.detail ?? undefined}
           detailTitle={metric.detailTitle ?? undefined}

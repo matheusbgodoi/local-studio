@@ -1,4 +1,8 @@
-import { consumeAgentSessionNavTitle } from "@/features/agent/ui/projects-nav/helpers";
+import {
+  consumeAgentSessionNavState,
+  consumeAgentSessionNavTitle,
+  type AgentSessionNavState,
+} from "@/features/agent/ui/projects-nav/helpers";
 import type { WorkspaceDispatch } from "@/features/agent/workspace/effects";
 import type { ProjectsContextValue } from "@/features/agent/projects/context";
 import type { Project } from "@/features/agent/projects/types";
@@ -49,6 +53,7 @@ export function workspaceNavigationAction(
   searchParams: SearchParamsReader,
   project: Project | null,
   sessionTitle?: string,
+  sessionState?: AgentSessionNavState | null,
 ): Extract<WorkspaceAction, { type: "urlNavRequested" }> | null {
   const params = navigationParams(searchParams);
   const key = navigationKey(params);
@@ -57,6 +62,8 @@ export function workspaceNavigationAction(
     ...makeFreshTab(),
     projectId: project?.id,
     cwd: project?.path,
+    ...(sessionState?.modelId ? { modelId: sessionState.modelId } : {}),
+    ...(sessionState?.networkPolicy ? { networkPolicy: sessionState.networkPolicy } : {}),
   };
   return {
     type: "urlNavRequested",
@@ -67,7 +74,10 @@ export function workspaceNavigationAction(
     ...(sessionTitle ? { sessionTitle } : {}),
     newSession: params.newParam !== null,
     split: params.splitParam === "1",
-    replaceWorkspace: params.replaceParam === "1",
+    replaceWorkspace:
+      params.replaceParam === "1" ||
+      params.newParam !== null ||
+      (params.sessionId !== null && params.splitParam !== "1"),
     paneId: newPaneId(),
     tab,
   };
@@ -103,8 +113,11 @@ function requestWorkspaceUrlNavigation({
   if (params.projectId && !project) return;
 
   if (project) projects.selectProject(project);
-  const sessionTitle = params.sessionId ? consumeAgentSessionNavTitle(params.sessionId) : undefined;
-  const action = workspaceNavigationAction(searchParams, project, sessionTitle);
+  const sessionState = params.sessionId ? consumeAgentSessionNavState(params.sessionId) : null;
+  const sessionTitle =
+    sessionState?.title ||
+    (params.sessionId ? consumeAgentSessionNavTitle(params.sessionId) : undefined);
+  const action = workspaceNavigationAction(searchParams, project, sessionTitle, sessionState);
   if (action) dispatch(action);
   consumeOneShotNavParams(params.projectId, params.sessionId);
 }

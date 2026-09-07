@@ -16,7 +16,7 @@ const CONTINUATION_GRACE_MS = 2000;
 export function goalContinuationPrompt(objective: string): string {
   return [
     `Continue working toward the goal: ${objective}.`,
-    "Check progress against concrete evidence (files, command output, tests) before deciding.",
+    "Check progress against concrete evidence (files, command output, runtime behavior) before deciding.",
     "If the goal is fully achieved, end your reply with GOAL_COMPLETE.",
     "If you cannot make further progress, end your reply with GOAL_BLOCKED and the reason.",
   ].join(" ");
@@ -34,10 +34,7 @@ function eventTouchesTools(event: LoggedPiEvent["event"]): boolean {
   return type.includes("tool");
 }
 
-async function settleGoalAfterTurn(
-  session: PiAgentSession,
-  state: DriverState,
-): Promise<void> {
+async function settleGoalAfterTurn(session: PiAgentSession, state: DriverState): Promise<void> {
   const status = session.status;
   const piSessionId = status.piSessionId;
   if (!piSessionId) return;
@@ -93,7 +90,9 @@ async function settleGoalAfterTurn(
         if (!liveGoal || liveGoal.status !== "active") return;
         state.lastTurnWasContinuation = true;
         state.sawToolThisTurn = false;
-        await session.prompt(goalContinuationPrompt(liveGoal.objective), () => {});
+        await session.prompt(goalContinuationPrompt(liveGoal.objective), () => {}, {
+          inferencePriority: "background",
+        });
       } catch {
         // A failed continuation leaves the goal active for the user to resume.
       } finally {

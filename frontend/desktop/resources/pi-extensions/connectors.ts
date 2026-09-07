@@ -17,6 +17,13 @@ type ToolResult = {
 };
 
 const FRONTEND_BASE = process.env.LOCAL_STUDIO_FRONTEND_BASE ?? "http://127.0.0.1:3000";
+// Present only while the app is published; the frontend then requires it of
+// every caller, with no exemption for ones running on this machine.
+const FRONTEND_TOKEN = process.env.LOCAL_STUDIO_FRONTEND_TOKEN;
+const STUDIO_HEADERS: Record<string, string> = {
+  "Content-Type": "application/json",
+  ...(FRONTEND_TOKEN ? { "x-local-studio-token": FRONTEND_TOKEN } : {}),
+};
 const CALL_TIMEOUT_MS = 120_000;
 
 interface InventoryTool {
@@ -39,7 +46,11 @@ const textResult = (text: string, details: Record<string, unknown>): ToolResult 
 
 /** Render an MCP tools/call result (content blocks) as plain text. */
 const renderMcpResult = (result: unknown): string => {
-  if (result && typeof result === "object" && Array.isArray((result as { content?: unknown[] }).content)) {
+  if (
+    result &&
+    typeof result === "object" &&
+    Array.isArray((result as { content?: unknown[] }).content)
+  ) {
     const blocks = (result as { content: Array<{ type?: string; text?: string }> }).content;
     const texts = blocks
       .map((block) => (block.type === "text" && block.text ? block.text : JSON.stringify(block)))
@@ -63,7 +74,7 @@ async function callConnectorTool(
   try {
     const response = await fetch(`${FRONTEND_BASE}/api/agent/connectors/call`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: STUDIO_HEADERS,
       body: JSON.stringify({ connector_id: connectorId, tool, args }),
       signal: controller.signal,
     });
@@ -94,6 +105,7 @@ export default async function connectorsExtension(pi: ExtensionAPI): Promise<voi
   let inventory: InventoryConnector[] = [];
   try {
     const response = await fetch(`${FRONTEND_BASE}/api/agent/connectors/call`, {
+      headers: STUDIO_HEADERS,
       signal: AbortSignal.timeout(30_000),
     });
     const payload = (await response.json()) as { connectors?: InventoryConnector[] };

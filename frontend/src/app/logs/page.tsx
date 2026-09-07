@@ -2,8 +2,15 @@
 
 import { LogsView } from "@/features/logs/logs-view";
 import { useLogs } from "@/features/logs/use-logs";
+import { useControllerCapabilities } from "@/hooks/controller-capabilities-store";
 
 export default function LogsPage() {
+  const { controllerKey } = useControllerCapabilities();
+  return <LogsPageForController key={controllerKey} />;
+}
+
+function LogsPageForController() {
+  const { capabilities, controllerKey } = useControllerCapabilities();
   const {
     sessions,
     filteredSessions,
@@ -15,6 +22,7 @@ export default function LogsPage() {
     loadingContent,
     autoScroll,
     autoRefresh,
+    streamingAvailable,
     sidebarOpen,
     logRef,
     setFilter,
@@ -28,7 +36,7 @@ export default function LogsPage() {
     renderLogs,
     handleSelectSession,
     formatDateTime,
-  } = useLogs();
+  } = useLogs(capabilities.features.logs, controllerKey);
 
   return (
     <LogsView
@@ -42,6 +50,7 @@ export default function LogsPage() {
       loadingContent={loadingContent}
       autoScroll={autoScroll}
       autoRefresh={autoRefresh}
+      streamingAvailable={streamingAvailable}
       sidebarOpen={sidebarOpen}
       logRef={logRef}
       onFilterChange={setFilter}

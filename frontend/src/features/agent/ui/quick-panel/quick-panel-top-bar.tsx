@@ -41,8 +41,8 @@ export function QuickPanelTopBar({
             onClick={() =>
               void getQuickPanelBridge()?.focusMainAndNavigate(projectId, sessionId ?? undefined)
             }
-            title="Open in Local Studio"
-            aria-label="Open in Local Studio"
+            title="Open in CRIAs AI"
+            aria-label="Open in CRIAs AI"
             className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-(--dim) transition-colors hover:bg-(--hover) hover:text-(--fg)"
           >
             <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.75} />

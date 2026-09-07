@@ -1,7 +1,8 @@
-// Pure pi-runtime state derivation. This module must stay free of runtime
-// imports of @earendil-works/pi-coding-agent (ESM-only) so the node test
-// runner can load it; pi-runtime-types only contributes erased type imports.
+// Pure pi-runtime state derivation. This module stays free of runtime imports
+// from @earendil-works/pi-coding-agent; pi-runtime-types contributes only
+// erased type imports.
 import type { LoggedPiEvent, PiAgentStatus, PiContextUsage } from "./pi-runtime-types";
+import type { NetworkPolicy } from "../../../shared/agent/network-policy";
 
 type RuntimeLookupEntry<TSession> = {
   sessionId: string;
@@ -70,6 +71,8 @@ export function piStatusFromEvents(input: {
   activePromptCount: number;
   sdkActive?: boolean;
   modelId: string;
+  behaviorProfile: string | null;
+  networkPolicy: NetworkPolicy;
   cwd: string;
   piSessionId: string | null;
   agentDir: string;
@@ -82,6 +85,8 @@ export function piStatusFromEvents(input: {
     running: input.running,
     active: input.activePromptCount > 0 || input.sdkActive === true,
     modelId: input.modelId,
+    behaviorProfile: input.behaviorProfile,
+    networkPolicy: input.networkPolicy,
     cwd: input.cwd,
     piSessionId: input.piSessionId,
     agentDir: input.agentDir,

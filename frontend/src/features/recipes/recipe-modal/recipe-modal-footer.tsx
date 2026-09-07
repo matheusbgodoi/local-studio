@@ -30,12 +30,12 @@ export function RecipeModalFooter({
     <DrawerFooter
       status={
         <>
-          {recipe.id ? `Editing ${recipe.name}` : "Creating a Serve"}
+          {recipe.id ? `Editing ${recipe.name}` : "Creating a launch profile"}
           {extraArgsError ? (
             <span className="ml-3 text-(--ui-danger)">Extra args has errors</span>
           ) : null}
           {recipeSourceError ? (
-            <span className="ml-3 text-(--ui-danger)">Serve JSON has errors</span>
+            <span className="ml-3 text-(--ui-danger)">Profile JSON has errors</span>
           ) : null}
         </>
       }
@@ -49,7 +49,7 @@ export function RecipeModalFooter({
         disabled={saving || invalid}
         icon={saving ? <Spinner size="xs" variant="refresh" /> : <Save className="h-3 w-3" />}
       >
-        {saving ? "Saving..." : "Save Serve"}
+        {saving ? "Saving..." : "Save profile"}
       </Button>
     </DrawerFooter>
   );

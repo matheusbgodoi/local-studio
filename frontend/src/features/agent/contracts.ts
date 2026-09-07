@@ -8,7 +8,6 @@ export {
   objectRecord,
   stringField,
   stringArray,
-  boolField,
   parseAgentTurnRequest,
   AGENT_THINKING_LEVELS,
   AgentThinkingLevelSchema,

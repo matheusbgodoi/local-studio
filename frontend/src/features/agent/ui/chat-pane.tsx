@@ -17,11 +17,19 @@ import { type FileMentionRow, type MentionRow } from "@/features/agent/ui/agent-
 import { builtinCommandProvider } from "@/features/agent/composer/builtin-commands";
 import { ComposerProjectDrawer } from "@/features/agent/ui/composer-project-drawer";
 import { SubagentChips } from "@/features/agent/ui/subagent-chips";
+import { RunInlinePanel } from "@/features/runs/run-inline-panel";
 import { GitDiffDrawer } from "@/features/agent/ui/git-diff-drawer";
 import {
   promptTemplateCommandProvider,
   skillCommandProvider,
 } from "@/features/agent/composer/catalogue-commands";
+import {
+  skillInvocationCommandProvider,
+  skillInvocationText,
+} from "@/features/agent/composer/skill-invocation-commands";
+import { mcpCommandProvider } from "@/features/agent/composer/mcp-commands";
+import { transcriptCommandProvider } from "@/features/agent/composer/transcript-commands";
+import { setSessionConnectors } from "@/features/agent/tools/connector-session-api";
 import {
   createComposerCommandRegistry,
   parseSlashInvocation,
@@ -45,10 +53,34 @@ function diffDrawerFor(
 function piSessionIdOf(tab: { piSessionId?: string | null } | null | undefined): string | null {
   return tab?.piSessionId ?? null;
 }
+function sessionNetworkPolicy(tab: SessionTab | null): NetworkPolicy {
+  return tab?.networkPolicy ?? DEFAULT_NETWORK_POLICY;
+}
+
+function networkControlFor(
+  tab: SessionTab | null,
+  policy: NetworkPolicy,
+  onPolicyChange: (policy: NetworkPolicy) => void,
+) {
+  return (
+    <AgentNetworkControl
+      sessionId={tab?.id ?? null}
+      policy={policy}
+      disabled={!tab}
+      onPolicyChange={onPolicyChange}
+    />
+  );
+}
 
 function subagentChipsFor(piSessionId: string | null | undefined) {
   if (!piSessionId) return null;
   return <SubagentChips piSessionId={piSessionId} />;
+}
+function runPanelFor(
+  tab: { id?: string } | null | undefined,
+  piSessionId: string | null | undefined,
+) {
+  return <RunInlinePanel sessionId={tab?.id ?? null} piSessionId={piSessionId ?? null} />;
 }
 
 import {
@@ -81,18 +113,25 @@ import { useGoalMode } from "@/features/agent/ui/use-goal-mode";
 import { useChatPaneComposerActions } from "@/features/agent/ui/use-chat-pane-composer-actions";
 import { useComposerCommandHandlers } from "@/features/agent/ui/use-composer-command-handlers";
 import { useChatPaneSendFlow } from "@/features/agent/ui/chat-pane-send-flow";
-import { ChatPaneHandle, SessionTab } from "@/features/agent/messages";
+import { ChatPaneHandle, newId, nowLabel, SessionTab } from "@/features/agent/messages";
+import type {
+  GeneratedImageDecision,
+  GeneratedImageDecisionHandler,
+} from "@/features/agent/ui/timeline/generated-image-block";
 import { useSessionEngine } from "@/features/agent/runtime/engine";
 import type { UpdateSession } from "@/features/agent/runtime/types";
 import { useTools } from "@/features/agent/tools/context";
 import type { GitSummary, Project } from "@/features/agent/projects/types";
 import type { BrowserBackend } from "@/features/agent/tools/types";
 import type { AgentThinkingLevel } from "@/features/agent/contracts";
+import { DEFAULT_NETWORK_POLICY, type NetworkPolicy } from "@shared/agent/network-policy";
+import { AgentNetworkControl } from "@/features/agent/ui/agent-network-control";
+import { pickThinkingLevel } from "@/features/agent/messages/thinking-level-pref";
 import {
-  loadThinkingLevelDefault,
-  pickThinkingLevel,
-  setThinkingLevelDefault,
-} from "@/features/agent/messages/thinking-level-pref";
+  browserThinkingStorage,
+  readModelThinkingLevel,
+  writeModelThinkingLevel,
+} from "@/features/agent/workspace/thinking-level-preference";
 import {
   exportFilenameFromTitle,
   sessionToMarkdown,
@@ -109,6 +148,7 @@ import {
   type TerminalOwnersSnapshot,
 } from "@/features/agent/ui/use-persistent-terminal-owners";
 import { PersistentTerminals } from "@/features/agent/ui/persistent-terminals";
+import { saveTextFile } from "@/features/agent/composer/save-text-file";
 import { cx } from "@/ui/utils";
 import { ExtensionUiDialog } from "@/features/agent/ui/extension-ui-dialog";
 import {
@@ -122,19 +162,6 @@ const Timeline = dynamic(
   () => import("@/features/agent/ui/timeline/timeline").then((mod) => mod.Timeline),
   { ssr: false, loading: () => <TimelineFallback /> },
 );
-
-function downloadTextFile(filename: string, content: string): void {
-  if (typeof document === "undefined") return;
-  const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
-}
 
 function EmptyPromptTimeline() {
   return (
@@ -164,6 +191,29 @@ function chatPaneClassName(composerOnly: boolean): string {
   );
 }
 
+function generatedImageDecisionPrompt(input: {
+  decision: GeneratedImageDecision;
+  toolCallId: string;
+  imageIndex: number;
+  imageCount: number;
+  resultText?: string;
+  note?: string;
+}): string {
+  const { decision, toolCallId, imageIndex, imageCount, resultText, note } = input;
+  const artifact = resultText?.trim() ? `\nTool result: ${resultText.trim()}` : "";
+  const selection = `image ${imageIndex + 1} of ${imageCount}`;
+  if (decision === "approve") {
+    return `Approve ${selection} from tool call ${toolCallId}.${artifact}\nUse that exact selected artifact. Apply the configured approval step: upscale and save or finalize it. Do not regenerate it.`;
+  }
+  if (decision === "reject") {
+    return `Reject ${selection} from tool call ${toolCallId}.${artifact}\nDo not upscale, publish, or finalize it. Confirm that it was rejected.`;
+  }
+  const change = note?.trim()
+    ? `Apply this requested change: ${note.trim()}`
+    : "Use a new random seed and otherwise preserve the request.";
+  return `Regenerate ${selection} from tool call ${toolCallId}.${artifact}\n${change}\nShow the new result for approval.`;
+}
+
 function ChatTranscript({
   composerOnly,
   terminalView,
@@ -173,6 +223,7 @@ function ChatTranscript({
   setStickToBottom,
   running,
   onForkSession,
+  onGeneratedImageDecision,
   loadEarlierHistory,
 }: {
   composerOnly: boolean;
@@ -183,6 +234,7 @@ function ChatTranscript({
   setStickToBottom: (value: boolean) => void;
   running: boolean;
   onForkSession?: () => void;
+  onGeneratedImageDecision?: GeneratedImageDecisionHandler;
   loadEarlierHistory: () => Promise<void>;
 }) {
   const viewKey = activeTab?.piSessionId ?? activeTab?.id ?? null;
@@ -202,6 +254,7 @@ function ChatTranscript({
           viewKey={viewKey}
           viewAlias={viewAlias}
           onForkSession={onForkSession}
+          onGeneratedImageDecision={onGeneratedImageDecision}
           hasEarlier={activeTab?.historyCursor != null}
           onLoadEarlier={loadEarlierHistory}
         />
@@ -213,7 +266,6 @@ function ChatTranscript({
 type Props = {
   paneId: string;
   modelId: string;
-  modelName: string | null;
   modelSupportsVision: boolean;
   modelThinkingLevels: readonly AgentThinkingLevel[];
   modelsLoading: boolean;
@@ -224,10 +276,8 @@ type Props = {
   gitBranch?: string | null;
   gitSummary?: GitSummary | null;
   onInitGit?: () => void;
-  browserToolEnabled: boolean;
   browserBackend: BrowserBackend;
   onToggleBrowserBackend: () => void;
-  onToggleBrowserTool: () => void;
   isFocused: boolean;
   onFocus: () => void;
   onPiSessionIdChange?: (sessionId: string) => void;
@@ -259,10 +309,18 @@ function renderComposerModelSelector(
 ): ReactNode {
   return renderer ? renderer(props) : null;
 }
+
+function terminalActionFor(
+  terminalOwner: TerminalOwner | null,
+  toggleTerminalView: () => void,
+  onOpenTerminal: (() => void) | undefined,
+): (() => void) | undefined {
+  return terminalOwner ? toggleTerminalView : onOpenTerminal;
+}
+
 export function ChatPane({
   paneId,
   modelId,
-  modelName,
   modelSupportsVision,
   modelThinkingLevels,
   modelsLoading,
@@ -273,10 +331,8 @@ export function ChatPane({
   gitBranch,
   gitSummary,
   onInitGit,
-  browserToolEnabled,
   browserBackend,
   onToggleBrowserBackend,
-  onToggleBrowserTool,
   isFocused,
   onFocus,
   onPiSessionIdChange,
@@ -345,12 +401,12 @@ export function ChatPane({
     attachFiles,
     removeAttachment,
     clearAttachments,
+    consumeAttachments,
     handleComposerDragOver,
     handleComposerDragLeave,
     handleComposerDrop,
   } = useComposerAttachments({
     activeTab,
-    running: Boolean(running),
     updateTab,
     fileInputRef,
   });
@@ -404,29 +460,29 @@ export function ChatPane({
   const { selectedSkills, selectedPromptTemplates, removeLoadedContext } = useComposerLoadedContext(
     { activeTab, tools },
   );
-  // Per-session choice wins; a fresh session (no saved level) falls back to the
-  // level the user last picked, then the model's "high" default. This stops new
-  // sessions from always snapping back to High (issue #277).
   const thinkingLevel = pickThinkingLevel(
     modelThinkingLevels,
     activeTab?.thinkingLevel,
-    loadThinkingLevelDefault(),
+    modelId ? readModelThinkingLevel(browserThinkingStorage(), modelId) : undefined,
   );
   const selectThinkingLevel = useCallback(
     (level: AgentThinkingLevel) => {
       if (!activeTab || running) return;
-      // Persist on the session (survives turns + reloads) and remember it as the
-      // default for the next fresh session.
       updateTab(activeTab.id, (session) => ({ ...session, thinkingLevel: level }));
-      setThinkingLevelDefault(level);
+      if (modelId) writeModelThinkingLevel(browserThinkingStorage(), modelId, level);
     },
-    [activeTab, running, updateTab],
+    [activeTab, modelId, running, updateTab],
   );
   const composerModelSelector = renderComposerModelSelector(modelSelector, {
     reasoningLevel: thinkingLevel,
     reasoningLevels: modelThinkingLevels,
     reasoningDisabled: Boolean(running),
     onSelectReasoning: selectThinkingLevel,
+  });
+  const networkPolicy = sessionNetworkPolicy(activeTab);
+  const networkControl = networkControlFor(activeTab, networkPolicy, (policy) => {
+    if (!activeTab) return;
+    updateTab(activeTab.id, (session) => ({ ...session, networkPolicy: policy }));
   });
 
   const engine = useSessionEngine({
@@ -436,7 +492,7 @@ export function ChatPane({
     thinkingLevel,
     toolAccess: "full",
     cwd,
-    browserToolEnabled,
+    networkPolicy,
     browserBackend,
     onPiSessionIdChange: handlePiSessionIdChange,
     updateSession: updateTab,
@@ -455,18 +511,26 @@ export function ChatPane({
     tools.setComputerTab("status");
     tools.setComputerOpen(true);
   }, [tools]);
+  const openBrowserPanel = useCallback(() => {
+    tools.setComputerTab("browser");
+    tools.setComputerOpen(true);
+  }, [tools]);
   const [diffDrawerOpen, setDiffDrawerOpen] = useState(false);
   const openDiffDrawer = useCallback(() => setDiffDrawerOpen(true), []);
   const closeDiffDrawer = useCallback(() => setDiffDrawerOpen(false), []);
   const exportSession = useCallback(() => {
     if (!activeTab) return;
     const markdown = sessionToMarkdown(activeTab.messages, displayedSessionTitle);
-    downloadTextFile(exportFilenameFromTitle(displayedSessionTitle), markdown);
+    void saveTextFile(
+      exportFilenameFromTitle(displayedSessionTitle),
+      markdown,
+      "text/markdown;charset=utf-8",
+    );
   }, [activeTab, displayedSessionTitle]);
   const canExport = Boolean(
     activeTab?.messages.some((message) => message.role !== "system" && message.text.trim()),
   );
-  const openTerminalAction = terminalOwner ? toggleTerminalView : onOpenTerminal;
+  const openTerminalAction = terminalActionFor(terminalOwner, toggleTerminalView, onOpenTerminal);
   const applyTemplate = useCallback(
     (row: ComposerPromptTemplateRef) =>
       activeTab ? applyContextRow(activeTab.id, "promptTemplate", row, tools) : Promise.resolve(),
@@ -475,6 +539,54 @@ export function ChatPane({
   const applySkill = useCallback(
     (row: ComposerSkillRef) =>
       activeTab ? applyContextRow(activeTab.id, "skill", row, tools) : Promise.resolve(),
+    [activeTab, tools],
+  );
+  const runSkillInvocation = useCallback(
+    (skill: ComposerSkillRef, args: string) => {
+      if (!activeTab || !modelId) return Promise.resolve();
+      const text = skillInvocationText(skill, args);
+      return engine.submitPrompt({
+        text,
+        prompt: text,
+        displayText: text,
+        userText: text,
+        targetSessionId: activeTab.id,
+      });
+    },
+    [activeTab, engine, modelId],
+  );
+  const activeConnectors = useMemo(
+    () => tools.selectionFor(activeTab?.id).connectors ?? [],
+    [activeTab?.id, tools],
+  );
+  const noteInTranscript = useCallback(
+    (text: string) => {
+      if (!activeTab) return;
+      updateTab(activeTab.id, (tab) => ({
+        ...tab,
+        messages: [
+          ...tab.messages,
+          {
+            id: newId("assistant"),
+            role: "assistant" as const,
+            text: "",
+            blocks: [{ kind: "event" as const, id: newId("event"), text }],
+            timestamp: nowLabel(),
+          },
+        ],
+      }));
+    },
+    [activeTab, updateTab],
+  );
+  const applyConnectorSelection = useCallback(
+    async (connectorIds: string[]) => {
+      if (!activeTab) return "Open a chat before changing connectors.";
+      const result = await setSessionConnectors(activeTab.id, connectorIds);
+      if (result.error) return result.error;
+      const current = tools.selectionFor(activeTab.id);
+      tools.setSelection(activeTab.id, { ...current, connectors: result.active });
+      return null;
+    },
     [activeTab, tools],
   );
   const activePiSessionId = piSessionIdOf(activeTab);
@@ -497,32 +609,56 @@ export function ChatPane({
         builtinCommandProvider({
           compact: () => void compactSession(),
           openStatus: openComputerStatus,
-          toggleBrowserTool: onToggleBrowserTool,
+          openBrowser: openBrowserPanel,
           openPlugins: () => router.push("/integrations"),
           ...(openTerminalAction ? { openTerminal: openTerminalAction } : {}),
           ...(onForkSession ? { forkSession: onForkSession } : {}),
-          ...(canExport ? { exportSession } : {}),
           goal: goalAction,
           enterGoalMode: () => setGoalModeOn(true),
+        }),
+        ...(canExport && activeTab
+          ? [
+              transcriptCommandProvider({
+                messages: () => activeTab.messages,
+                title: () => displayedSessionTitle,
+                notify: noteInTranscript,
+              }),
+            ]
+          : []),
+        mcpCommandProvider({
+          connectors: tools.connectorCatalogue,
+          active: activeConnectors,
+          apply: applyConnectorSelection,
+          notify: noteInTranscript,
         }),
         promptTemplateCommandProvider({
           templates: tools.promptTemplateCatalogue,
           applyTemplate,
         }),
+        skillInvocationCommandProvider({
+          skills: tools.skillCatalogue,
+          runSkill: runSkillInvocation,
+        }),
         skillCommandProvider({ skills: tools.skillCatalogue, applySkill }),
       ]),
     [
+      activeConnectors,
+      activeTab,
+      applyConnectorSelection,
       applySkill,
       applyTemplate,
       canExport,
       compactSession,
+      displayedSessionTitle,
       goalAction,
-      exportSession,
+      noteInTranscript,
       onForkSession,
-      onToggleBrowserTool,
+      openBrowserPanel,
       openComputerStatus,
       openTerminalAction,
       router,
+      runSkillInvocation,
+      tools.connectorCatalogue,
       tools.promptTemplateCatalogue,
       tools.skillCatalogue,
     ],
@@ -552,30 +688,54 @@ export function ChatPane({
     updateTab,
     selectMentionRow,
   });
-  const { sendMessage, queueMessage, removeQueued, editQueued, steerQueued, abortTurn } =
-    useChatPaneSendFlow({
-      activeTab,
-      attachments,
-      browserToolEnabled,
-      clearAttachments,
-      cwd,
-      engine,
-      modelId,
-      modelSupportsVision,
-      readingAttachments,
-      resetComposerHeight,
-      running: Boolean(running),
-      setMention,
-      setStickToBottom,
-      tools,
-      updateTab,
-    });
+  const {
+    sendMessage,
+    sendTextMessage,
+    queueMessage,
+    removeQueued,
+    editQueued,
+    steerQueued,
+    abortTurn,
+  } = useChatPaneSendFlow({
+    activeTab,
+    attachments,
+    clearAttachments,
+    consumeAttachments,
+    cwd,
+    engine,
+    modelId,
+    modelSupportsVision,
+    readingAttachments,
+    resetComposerHeight,
+    running: Boolean(running),
+    setMention,
+    setStickToBottom,
+    tools,
+    updateTab,
+  });
+  const handleGeneratedImageDecision = useCallback<GeneratedImageDecisionHandler>(
+    (decision, block, selection, note) => {
+      setStickToBottom(true);
+      return sendTextMessage(
+        generatedImageDecisionPrompt({
+          decision,
+          toolCallId: block.id,
+          imageIndex: selection.imageIndex,
+          imageCount: selection.imageCount,
+          resultText: block.resultText,
+          note,
+        }),
+      );
+    },
+    [sendTextMessage],
+  );
   const { handleComposerPaste, handleComposerChange, handleComposerKeyDown } =
     useComposerTextareaBehavior({
       activeTab,
       mention,
       mentionRows,
       mentionIndex,
+      hasAttachments: attachments.length > 0,
       running: Boolean(running),
       textareaRef,
       lastAppliedComposerHeightRef,
@@ -597,6 +757,10 @@ export function ChatPane({
   });
   const handleComposerSubmit = useCallback(
     (event: FormEvent) => {
+      if (activeTab?.status === "loading") {
+        event.preventDefault();
+        return;
+      }
       if (goalModeApi.submitAsGoal(event, activeTab?.input ?? "")) return;
       const invocation = parseSlashInvocation(activeTab?.input ?? "");
       const commandCanRun = invocation?.name !== "goal" || canRunGoalCommand(activePiSessionId);
@@ -668,6 +832,7 @@ export function ChatPane({
         setStickToBottom={setStickToBottom}
         running={Boolean(running)}
         onForkSession={onForkSession}
+        onGeneratedImageDecision={handleGeneratedImageDecision}
         loadEarlierHistory={loadEarlierHistory}
       />
       <div className={terminalView ? "hidden" : "contents"}>
@@ -677,11 +842,19 @@ export function ChatPane({
           gitSummary,
           onClose: closeDiffDrawer,
         })}
+        {runPanelFor(activeTab, activePiSessionId)}
         {subagentChipsFor(activePiSessionId)}
+        {activeTab?.error ? (
+          <div
+            role="alert"
+            className="mx-3 mb-2 rounded-lg border border-(--danger)/30 bg-(--danger)/5 px-3 py-2 text-[length:var(--fs-sm)] text-(--danger)"
+          >
+            {activeTab.error}
+          </div>
+        ) : null}
         <AgentComposerFrame
           attachments={attachments}
           banner={composerVisual.banner}
-          browserToolEnabled={browserToolEnabled}
           browserBackend={browserBackend}
           composerDragActive={composerDragActive}
           contextWindow={effectiveContextWindow}
@@ -719,8 +892,8 @@ export function ChatPane({
           onSteerQueued={(queueId) => void steerQueued(queueId)}
           onSubmit={handleComposerSubmit}
           onTranscript={handleTranscript}
+          networkControl={networkControl}
           onToggleBrowserBackend={onToggleBrowserBackend}
-          onToggleBrowserTool={onToggleBrowserTool}
           placeholder={goalModeApi.goalPlaceholder ?? composerVisual.placeholder}
           drawer={
             <SessionProjectDrawer
@@ -749,6 +922,7 @@ export function ChatPane({
           readingAttachments={readingAttachments}
           running={Boolean(running)}
           selectedSkills={selectedSkills}
+          shortcutTarget={isFocused && !terminalView}
           status={activeTab?.status}
           textareaRef={textareaRef}
           goalMode={goalModeApi.goalMode}
@@ -761,9 +935,6 @@ export function ChatPane({
   );
 }
 
-/** The pane's fixed furniture: a pending extension prompt, the header, and the
- *  terminal surface that swaps places with the transcript. Kept out of ChatPane
- *  so the container reads as state and wiring rather than layout. */
 function ChatPaneChrome({
   extensionUiRequest,
   onExtensionUiRespond,
@@ -799,11 +970,6 @@ function ChatPaneChrome({
     </>
   );
 }
-
-/** Remounts per session so the goal poll and project selection never carry
- *  across tabs, and hides project switching while a turn is in flight. */
-// The drawer's Interrupt button has no form event of its own, and sendMessage
-// only ever uses the event to cancel the browser's native submit.
 
 function SessionProjectDrawer({
   tabId,

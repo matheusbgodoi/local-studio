@@ -7,6 +7,7 @@ import {
   handleExtensionUiResponse,
   handleRuntimeEvents,
   handleRuntimeSessions,
+  handleRuntimeContextBudget,
   handleRuntimeStatus,
   handleSetupChecks,
 } from "./handlers";
@@ -18,6 +19,7 @@ import {
   handleBrowserState,
   handleBrowserVerb,
   handleBrowserViewport,
+  withBrowserRequestScope,
 } from "./browser-handlers";
 import {
   handleProviderLogin,
@@ -38,6 +40,7 @@ import {
   handleGoalPut,
 } from "./automation-handlers";
 import { handleSubagentRun, handleSubagentsList } from "./subagent-handlers";
+import { handleConnectorSessionGet, handleConnectorSessionPut } from "./connector-session-handlers";
 import { handlePrGet, handlePrMerge } from "./pr-handlers";
 import {
   handlePtyClose,
@@ -48,12 +51,45 @@ import {
 } from "./pty-handlers";
 import { handleAgentModels } from "./model-handlers";
 import {
+  handleAgenticArtifact,
+  handleAgenticCurrentRun,
+  handleAgenticRunCancel,
+  handleAgenticRunArchive,
+  handleAgenticRunCreate,
+  handleAgenticRunDelete,
+  handleAgenticRunGet,
+  handleAgenticRunResume,
+  handleAgenticRunsList,
+} from "./agentic-handlers";
+import {
   handleAllSessions,
   handleSessionGet,
   handleSessionPatch,
+  handleSessionDelete,
+  handleSessionMove,
   handleSessionsDelete,
   handleSessionsList,
+  handleSessionSearch,
 } from "./session-handlers";
+import {
+  handleNetworkPolicy,
+  handleNetworkProvider,
+  handleNetworkStatus,
+} from "./network-handlers";
+import {
+  handleComputeHostStatus,
+  handleComputeHostPowerMode,
+  handleComputeHostWake,
+  handleComputeHostsList,
+} from "./compute-host-handlers";
+import {
+  handlePersonalMemoryCreate,
+  handlePersonalMemoryDelete,
+  handlePersonalMemoryDeleteOne,
+  handlePersonalMemoryGet,
+  handlePersonalMemorySettings,
+  handlePersonalMemoryUpdate,
+} from "./personal-memory-handlers";
 
 export function createAgentRuntimeApp() {
   const app = new Hono();
@@ -70,25 +106,59 @@ export function createAgentRuntimeApp() {
   app.get("/api/agent/runtime/sessions", () => handleRuntimeSessions());
   app.get("/api/agent/runtime/status", (c) => handleRuntimeStatus(c.req.raw));
   app.get("/api/agent/runtime/events", (c) => handleRuntimeEvents(c.req.raw));
+  app.get("/api/agent/runtime/context-budget", (c) => handleRuntimeContextBudget(c.req.raw));
   app.get("/api/agent/setup-checks", () => handleSetupChecks());
   app.get("/api/agent/models", () => handleAgentModels());
   app.post("/api/agent/models", (c) => handleAgentModels(c.req.raw));
   app.get("/api/agent/sessions", (c) => handleSessionsList(c.req.raw));
   app.delete("/api/agent/sessions", () => handleSessionsDelete());
   app.get("/api/agent/sessions/all", (c) => handleAllSessions(c.req.raw));
+  app.get("/api/agent/sessions/search", (c) => handleSessionSearch(c.req.raw));
   app.get("/api/agent/sessions/:id", (c) => handleSessionGet(c.req.raw, c.req.param("id")));
   app.patch("/api/agent/sessions/:id", (c) => handleSessionPatch(c.req.raw, c.req.param("id")));
+  app.delete("/api/agent/sessions/:id", (c) => handleSessionDelete(c.req.raw, c.req.param("id")));
+  app.post("/api/agent/sessions/:id/project", (c) =>
+    handleSessionMove(c.req.raw, c.req.param("id")),
+  );
   app.get("/api/agent/automations", () => handleAutomationsList());
   app.post("/api/agent/automations", (c) => handleAutomationCreate(c.req.raw));
   app.patch("/api/agent/automations/:id", (c) =>
     handleAutomationPatch(c.req.raw, c.req.param("id")),
   );
-  app.delete("/api/agent/automations/:id", (c) =>
-    handleAutomationDelete(c.req.param("id")),
-  );
+  app.delete("/api/agent/automations/:id", (c) => handleAutomationDelete(c.req.param("id")));
   app.post("/api/agent/automations/:id/run", (c) => handleAutomationRun(c.req.param("id")));
+  app.get("/api/agent/compute-hosts", () => handleComputeHostsList());
+  app.get("/api/agent/compute-hosts/:id", (c) => handleComputeHostStatus(c.req.param("id")));
+  app.post("/api/agent/compute-hosts/:id/wake", (c) => handleComputeHostWake(c.req.param("id")));
+  app.post("/api/agent/compute-hosts/:id/power-mode", (c) =>
+    handleComputeHostPowerMode(c.req.param("id"), c.req.query("mode") ?? ""),
+  );
+  app.get("/api/agent/network/status", () => handleNetworkStatus());
+  app.post("/api/agent/network/policy", (c) => handleNetworkPolicy(c.req.raw));
+  app.get("/api/agent/network/provider", (c) => handleNetworkProvider(c.req.raw));
+  app.post("/api/agent/network/provider", (c) => handleNetworkProvider(c.req.raw));
+  app.delete("/api/agent/network/provider", (c) => handleNetworkProvider(c.req.raw));
+  app.get("/api/agent/runs", () => handleAgenticRunsList());
+  app.post("/api/agent/runs", (c) => handleAgenticRunCreate(c.req.raw));
+  app.get("/api/agent/runs/current", (c) => handleAgenticCurrentRun(c.req.raw));
+  app.get("/api/agent/runs/:id", (c) => handleAgenticRunGet(c.req.param("id")));
+  app.patch("/api/agent/runs/:id", (c) => handleAgenticRunArchive(c.req.raw, c.req.param("id")));
+  app.delete("/api/agent/runs/:id", (c) => handleAgenticRunDelete(c.req.param("id")));
+  app.post("/api/agent/runs/:id/resume", (c) => handleAgenticRunResume(c.req.param("id")));
+  app.post("/api/agent/runs/:id/cancel", (c) => handleAgenticRunCancel(c.req.param("id")));
+  app.get("/api/agent/artifacts/:id", (c) => handleAgenticArtifact(c.req.raw, c.req.param("id")));
   app.get("/api/agent/pr", (c) => handlePrGet(c.req.raw));
   app.post("/api/agent/pr/merge", (c) => handlePrMerge(c.req.raw));
+  app.get("/api/agent/connectors/session", (c) => handleConnectorSessionGet(c.req.raw));
+  app.post("/api/agent/connectors/session", (c) => handleConnectorSessionPut(c.req.raw));
+  app.get("/api/agent/memory", () => handlePersonalMemoryGet());
+  app.post("/api/agent/memory", (c) => handlePersonalMemoryCreate(c.req.raw));
+  app.put("/api/agent/memory/settings", (c) => handlePersonalMemorySettings(c.req.raw));
+  app.post("/api/agent/memory/delete", (c) => handlePersonalMemoryDelete(c.req.raw));
+  app.patch("/api/agent/memory/:id", (c) =>
+    handlePersonalMemoryUpdate(c.req.raw, c.req.param("id")),
+  );
+  app.delete("/api/agent/memory/:id", (c) => handlePersonalMemoryDeleteOne(c.req.param("id")));
   app.get("/api/agent/subagents", (c) => handleSubagentsList(c.req.raw));
   app.post("/api/agent/subagents", (c) => handleSubagentRun(c.req.raw));
   app.get("/api/agent/goal", (c) => handleGoalGet(c.req.raw));
@@ -115,6 +185,7 @@ export function createAgentRuntimeApp() {
   app.post("/api/agent/terminal/pty/input", (c) => handlePtyInput(c.req.raw));
   app.post("/api/agent/terminal/pty/resize", (c) => handlePtyResize(c.req.raw));
   app.post("/api/agent/terminal/pty/close", (c) => handlePtyClose(c.req.raw));
+  app.use("/api/agent/browser/*", (c, next) => withBrowserRequestScope(c.req.raw, next));
   app.get("/api/agent/browser/fetch", (c) => handleBrowserFetch(c.req.raw));
   app.get("/api/agent/browser/frame", () => handleBrowserFrame());
   app.post("/api/agent/browser/input", (c) => handleBrowserInput(c.req.raw));

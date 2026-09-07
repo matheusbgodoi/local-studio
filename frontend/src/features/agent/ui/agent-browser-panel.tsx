@@ -10,6 +10,7 @@ import {
   PanelRight,
   PanelRightFilled,
   Plus,
+  Target,
   TerminalSquare,
   type LucideIcon,
 } from "@/ui/icon-registry";
@@ -296,6 +297,7 @@ export function AgentBrowserPanel({
 const TAB_LABELS: Record<ComputerTab, string> = {
   status: "Status",
   tools: "Tools",
+  run: "Run",
   "side-chat": "Side chat",
   browser: "Browser",
   files: "Filesystem",
@@ -309,6 +311,12 @@ const TAB_OPTIONS: Array<{
   description: string;
   icon?: LucideIcon;
 }> = [
+  {
+    tab: "run",
+    label: "Run",
+    description: "The durable Run this conversation is driving",
+    icon: Target,
+  },
   {
     tab: "side-chat",
     label: "Side chat",

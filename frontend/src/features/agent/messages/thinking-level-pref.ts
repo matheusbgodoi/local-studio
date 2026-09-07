@@ -1,40 +1,15 @@
-import { isAgentThinkingLevel, type AgentThinkingLevel } from "@/features/agent/contracts";
+import type { AgentThinkingLevel } from "@/features/agent/contracts";
+import type { AgentModelSelection } from "@shared/agent/models";
 
-// Global, client-only preference for the reasoning ("thinking") level a *new*
-// session should start at. Persisted in localStorage so the last level the user
-// picked seeds the next fresh session, instead of every new chat snapping back
-// to the hard-coded "high" fallback. Per-session choices still live on the
-// session tab (see pickThinkingLevel); this only supplies the default when a
-// session has no saved level of its own.
-const THINKING_LEVEL_DEFAULT_KEY = "local-studio.agent.thinkingLevelDefault";
-
-/** Synchronous localStorage read — safe to call during render. Returns
- *  undefined when unset, off the server, or if storage is unavailable or holds
- *  a value that is no longer a valid level. */
-export function loadThinkingLevelDefault(): AgentThinkingLevel | undefined {
-  if (typeof window === "undefined") return undefined;
-  try {
-    const raw = window.localStorage.getItem(THINKING_LEVEL_DEFAULT_KEY);
-    return isAgentThinkingLevel(raw) ? raw : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** Remember the level the user just picked so the next fresh session adopts it.
- *  Best-effort — storage failures are swallowed like every other client pref. */
-export function setThinkingLevelDefault(level: AgentThinkingLevel): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(THINKING_LEVEL_DEFAULT_KEY, level);
-  } catch {
-    /* ignore storage failures — persistence here is a convenience, not load-bearing */
-  }
-}
+// The level a session runs at. There is deliberately no global "last level
+// picked" any more: a level belongs to the model that can honour it, so the
+// remembered fallback comes from the per-model store in
+// workspace/thinking-level-preference.ts. A single global default is what used
+// to carry a reasoning model's level onto a model that cannot think.
 
 /** Resolve the level a session should use: its own saved choice wins, otherwise
- *  fall back to the user's remembered default, then "high", then whatever the
- *  model supports. Pure so it can be unit-tested without a DOM. */
+ *  the level remembered for the model in hand, then "high", then the first level
+ *  the model supports. Pure so it can be unit-tested without a DOM. */
 export function pickThinkingLevel(
   levels: readonly AgentThinkingLevel[],
   saved: AgentThinkingLevel | undefined,
@@ -43,5 +18,45 @@ export function pickThinkingLevel(
   if (saved && levels.includes(saved)) return saved;
   if (preferred && levels.includes(preferred)) return preferred;
   if (levels.includes("high")) return "high";
-  return levels.at(-1) ?? "off";
+  // levels[0], not levels.at(-1): where a model has no "high" the last entry is
+  // its MAXIMUM effort, and opening every fresh session at maximum thinking is
+  // the most expensive possible default. The first entry is Off wherever Off is
+  // offered.
+  return levels[0] ?? "off";
+}
+
+/**
+ * The level a pane runs at after the model picker was used, and whether that
+ * level is a preference worth filing under the id just picked.
+ *
+ * A THINKING LEVEL BELONGS TO THE CHECKPOINT, NOT TO THE ALIAS. Levels are filed
+ * per model id, and two behaviour profiles of one model are two keys, so
+ * adopting the picked alias's remembered level on every pick meant Standard ->
+ * Uncensored — same weights, same llama-server, same reasoning contract, a
+ * different LoRA scale — silently reset a pane from XHigh to Off, the
+ * never-written default of a key that names a behaviour rather than a model.
+ * `changed` still adopts, so no model inherits the level of the model it
+ * replaced.
+ *
+ * The carried level is still clamped, because two profiles are only guaranteed
+ * one ladder while both draw it from the same physical model: `nativeReasoning`
+ * is a per-row wire field and it short-circuits the contract before the
+ * checkpoint is consulted, so a gateway can declare a pair that disagrees. A
+ * level the target cannot honour falls through to that alias's own memory
+ * instead of being invented.
+ */
+export function thinkingAfterModelSelection(
+  selection: AgentModelSelection,
+  levels: readonly AgentThinkingLevel[],
+  remembered: AgentThinkingLevel,
+): { level: AgentThinkingLevel; remember: boolean } {
+  if (selection.physicalModel === "changed") return { level: remembered, remember: false };
+  return {
+    level: pickThinkingLevel(levels, selection.thinkingLevel, remembered),
+    // The caller must file this itself: persistThinkingLevelByModel only writes a
+    // level that CHANGED, by design, so that a session merely switching model
+    // files nothing. A carried level did not change, so nothing downstream would
+    // ever write it and the effort would come back one switch later.
+    remember: true,
+  };
 }

@@ -1,12 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
-import { Button, FormField, Input, Select, Textarea } from "@/ui";
-import { Clock, Pause, Play, Plus, Trash2, X } from "@/ui/icon-registry";
+import { useMemo, useState } from "react";
+import { Button, Checkbox, FormField, Input, Select, Textarea } from "@/ui";
+import { Clock, Plug, Pause, Play, Plus, Trash2, X } from "@/ui/icon-registry";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 import type { Automation, AutomationSchedule } from "@shared/agent/automation";
-import type { AutomationModel } from "./automation-api";
+import type { AutomationConnector, AutomationModel } from "./automation-api";
 import {
   NEW_AUTOMATION_DRAFT,
   draftFromAutomation,
@@ -52,6 +52,7 @@ export function AutomationEditor({
   automation,
   creating,
   models,
+  connectors,
   action,
   error,
   onClose,
@@ -63,6 +64,7 @@ export function AutomationEditor({
   automation: Automation | null;
   creating: boolean;
   models: readonly AutomationModel[];
+  connectors: readonly AutomationConnector[];
   action: EditorAction;
   error: string;
   onClose: () => void;
@@ -75,16 +77,22 @@ export function AutomationEditor({
     automation ? draftFromAutomation(automation) : NEW_AUTOMATION_DRAFT,
   );
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const modelGroups = useMemo(() => groupAutomationModels(models), [models]);
+  const selectedModelGroup = modelGroups.find((group) =>
+    group.profiles.some((profile) => profile.id === draft.modelId),
+  );
+  const canSave = draftIsValid(draft) && Boolean(selectedModelGroup);
 
   useMountSubscription(() => {
-    if (draft.modelId || models.length === 0) return;
-    setDraft((current) => ({ ...current, modelId: models[0]?.id ?? "" }));
-  }, [draft.modelId, models]);
+    if (draft.modelId || modelGroups.length === 0) return;
+    setDraft((current) => ({ ...current, modelId: modelGroups[0]?.primary.id ?? "" }));
+  }, [draft.modelId, modelGroups]);
 
   const updateSchedule = (schedule: AutomationSchedule) => {
     setDraft((current) => ({ ...current, schedule }));
   };
   const busy = action !== null;
+  const running = Boolean(automation?.activeRun);
 
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-(--ui-bg)">
@@ -93,6 +101,7 @@ export function AutomationEditor({
         creating={creating}
         action={action}
         busy={busy}
+        running={running}
         onClose={onClose}
         onRun={onRun}
         onToggleStatus={onToggleStatus}
@@ -102,7 +111,7 @@ export function AutomationEditor({
         className="min-h-0 flex-1 overflow-y-auto"
         onSubmit={(event) => {
           event.preventDefault();
-          if (draftIsValid(draft) && !busy) onSave(draft);
+          if (canSave && !busy) onSave(draft);
         }}
       >
         <div className="mx-auto w-full max-w-2xl space-y-5 px-5 py-5 sm:px-7">
@@ -124,7 +133,7 @@ export function AutomationEditor({
             <FormField
               label="Task"
               required
-              description="Local Studio sends this instruction to the selected model on every run."
+              description="CRIAs AI sends this instruction to the selected model on every run."
             >
               <Textarea
                 value={draft.prompt}
@@ -156,22 +165,45 @@ export function AutomationEditor({
           <div className="grid gap-4 border-t border-(--ui-separator) pt-5 sm:grid-cols-2">
             <FormField label="Model" required>
               <Select
-                value={draft.modelId}
-                onChange={(event) =>
-                  setDraft((current) => ({ ...current, modelId: event.target.value }))
-                }
+                value={selectedModelGroup?.physicalModelId ?? ""}
+                onChange={(event) => {
+                  const group = modelGroups.find(
+                    (candidate) => candidate.physicalModelId === event.target.value,
+                  );
+                  setDraft((current) => ({ ...current, modelId: group?.primary.id ?? "" }));
+                }}
               >
-                {models.length === 0 ? <option value="">No models available</option> : null}
-                {models.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.name}
+                {!selectedModelGroup ? (
+                  <option value="">
+                    {modelGroups.length === 0 ? "No models available" : "Select a model"}
+                  </option>
+                ) : null}
+                {modelGroups.map((group) => (
+                  <option key={group.physicalModelId} value={group.physicalModelId}>
+                    {group.displayName}
                   </option>
                 ))}
               </Select>
             </FormField>
+            {selectedModelGroup && selectedModelGroup.profiles.length > 1 ? (
+              <FormField label="Behavior">
+                <Select
+                  value={draft.modelId}
+                  onChange={(event) =>
+                    setDraft((current) => ({ ...current, modelId: event.target.value }))
+                  }
+                >
+                  {selectedModelGroup.profiles.map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.behaviorProfileLabel ?? "Default"}
+                    </option>
+                  ))}
+                </Select>
+              </FormField>
+            ) : null}
             <FormField
               label="Working directory"
-              description="Optional. Leave empty to use the Local Studio default."
+              description="Optional. Leave empty to use the CRIAs AI default."
             >
               <Input
                 value={draft.cwd}
@@ -183,6 +215,14 @@ export function AutomationEditor({
             </FormField>
           </div>
 
+          <RequiredConnections
+            connectors={connectors}
+            selected={draft.requiredConnectorIds}
+            onChange={(requiredConnectorIds) =>
+              setDraft((current) => ({ ...current, requiredConnectorIds }))
+            }
+          />
+
           {!creating && automation?.runs.length ? <RunHistory automation={automation} /> : null}
 
           {error ? <EditorError error={error} /> : null}
@@ -192,7 +232,8 @@ export function AutomationEditor({
             creating={creating}
             action={action}
             busy={busy}
-            canSave={draftIsValid(draft)}
+            running={running}
+            canSave={canSave}
             confirmDelete={confirmDelete}
             onConfirmDelete={() => setConfirmDelete(true)}
             onCancelDelete={() => setConfirmDelete(false)}
@@ -204,11 +245,121 @@ export function AutomationEditor({
   );
 }
 
+type AutomationModelGroup = {
+  physicalModelId: string;
+  displayName: string;
+  profiles: AutomationModel[];
+  primary: AutomationModel;
+};
+
+function groupAutomationModels(models: readonly AutomationModel[]): AutomationModelGroup[] {
+  const profilesByModel = new Map<string, AutomationModel[]>();
+  for (const model of models) {
+    const key = model.physicalModelId?.trim() || model.id;
+    profilesByModel.set(key, [...(profilesByModel.get(key) ?? []), model]);
+  }
+  return [...profilesByModel.entries()].map(([physicalModelId, profiles]) => {
+    const primary = profiles.find((profile) => profile.behaviorProfileDefault) ?? profiles[0];
+    return {
+      physicalModelId,
+      displayName:
+        profiles.find((profile) => profile.displayName?.trim())?.displayName ??
+        "Model identity unavailable",
+      profiles,
+      primary,
+    };
+  });
+}
+
+function RequiredConnections({
+  connectors,
+  selected,
+  onChange,
+}: {
+  connectors: readonly AutomationConnector[];
+  selected: readonly string[];
+  onChange: (ids: string[]) => void;
+}) {
+  const visible = connectors.filter(
+    (connector) => connector.enabled || selected.includes(connector.id),
+  );
+  const knownIds = new Set(connectors.map((connector) => connector.id));
+  const missingIds = selected.filter((id) => !knownIds.has(id));
+  const toggle = (id: string, enabled: boolean) => {
+    onChange(enabled ? [...new Set([...selected, id])] : selected.filter((entry) => entry !== id));
+  };
+  return (
+    <div className="border-t border-(--ui-separator) pt-5">
+      <div className="mb-3 flex items-start gap-2">
+        <Plug className="mt-0.5 h-4 w-4 shrink-0 text-(--ui-muted)" />
+        <div>
+          <h3 className="text-[length:var(--fs-base)] font-medium text-(--ui-fg)">
+            Required connections
+          </h3>
+          <p className="mt-0.5 text-[length:var(--fs-xs)] leading-5 text-(--ui-muted)">
+            Selected connections are checked before the model starts.{" "}
+            <Link href="/configure?section=integrations#integrations" className="text-(--link)">
+              Browse integrations
+            </Link>
+            .
+          </p>
+        </div>
+      </div>
+      {visible.length > 0 || missingIds.length > 0 ? (
+        <div className="divide-y divide-(--ui-separator) rounded-[var(--ui-radius)] border border-(--ui-separator)">
+          {visible.map((connector) => (
+            <div
+              key={connector.id}
+              className="flex min-h-11 items-center gap-3 px-3 py-2 text-[length:var(--fs-sm)]"
+            >
+              <Checkbox
+                checked={selected.includes(connector.id)}
+                onChange={(checked) => toggle(connector.id, checked)}
+                label={connector.name}
+                className="min-w-0 flex-1 items-center"
+                labelClassName="truncate text-[length:var(--fs-sm)] text-(--ui-fg)"
+              />
+              <span className="shrink-0 text-[length:var(--fs-xs)] text-(--ui-muted)">
+                {connector.enabled ? connector.transport : "disabled"}
+              </span>
+            </div>
+          ))}
+          {missingIds.map((id) => (
+            <div
+              key={id}
+              className="flex min-h-11 items-center gap-3 px-3 py-2 text-[length:var(--fs-sm)]"
+            >
+              <Checkbox
+                checked
+                onChange={(checked) => toggle(id, checked)}
+                label={id}
+                className="min-w-0 flex-1 items-center"
+                labelClassName="truncate text-[length:var(--fs-sm)] text-(--ui-fg)"
+              />
+              <span className="shrink-0 text-[length:var(--fs-xs)] text-(--ui-muted)">missing</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-[length:var(--fs-sm)] text-(--ui-muted)">
+          No enabled connections. Add one in Configure → Integrations.
+        </p>
+      )}
+      <p className="mt-3 text-[length:var(--fs-xs)] leading-5 text-(--ui-muted)">
+        A missed schedule runs once after CRIAs AI restarts; an interrupted run is recorded as
+        failed, not resumed. There is no approval queue or external action ledger yet, so only
+        schedule writes that are safe to repeat.
+      </p>
+    </div>
+  );
+}
+
 function EditorHeader({
   automation,
   creating,
   action,
   busy,
+  running,
   onClose,
   onRun,
   onToggleStatus,
@@ -217,15 +368,18 @@ function EditorHeader({
   creating: boolean;
   action: EditorAction;
   busy: boolean;
+  running: boolean;
   onClose: () => void;
   onRun: () => void;
   onToggleStatus: () => void;
 }) {
   const statusText = creating
-    ? "Set up the work once, then let Local Studio run it."
-    : automation?.status === "paused"
-      ? "Paused"
-      : `Next run ${relativeTime(automation?.nextRunAt ?? null)}`;
+    ? "Set up the work once, then let CRIAs AI run it."
+    : running
+      ? `Running since ${relativeTime(automation?.activeRun?.startedAt ?? null)}`
+      : automation?.status === "paused"
+        ? "Paused"
+        : `Next run ${relativeTime(automation?.nextRunAt ?? null)}`;
   return (
     <header className="flex min-h-14 shrink-0 items-center gap-2 border-b border-(--ui-border) px-4">
       <div className="min-w-0 flex-1">
@@ -240,11 +394,11 @@ function EditorHeader({
             variant="secondary"
             size="sm"
             loading={action === "run"}
-            disabled={busy}
+            disabled={busy || running}
             onClick={onRun}
             icon={<Play className="h-3.5 w-3.5" />}
           >
-            Run now
+            {running ? "Running" : "Run now"}
           </Button>
           <Button
             variant="secondary"
@@ -332,7 +486,7 @@ function RunHistory({ automation }: { automation: Automation }) {
                     {run.outcome === "error" ? "Failed" : "Completed"} {relativeTime(run.at)}
                   </p>
                   <p className="mt-0.5 text-[length:var(--fs-xs)] text-(--ui-muted)">
-                    {new Date(run.at).toLocaleString()}
+                    {new Date(run.at).toLocaleString()} · {runTriggerLabel(run.trigger)}
                   </p>
                 </div>
                 {transcriptHref ? (
@@ -365,6 +519,12 @@ function RunHistory({ automation }: { automation: Automation }) {
   );
 }
 
+function runTriggerLabel(trigger: Automation["runs"][number]["trigger"]): string {
+  if (trigger === "manual") return "manual";
+  if (trigger === "recovered") return "recovered after restart";
+  return "scheduled";
+}
+
 function EditorError({ error }: { error: string }) {
   return (
     <div
@@ -381,6 +541,7 @@ function EditorFooter({
   creating,
   action,
   busy,
+  running,
   canSave,
   confirmDelete,
   onConfirmDelete,
@@ -391,6 +552,7 @@ function EditorFooter({
   creating: boolean;
   action: EditorAction;
   busy: boolean;
+  running: boolean;
   canSave: boolean;
   confirmDelete: boolean;
   onConfirmDelete: () => void;
@@ -406,7 +568,7 @@ function EditorFooter({
               variant="danger"
               size="sm"
               loading={action === "delete"}
-              disabled={busy}
+              disabled={busy || running}
               onClick={onDelete}
             >
               Confirm delete
@@ -419,7 +581,7 @@ function EditorFooter({
           <Button
             variant="ghost"
             size="sm"
-            disabled={busy}
+            disabled={busy || running}
             onClick={onConfirmDelete}
             icon={<Trash2 className="h-3.5 w-3.5" />}
             className="text-(--ui-danger)"

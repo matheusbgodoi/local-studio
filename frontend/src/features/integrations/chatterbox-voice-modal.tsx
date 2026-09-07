@@ -20,7 +20,7 @@ export function ChatterboxVoiceModal({ onClose }: { onClose: () => void }) {
   const [pendingDelete, setPendingDelete] = useState("");
   const [voiceId, setVoiceId] = useState("");
   const [previewText, setPreviewText] = useState(
-    "Local Studio is ready. This voice was generated privately on my workstation.",
+    "CRIAs AI is ready. This voice was generated privately on my workstation.",
   );
   const [preview, setPreview] = useState<{ url: string; voiceId: string } | null>(null);
   const previewUrlRef = useRef("");
@@ -220,7 +220,7 @@ export function ChatterboxVoiceModal({ onClose }: { onClose: () => void }) {
         <div className="border-b border-(--ui-border) px-6 py-4">
           <Alert variant="info">
             Voice cloning runs on your dedicated GPU. Reference audio stays encrypted on the
-            selected controller; previews stream directly back to Local Studio.
+            selected controller; previews stream directly back to CRIAs AI.
           </Alert>
           {storeError && status ? (
             <Alert variant="warning" className="mt-3">

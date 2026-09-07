@@ -13,6 +13,7 @@ import {
   GOOGLE_WORKSPACE_BINDINGS,
   googleWorkspaceConnectorAccount,
 } from "./google-workspace-binding";
+import { isPersonalConnectorId } from "../../../shared/agent/personal-connectors";
 
 export {
   type ConnectorAuthReference,
@@ -22,7 +23,6 @@ export {
 } from "./connector-contract";
 
 const MASK = "••••••••";
-const SECRET_KEY_PATTERN = /token|key|secret|password|auth/i;
 let connectorAccess = Promise.resolve();
 
 function withConnectorAccess<A>(operation: () => Promise<A>): Promise<A> {
@@ -87,6 +87,26 @@ const CONNECTOR_ID_PATTERN = /^[a-z0-9][a-z0-9-_]{0,63}$/;
 
 export const isValidConnectorId = (id: string): boolean => CONNECTOR_ID_PATTERN.test(id);
 
+function validateConnectorEndpoint(connector: ConnectorConfig): void {
+  if (connector.transport !== "http") return;
+  let endpoint: URL;
+  try {
+    endpoint = new URL(connector.url ?? "");
+  } catch {
+    throw new Error("A complete MCP endpoint URL is required");
+  }
+  if (endpoint.username || endpoint.password) {
+    throw new Error("Credentials must be stored as headers, not embedded in the endpoint URL");
+  }
+  const loopback =
+    endpoint.hostname === "localhost" ||
+    endpoint.hostname === "127.0.0.1" ||
+    endpoint.hostname === "[::1]";
+  if (endpoint.protocol !== "https:" && !(endpoint.protocol === "http:" && loopback)) {
+    throw new Error("Remote MCP endpoints require HTTPS; HTTP is allowed only on loopback");
+  }
+}
+
 export async function listConnectors(): Promise<ConnectorConfig[]> {
   const file = resolveConnectorsFilePath();
   if (!existsSync(file)) return [];
@@ -123,6 +143,7 @@ export function upsertConnectors(incoming: ConnectorConfig[]): Promise<Connector
     const connectors = await listConnectors();
     for (const candidate of incoming) {
       const connector = protectManagedConnector(candidate);
+      validateConnectorEndpoint(connector);
       const index = connectors.findIndex((entry) => entry.id === connector.id);
       const existing = index === -1 ? null : connectors[index];
       const merged: ConnectorConfig = {
@@ -171,12 +192,7 @@ const maskRecord = (
   record: Record<string, string> | undefined,
 ): Record<string, string> | undefined => {
   if (!record) return record;
-  return Object.fromEntries(
-    Object.entries(record).map(([key, value]) => [
-      key,
-      SECRET_KEY_PATTERN.test(key) && value ? MASK : value,
-    ]),
-  );
+  return Object.fromEntries(Object.keys(record).map((key) => [key, MASK]));
 };
 
 export function toConnectorView(connector: ConnectorConfig): ConnectorView {
@@ -185,9 +201,8 @@ export function toConnectorView(connector: ConnectorConfig): ConnectorView {
     env: maskRecord(connector.env),
     headers: maskRecord(connector.headers),
     secret_keys: [
-      ...Object.keys(connector.env ?? {}),
-      ...Object.keys(connector.headers ?? {}),
-    ].filter((key) => SECRET_KEY_PATTERN.test(key)),
+      ...new Set([...Object.keys(connector.env ?? {}), ...Object.keys(connector.headers ?? {})]),
+    ],
   };
 }
 
@@ -195,17 +210,48 @@ export async function enabledConnectors(): Promise<ConnectorConfig[]> {
   return (await listConnectors()).filter((connector) => connector.enabled);
 }
 
-export function hasEnabledConnectorsSync(): boolean {
+/**
+ * Enabled connectors that may be inventoried and registered EAGERLY at session
+ * start (the RPC connectors extension's inventory).
+ *
+ * Personal connectors are excluded on purpose: registering them at session start
+ * would both spawn every stdio server and put their tool schemas on the wire in
+ * a session that never asked for them. They are activated per session by
+ * `/mcp <name>` instead — see shared/agent/personal-connectors.ts and
+ * connector-session-tools.ts.
+ */
+export async function eagerConnectors(): Promise<ConnectorConfig[]> {
+  return (await enabledConnectors()).filter((connector) => !isPersonalConnectorId(connector.id));
+}
+
+/** Personal connectors present and enabled in connectors.json — the ones `/mcp`
+ *  can actually activate. */
+export async function registeredPersonalConnectors(): Promise<ConnectorConfig[]> {
+  return (await enabledConnectors()).filter((connector) => isPersonalConnectorId(connector.id));
+}
+
+function enabledConnectorsSync(): ConnectorConfig[] {
   const file = resolveConnectorsFilePath();
-  if (!existsSync(file)) return false;
+  if (!existsSync(file)) return [];
   try {
     const parsed = Schema.decodeUnknownSync(ConnectorsFileSchema)(
       JSON.parse(readFileSync(file, "utf-8")),
     );
-    return Boolean(parsed.connectors?.some((connector) => connector.enabled));
+    return (parsed.connectors ?? []).filter((connector) => connector.enabled);
   } catch {
-    return false;
+    return [];
   }
+}
+
+export function hasEnabledConnectorsSync(): boolean {
+  return enabledConnectorsSync().length > 0;
+}
+
+/** Whether the eager (non-personal) connector bridge is worth loading at all.
+ *  A config that only holds personal connectors must NOT drag the RPC
+ *  connectors extension into every session. */
+export function hasEagerConnectorsSync(): boolean {
+  return enabledConnectorsSync().some((connector) => !isPersonalConnectorId(connector.id));
 }
 
 export function connectorsRevisionSync(): string {

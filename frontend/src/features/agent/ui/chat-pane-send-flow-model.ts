@@ -1,5 +1,6 @@
 import type { AbortSessionResult } from "@/features/agent/runtime/api";
 import {
+  newId,
   visibleUserTextFromPi,
   type ChatMessage,
   type QueuedMessage,
@@ -9,7 +10,7 @@ function visibleText(text: string): string {
   return visibleUserTextFromPi(text).trim() || text.trim();
 }
 
-function unmatchedRuntimeFollowUps(local: string[], runtime: string[]): string[] {
+function unmatchedRuntimeFollowUps(local: string[], runtime: string[]): QueuedMessage[] {
   const pending = new Map<string, number>();
   for (const text of local) pending.set(text, (pending.get(text) ?? 0) + 1);
   return runtime.flatMap((text) => {
@@ -19,24 +20,36 @@ function unmatchedRuntimeFollowUps(local: string[], runtime: string[]): string[]
       pending.set(normalized, count - 1);
       return [];
     }
-    return normalized ? [normalized] : [];
+    return normalized
+      ? [
+          {
+            id: newId("recovered"),
+            mode: "follow_up" as const,
+            text: normalized,
+            runtimeText: text,
+            sent: false,
+          },
+        ]
+      : [];
   });
 }
 
 export function messagesToResumeAfterAbort(
   queue: QueuedMessage[],
   cleared: AbortSessionResult,
-): string[] {
-  const steering = cleared.steering.map(visibleText).filter(Boolean);
-  const localFollowUps = queue
-    .filter((item) => item.mode === "follow_up")
-    .map((item) => item.text.trim())
-    .filter(Boolean);
-  const runtimeFollowUps = cleared.followUp.map(visibleText).filter(Boolean);
+): QueuedMessage[] {
+  const steering = cleared.steering.flatMap((runtimeText) => {
+    const text = visibleText(runtimeText);
+    return text ? [{ id: newId("recovered"), mode: "steer" as const, text, runtimeText }] : [];
+  });
+  const localFollowUps = queue.filter(
+    (item) => item.mode === "follow_up" && item.text.trim().length > 0,
+  );
+  const localTexts = localFollowUps.map((item) => visibleText(item.runtimeText ?? item.text));
   return [
     ...steering,
     ...localFollowUps,
-    ...unmatchedRuntimeFollowUps(localFollowUps, runtimeFollowUps),
+    ...unmatchedRuntimeFollowUps(localTexts, cleared.followUp),
   ];
 }
 

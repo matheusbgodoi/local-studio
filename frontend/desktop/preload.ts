@@ -1,15 +1,36 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
-import type { DesktopBridge } from "./interfaces";
+import type { DesktopBridge, DictationBridgeEvent } from "./interfaces";
 
 const bridge: DesktopBridge = {
   getRuntime: () => ipcRenderer.invoke("desktop:get-runtime"),
   openExternal: (url) => ipcRenderer.invoke("desktop:open-external", url),
+  notify: (payload) => ipcRenderer.invoke("desktop:notify", payload),
   revealPath: (target) => ipcRenderer.invoke("desktop:reveal-path", target),
   openPath: (target) => ipcRenderer.invoke("desktop:open-path", target),
   getUpdateStatus: () => ipcRenderer.invoke("desktop:get-update-status"),
   startUpdate: () => ipcRenderer.invoke("desktop:start-update"),
   openDirectory: () => ipcRenderer.invoke("desktop:open-directory"),
+  saveTextFile: (request) => ipcRenderer.invoke("desktop:save-text-file", request),
+  generateSessionTitle: (excerpt, locale) =>
+    ipcRenderer.invoke("desktop:generate-session-title", excerpt, locale),
+  getRemoteAccessInfo: () => ipcRenderer.invoke("desktop:get-remote-access-info"),
+  getRemoteAccessPairingCode: () => ipcRenderer.invoke("desktop:get-remote-access-pairing-code"),
+  copyRemoteAccessToken: () => ipcRenderer.invoke("desktop:copy-remote-access-token"),
   getPathForFile: (file) => webUtils.getPathForFile(file),
+  probeDictation: (locale: string) => ipcRenderer.invoke("desktop:dictation-probe", locale),
+  startDictation: (locale: string) => ipcRenderer.invoke("desktop:dictation-start", locale),
+  stopDictation: (mode: "stop" | "cancel") => ipcRenderer.invoke("desktop:dictation-stop", mode),
+  /** Returns its own unsubscribe. The listener is removed by identity, not by wiping every
+   *  listener on the channel — a second composer would otherwise silence the first. */
+  onDictationEvent: (listener: (event: DictationBridgeEvent) => void) => {
+    const handler = (_: unknown, payload: DictationBridgeEvent) => listener(payload);
+    ipcRenderer.on("desktop:dictation-event", handler);
+    // Returns void, not the IpcRenderer that removeListener hands back, so the caller cannot
+    // accidentally depend on the chainable object leaking across the context bridge.
+    return () => {
+      ipcRenderer.removeListener("desktop:dictation-event", handler);
+    };
+  },
   listProjects: () => ipcRenderer.invoke("desktop:list-projects"),
   addProject: (directoryPath) => ipcRenderer.invoke("desktop:add-project", directoryPath),
   removeProject: (id) => ipcRenderer.invoke("desktop:remove-project", id),
@@ -17,9 +38,6 @@ const bridge: DesktopBridge = {
   saveSessionPrefs: (prefs) => ipcRenderer.invoke("desktop:save-session-prefs", prefs),
   loadUiPreferences: () => ipcRenderer.invoke("desktop:load-ui-preferences"),
   saveUiPreferences: (prefs) => ipcRenderer.invoke("desktop:save-ui-preferences", prefs),
-  getKittylitterPairingJson: () => ipcRenderer.invoke("desktop:get-kittylitter-pairing-json"),
-  copyKittylitterPairingJson: (pairingJson) =>
-    ipcRenderer.invoke("desktop:copy-kittylitter-pairing-json", pairingJson),
   terminal: {
     status: () => ipcRenderer.invoke("desktop:pty-status"),
     open: (opts) => ipcRenderer.invoke("desktop:pty-open", opts),
@@ -49,6 +67,22 @@ const bridge: DesktopBridge = {
       ipcRenderer.invoke("desktop:focus-main-and-navigate", projectId, sessionId),
     getHotkey: () => ipcRenderer.invoke("desktop:quick-panel-get-hotkey"),
     setHotkey: (hotkey) => ipcRenderer.invoke("desktop:quick-panel-set-hotkey", hotkey),
+  },
+  dictationShortcut: {
+    get: () => ipcRenderer.invoke("desktop:dictation-shortcut-get"),
+    set: (input) => ipcRenderer.invoke("desktop:dictation-shortcut-set", input),
+    registerTarget: (ownerId, active) =>
+      ipcRenderer.invoke("desktop:dictation-shortcut-register-target", ownerId, active),
+    reportRecording: (ownerId, recording) =>
+      ipcRenderer.invoke("desktop:dictation-shortcut-report-recording", ownerId, recording),
+    onRequest: (listener) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        request: Parameters<typeof listener>[0],
+      ) => listener(request);
+      ipcRenderer.on("desktop:dictation-shortcut-request", handler);
+      return () => ipcRenderer.removeListener("desktop:dictation-shortcut-request", handler);
+    },
   },
   controllerDeploy: {
     start: (options) => ipcRenderer.invoke("desktop:controller-deploy", options),

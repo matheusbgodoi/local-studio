@@ -22,6 +22,7 @@ import {
   type TerminalKeybinds,
 } from "@/lib/terminal-keybinds";
 import { QuickPanelSettings } from "./quick-panel-settings";
+import { DictationShortcutSettings } from "./dictation-shortcut-settings";
 import { SettingsButton, SettingsGroup, SettingsNotice, SettingsRow } from "./settings-ui";
 
 function Keycaps({ binding }: { binding: string }) {
@@ -50,6 +51,7 @@ export function ShortcutsSettings() {
   return (
     <div>
       <QuickPanelSettings />
+      <DictationShortcutSettings />
       <TerminalSettings />
     </div>
   );

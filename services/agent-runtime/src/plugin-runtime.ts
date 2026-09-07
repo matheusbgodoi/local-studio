@@ -2,7 +2,11 @@ import { createHash } from "node:crypto";
 import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { Effect, Schema } from "effect";
-import { closePooledConnection, probeConnector } from "./connector-pool";
+import {
+  closePooledConnection,
+  connectorToolContractError,
+  probeConnector,
+} from "./connector-pool";
 import { listConnectors, upsertConnectors, type ConnectorConfig } from "./connectors-service";
 import { getGoogleAccount, type GoogleAccountView } from "./google-account";
 import {
@@ -405,9 +409,13 @@ function runtimeHealthView(
     Promise.all(connectors.map((connector) => probeConnector(connector))),
   ).pipe(
     Effect.map((probes) => {
-      const failures = probes.flatMap((probe, index) =>
-        probe.ok ? [] : [`${connectors[index]?.name}: ${probe.error ?? "MCP probe failed"}`],
-      );
+      const failures = probes.flatMap((probe, index) => {
+        const connector = connectors[index];
+        if (!connector) return ["Plugin connector state changed"];
+        if (!probe.ok) return [`${connector.name}: ${probe.error ?? "MCP probe failed"}`];
+        const contractError = connectorToolContractError(connector, probe.tools);
+        return contractError ? [`${connector.name}: ${contractError}`] : [];
+      });
       return failures.length
         ? {
             ...view,

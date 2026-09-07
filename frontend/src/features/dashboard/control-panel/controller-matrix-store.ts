@@ -5,9 +5,7 @@ import { Effect, Fiber, Schedule } from "effect";
 import { createApiClient } from "@/lib/api/create-api-client";
 import {
   BACKEND_URL_CHANGED_EVENT,
-  clearApiKey,
   getStoredBackendUrl,
-  setApiKey,
   setStoredBackendUrl,
 } from "@/lib/api/connection";
 import {
@@ -16,6 +14,7 @@ import {
   normalizeControllerUrl,
   type SavedController,
 } from "@/lib/api/controllers";
+import { normalizeOpenAIModels, type AgentModel } from "@shared/agent/models";
 
 const POLL_INTERVAL_MS = 5_000;
 const POLL_REQUEST = { timeout: 4_000, retries: 0 } as const;
@@ -180,16 +179,21 @@ async function pollController(
     baseUrl: "/api/proxy",
     useProxy: true,
     backendUrlOverride: controller.url,
-    apiKeyOverride: controller.apiKey,
   });
   try {
-    const status = await api.getStatus(POLL_REQUEST);
+    const [status, models] = await Promise.all([
+      api.getStatus(POLL_REQUEST),
+      api
+        .getOpenAIModels(POLL_REQUEST)
+        .then(normalizeOpenAIModels)
+        .catch(() => [] as AgentModel[]),
+    ]);
     pollFailures.delete(controller.url);
     return row({
       authRequired: false,
       controller,
       index,
-      modelName: modelNameFor(status.process),
+      modelName: modelNameFor(status.process, models),
       online: true,
       running: status.running,
     });
@@ -210,13 +214,12 @@ async function pollController(
 }
 
 function modelNameFor(
-  process: { served_model_name?: string | null; model_path?: string | null } | null,
+  process: { served_model_name?: string | null } | null,
+  models: AgentModel[],
 ): string | null {
   const served = process?.served_model_name?.trim();
-  if (served) return served;
-  const path = process?.model_path?.trim();
-  if (!path) return null;
-  return path.replace(/\/+$/, "").split("/").pop() || path;
+  if (!served) return null;
+  return models.find((model) => model.id === served)?.displayName?.trim() || null;
 }
 
 function isAuthRequiredError(error: unknown): boolean {
@@ -254,16 +257,11 @@ export function useControllerMatrixStore(): ControllerMatrixSnapshot {
 }
 
 export function activateController(controller: ControllerSnapshot): void {
-  // Clear when the target has no key — runtimeApiKey is a process-global, so a
-  // leftover key from the previous controller would otherwise be sent to this
-  // controller's (different) host.
-  if (controller.apiKey) setApiKey(controller.apiKey);
-  else clearApiKey();
   setStoredBackendUrl(controller.url);
   reload();
   void fetch("/api/settings", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ backendUrl: controller.url, apiKey: controller.apiKey || "" }),
+    body: JSON.stringify({ activateControllerUrl: controller.url }),
   });
 }

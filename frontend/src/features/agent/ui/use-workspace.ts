@@ -24,12 +24,8 @@ import type {
 } from "@/features/agent/workspace/types";
 import { useProjects } from "@/features/agent/projects/context";
 import { useToolsRef } from "@/features/agent/tools/context";
-import { BACKEND_URL_STORAGE_KEY, getApiKey, getStoredBackendUrl } from "@/lib/api/connection";
-import {
-  CONTROLLERS_STORAGE_KEY,
-  loadSavedControllers,
-  normalizeControllerUrl,
-} from "@/lib/api/controllers";
+import { BACKEND_URL_STORAGE_KEY } from "@/lib/api/connection";
+import { CONTROLLERS_STORAGE_KEY } from "@/lib/api/controllers";
 import type { Session, UpdateSession } from "@/features/agent/runtime/types";
 import {
   useWorkspaceHydrationEffects,
@@ -38,9 +34,16 @@ import {
 import type { ChatPaneHandle } from "@/features/agent/ui/chat-pane";
 import type { SessionDropPayload } from "@/features/agent/ui/pane-grid";
 import {
-  readDefaultAgentModel,
+  readAndMigrateDefaultAgentModel,
   writeDefaultAgentModel,
 } from "@/features/agent/workspace/model-preference";
+import {
+  readModelThinkingLevel,
+  writeModelThinkingLevel,
+} from "@/features/agent/workspace/thinking-level-preference";
+import { thinkingAfterModelSelection } from "@/features/agent/messages/thinking-level-pref";
+import type { AgentModelSelection } from "@shared/agent/models";
+import type { AgentThinkingLevel } from "@/features/agent/contracts";
 
 export type WorkspaceHandles = {
   registerComputerAside: (element: HTMLElement | null) => void;
@@ -60,7 +63,7 @@ export type WorkspaceHandles = {
     side: "a" | "b",
     payload: SessionDropPayload,
   ) => void;
-  selectPaneModel: (paneId: PaneId, modelId: string) => void;
+  selectPaneModel: (paneId: PaneId, selection: AgentModelSelection) => void;
   setDefaultModel: (modelId: string) => void;
   notifySessionsChanged: () => void;
   startComputerResize: (event: ReactMouseEvent<HTMLDivElement>) => void;
@@ -90,6 +93,14 @@ function createMemoryStorage(): Pick<Storage, "getItem" | "setItem" | "removeIte
   };
 }
 
+/** The level `modelId` was last used at — Off until that model has one. Reads
+ *  come from real storage, like readDefaultAgentModel: an ephemeral workspace
+ *  must not *write* preferences, but it should still open on the ones already
+ *  remembered. */
+function adoptModelThinkingLevel(modelId: string): AgentThinkingLevel {
+  return readModelThinkingLevel(window.localStorage, modelId);
+}
+
 function createWorkspaceWindow(source: Window): WorkspaceWindow {
   return {
     Event,
@@ -98,30 +109,12 @@ function createWorkspaceWindow(source: Window): WorkspaceWindow {
   };
 }
 
-function agentModelControllersPayload() {
-  const activeUrl = normalizeControllerUrl(getStoredBackendUrl());
-  if (activeUrl) {
-    const activeApiKey = getApiKey();
-    return [
-      {
-        url: activeUrl,
-        ...(activeApiKey ? { apiKey: activeApiKey } : {}),
-        name: "primary",
-      },
-    ];
-  }
-  const fallback = loadSavedControllers()[0];
-  if (!fallback) return [];
-  const url = normalizeControllerUrl(fallback.url);
-  return url ? [{ ...fallback, url }] : [];
-}
-
 async function loadAgentModelsPayload(): Promise<{ models?: AgentModel[]; error?: string }> {
   const response = await fetch("/api/agent/models", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     cache: "no-store",
-    body: JSON.stringify({ controllers: agentModelControllersPayload() }),
+    body: "{}",
   });
   const payload = await safeJson<{ models?: AgentModel[]; error?: string }>(response);
   if (!response.ok) throw new Error(payload.error || "Failed to load models");
@@ -201,10 +194,13 @@ export function useWorkspace({ ephemeral = false }: UseWorkspaceOptions = {}): U
       dispatch({ type: "setError", error: "" });
       void loadAgentModelsPayload()
         .then((models) => {
+          // Restoring the last-used model also restores THAT model's level: the
+          // catalogue arrives, selectedModel settles on the remembered id, and the
+          // seed a fresh session opens at follows it from the per-model store.
           dispatch({
             type: "setModels",
             models: models.models ?? [],
-            preferredModelId: readDefaultAgentModel(window.localStorage),
+            preferredModelId: readAndMigrateDefaultAgentModel(window.localStorage),
           });
         })
         .catch((error) => {
@@ -287,8 +283,30 @@ export function useWorkspace({ ephemeral = false }: UseWorkspaceOptions = {}): U
           newPaneId: newPaneId(),
           tab: makeFreshTab(),
         }),
-      selectPaneModel: (paneId: PaneId, modelId: string) =>
-        dispatch({ type: "patchActiveTab", paneId, patch: { modelId } }),
+      selectPaneModel: (paneId: PaneId, selection: AgentModelSelection) => {
+        const { modelId } = selection;
+        const storage = ephemeral ? createMemoryStorage() : window.localStorage;
+        if (selection.physicalModel === "changed") writeDefaultAgentModel(storage, modelId);
+        // `?? ["off"]` is the ladder ChatPane is handed for the same row, so this cannot
+        // disagree with the pane about which levels exist.
+        const levels = stateRef.current.models.find((model) => model.id === modelId)
+          ?.thinkingLevels ?? ["off"];
+        const thinking = thinkingAfterModelSelection(
+          selection,
+          levels,
+          adoptModelThinkingLevel(modelId),
+        );
+        dispatch({
+          type: "patchActiveTab",
+          paneId,
+          patch: { modelId, thinkingLevel: thinking.level },
+        });
+        // PIN THE CARRIED LEVEL UNDER THE ALIAS IT LANDED ON — the session is only half of
+        // it. The pane's level falls back to the per-alias store whenever the session never
+        // saved one, so an unwritten key sends the effort back to Off the next time this
+        // pane leaves the model and returns, and on the next app start.
+        if (thinking.remember) writeModelThinkingLevel(storage, modelId, thinking.level);
+      },
       setDefaultModel: (modelId: string) => {
         writeDefaultAgentModel(ephemeral ? createMemoryStorage() : window.localStorage, modelId);
         dispatch({ type: "setSelectedModel", modelId });

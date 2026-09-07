@@ -1,5 +1,5 @@
 appId: org.local.studio.desktop
-productName: Local Studio
+productName: CRIAs AI
 asar: true
 
 afterPack: ./desktop/project.mjs
@@ -13,18 +13,6 @@ files:
   - package.json
   - node_modules/@lydell/node-pty/**
   - node_modules/@lydell/node-pty-${platform}-${arch}/**
-  # electron-builder auto-includes EVERY production dependency, but the Electron
-  # main process only requires electron, electron-updater, effect and node-pty
-  # (verified: those are the only non-relative requires in desktop/dist). The web
-  # app is NOT loaded from the asar — app-server.ts forks
-  # .next/standalone/server.js, which ships separately under extraResources with
-  # its own output-traced node_modules. Dropping the framework and its build-time
-  # toolchain from the asar takes it from 494 MB to 336 MB.
-  #
-  # NB: a stricter "!node_modules/** + re-add the transitive closure" inversion
-  # gets the asar to 40 MB but the packaged app then hangs before its first log
-  # line, so it is deliberately not used. Re-attempt only with a passing
-  # `npm run desktop:smoke`.
   - "!node_modules/next/**"
   - "!node_modules/@next/**"
   - "!node_modules/react/**"
@@ -34,30 +22,26 @@ files:
   - "!node_modules/sharp/**"
   - "!node_modules/playwright-core/**"
   - "!node_modules/@playwright/**"
+  - "!node_modules/@earendil-works/**"
+  - "!node_modules/**/@earendil-works/**"
+  - "!node_modules/undici/**"
+  - "!node_modules/**/undici/**"
+  - "!node_modules/brace-expansion/**"
+  - "!node_modules/**/brace-expansion/**"
 
 extraResources:
+  - from: desktop/speech
+    to: speech
+    filter:
+      - LocalStudioDictation
+      - LocalStudioTitle
+      - LocalStudioDictationHotkey
   - from: desktop/resources/app-update.yml
     to: app-update.yml
   - from: ../services/agent-runtime/dist/standalone.mjs
     to: app/agent-runtime/standalone.mjs
-  - from: ../services/agent-runtime/dist/node_modules/playwright-core
-    to: app/agent-runtime/node_modules/playwright-core
-  - from: ../services/agent-runtime/dist/node_modules/chromium-bidi
-    to: app/agent-runtime/node_modules/chromium-bidi
-  - from: ../services/agent-runtime/dist/node_modules/chromium-bidi/node_modules/zod
-    to: app/agent-runtime/node_modules/chromium-bidi/node_modules/zod
-  - from: ../services/agent-runtime/dist/node_modules/mitt
-    to: app/agent-runtime/node_modules/mitt
-  - from: ../services/agent-runtime/dist/node_modules/devtools-protocol
-    to: app/agent-runtime/node_modules/devtools-protocol
-  - from: ../services/agent-runtime/dist/node_modules/@silvia-odwyer/photon-node
-    to: app/agent-runtime/node_modules/@silvia-odwyer/photon-node
-  - from: ../services/agent-runtime/dist/node_modules/undici
-    to: app/agent-runtime/node_modules/undici
-  # Server-side terminals: node-pty is dynamically required by pty-service, so
-  # it ships as real files next to standalone.mjs (native addon, cannot bundle).
-  - from: ../services/agent-runtime/dist/node_modules/@lydell
-    to: app/agent-runtime/node_modules/@lydell
+  - from: ../services/agent-runtime/dist/node_modules
+    to: app/agent-runtime/node_modules
   - from: .next/standalone
     to: app/frontend/.next/standalone
     filter:
@@ -108,7 +92,7 @@ directories:
 mac:
   icon: desktop/resources/icon.icns
   category: public.app-category.developer-tools
-  identity: "sherif cherfa (TZ447KHNZL)"
+  identity: null
   target:
     - target: dmg
       arch:
@@ -122,9 +106,10 @@ mac:
   entitlementsInherit: desktop/resources/entitlements.mac.plist
   extendInfo:
     NSMicrophoneUsageDescription: Record your own voice to create a private, local voice profile.
+    NSSpeechRecognitionUsageDescription: Transcribe your speech into the composer. Everything stays on this Mac — no audio ever leaves the machine.
 
 dmg:
-  sign: true
+  sign: false
 
 win:
   target:

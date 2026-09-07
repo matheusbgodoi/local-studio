@@ -1,10 +1,15 @@
 "use client";
 
-import type { ReactNode, RefObject } from "react";
+import { useSyncExternalStore, type ReactNode, type RefObject } from "react";
+import {
+  getBrowserBackendAvailability,
+  subscribeBrowserBackendAvailability,
+} from "@/features/agent/tools/browser-backend-availability";
+import type { TranscriptPhase } from "./use-chat-pane-composer-actions";
 import { Spinner } from "@/ui";
 import { ArrowUp, Plus } from "@/ui/icon-registry";
 import type { BrowserBackend } from "@/features/agent/tools/types";
-import { GlobeIcon, PanelIcon, SitegeistIcon, StopIcon } from "@/ui/icons";
+import { PanelIcon, SitegeistIcon, StopIcon } from "@/ui/icons";
 import { ComposerDictationButton } from "./composer-dictation-button";
 
 export function AgentComposerActions({
@@ -15,13 +20,13 @@ export function AgentComposerActions({
   status,
   input,
   attachmentsCount,
-  browserToolEnabled,
   browserBackend,
   onToggleBrowserBackend,
-  onToggleBrowserTool,
   onAbortTurn,
   onTranscript,
   modelSelector,
+  networkControl,
+  shortcutTarget,
 }: {
   fileInputRef: RefObject<HTMLInputElement | null>;
   onAttachFiles: (files: FileList | null) => void;
@@ -30,14 +35,24 @@ export function AgentComposerActions({
   status?: string;
   input: string;
   attachmentsCount: number;
-  browserToolEnabled: boolean;
   browserBackend: BrowserBackend;
   onToggleBrowserBackend: () => void;
-  onToggleBrowserTool: () => void;
   onAbortTurn: () => void;
-  onTranscript: (text: string) => void;
+  onTranscript: (text: string, phase?: TranscriptPhase) => void;
   modelSelector?: ReactNode;
+  networkControl?: ReactNode;
+  shortcutTarget: boolean;
 }) {
+  //
+  // The relay backend is optional and usually absent, so the switch is offered
+  // only when the runtime reports one configured. See
+  // tools/browser-backend-availability.ts for why.
+  //
+  const backendSwitchAvailable = useSyncExternalStore(
+    subscribeBrowserBackendAvailability,
+    getBrowserBackendAvailability,
+    () => false,
+  );
   const inputHasText = Boolean(input.trim());
   const starting = status === "starting";
   const stopping = status === "stopping";
@@ -59,36 +74,20 @@ export function AgentComposerActions({
       <button
         type="button"
         onClick={() => fileInputRef.current?.click()}
-        disabled={readingAttachments || running}
+        disabled={readingAttachments}
         className="inline-flex !h-7 !min-h-7 !w-7 !min-w-7 shrink-0 items-center justify-center rounded-full text-(--hl2) hover:bg-(--hover) hover:text-(--fg) disabled:opacity-30"
         aria-label="Attach files"
         title="Attach files (or paste/drop into composer)"
       >
         <Plus className="h-4 w-4" strokeWidth={1.75} />
       </button>
-      <button
-        type="button"
-        onClick={onToggleBrowserTool}
-        aria-pressed={browserToolEnabled}
-        aria-label="Browser tools"
-        title={
-          browserToolEnabled
-            ? "Browser tool: ON — agent can drive the browser"
-            : "Browser tool: OFF — click to let the agent navigate, click, fill, and read pages"
-        }
-        className={`composer-action-optional inline-flex !h-7 !min-h-7 !w-7 !min-w-7 shrink-0 items-center justify-center rounded-full ${browserToolEnabled ? activeIconClass : inactiveIconClass}`}
-      >
-        <span className="relative inline-flex">
-          <GlobeIcon className="h-4 w-4" />
-        </span>
-      </button>
-      {browserToolEnabled ? (
+      {backendSwitchAvailable ? (
         <button
           type="button"
           onClick={onToggleBrowserBackend}
           aria-label={`Browser backend: ${browserBackendLabel}. Switch to ${browserBackendTarget}.`}
           className={`composer-action-optional inline-flex !h-7 !min-h-7 !w-7 !min-w-7 shrink-0 items-center justify-center rounded-full ${usingSitegeist ? activeIconClass : inactiveIconClass}`}
-          title={`Browser: ${browserBackendLabel}. Click to use ${browserBackendTarget}.`}
+          title={`Where the agent's browser runs: ${browserBackendLabel}. Click to use the ${browserBackendTarget}.`}
         >
           {usingSitegeist ? (
             <SitegeistIcon className="h-4 w-4" />
@@ -98,12 +97,14 @@ export function AgentComposerActions({
         </button>
       ) : null}
       <div className="ml-auto flex min-w-0 shrink items-center gap-0.5">
+        {networkControl}
         {modelSelector}
         <ComposerDictationButton
           disabled={running}
           inactiveClassName={inactiveIconClass}
           idleClassName="composer-action-optional"
           onTranscript={onTranscript}
+          shortcutTarget={shortcutTarget}
         />
         {running ? (
           <>
@@ -115,12 +116,19 @@ export function AgentComposerActions({
                 <Spinner size="xs" />
                 {stopping ? "Stopping…" : "Starting…"}
               </span>
-            ) : inputHasText ? (
+            ) : inputHasText || attachmentsCount > 0 ? (
               <button
                 type="submit"
+                disabled={readingAttachments}
                 className="inline-flex !h-[30px] !min-h-[30px] !w-[30px] !min-w-[30px] shrink-0 items-center justify-center rounded-full bg-(--fg) text-(--bg) transition-opacity hover:opacity-85"
-                aria-label="Steer current task now"
-                title="Steer current task now (Alt+Enter) · Enter queues it instead"
+                aria-label={
+                  attachmentsCount > 0 ? "Queue attached message" : "Steer current task now"
+                }
+                title={
+                  attachmentsCount > 0
+                    ? "Queue attached message"
+                    : "Steer current task now (Alt+Enter) · Enter queues it instead"
+                }
               >
                 <ArrowUp className="h-4 w-4 stroke-[2.25]" />
               </button>

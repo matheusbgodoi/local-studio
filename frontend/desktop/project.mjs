@@ -44,16 +44,11 @@ var init_assert_release_main = __esm(() => {
 var exports_assert_standalone_build = {};
 import {
   existsSync as existsSync2,
-  lstatSync,
-  readFileSync as readFileSync2,
   readdirSync,
   readlinkSync,
   realpathSync
 } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { spawnSync } from "node:child_process";
-import { createRequire } from "node:module";
-import { pathToFileURL } from "node:url";
 function filesUnder(directory) {
   return readdirSync(directory, { recursive: !0, withFileTypes: !0 }).filter((entry) => entry.isFile()).map((entry) => resolve(entry.parentPath, entry.name));
 }
@@ -75,23 +70,14 @@ function isRuntimeFile(file) {
     "frontend/node_modules/"
   ].some((prefix) => path2 === prefix || path2.startsWith(prefix));
 }
-var projectRoot, standaloneBase, candidates, runtimeRoots, requiredRuntimeFiles, runtimeRoot, unsafeRuntimeLinks, tracedPackageDirectory, danglingTracedPackages, piCodingAgentRoot, piAiRoot, piRuntimeEntries, piAiManifestPath, piAiManifest, requireFromPiAi, unexpected;
+var projectRoot, standaloneBase, candidates, runtimeRoots, runtimeRoot, unsafeRuntimeLinks, unexpected;
 var init_assert_standalone_build = __esm(() => {
   projectRoot = resolve(import.meta.dirname, ".."), standaloneBase = resolve(projectRoot, ".next", "standalone"), candidates = [
     resolve(standaloneBase, "frontend", "server.js"),
     resolve(standaloneBase, "server.js")
-  ], runtimeRoots = [resolve(standaloneBase, "frontend"), standaloneBase], requiredRuntimeFiles = [
-    "node_modules/@earendil-works/pi-coding-agent/package.json",
-    "node_modules/@earendil-works/pi-coding-agent/dist/index.js",
-    "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/package.json",
-    "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/providers/data/amazon-bedrock.json",
-    "node_modules/@earendil-works/pi-coding-agent/node_modules/typebox/build/value/shared/union_priority_sort.mjs"
-  ];
+  ], runtimeRoots = [resolve(standaloneBase, "frontend"), standaloneBase];
   if (!candidates.some((candidate) => existsSync2(candidate)))
     throw Error(`Missing standalone server: ${candidates.join(", ")}`);
-  for (let file of requiredRuntimeFiles)
-    if (!runtimeRoots.some((root) => existsSync2(resolve(root, file))))
-      throw Error(`Missing standalone runtime dependency: ${file}`);
   runtimeRoot = runtimeRoots.find((root) => existsSync2(resolve(root, "server.js"))), unsafeRuntimeLinks = runtimeRoot ? symlinksUnder(runtimeRoot).filter((link) => {
     if (isAbsolute(readlinkSync(link)) || !existsSync2(link))
       return !0;
@@ -100,23 +86,8 @@ var init_assert_standalone_build = __esm(() => {
   }) : [];
   if (unsafeRuntimeLinks.length > 0)
     throw Error(`Unsafe standalone runtime links: ${unsafeRuntimeLinks.join(", ")}`);
-  tracedPackageDirectory = runtimeRoot ? resolve(runtimeRoot, ".next/node_modules/@earendil-works") : void 0, danglingTracedPackages = tracedPackageDirectory ? existsSync2(tracedPackageDirectory) ? readdirSync(tracedPackageDirectory).map((entry) => resolve(tracedPackageDirectory, entry)).filter((entry) => lstatSync(entry).isSymbolicLink() && !existsSync2(entry)) : [] : [];
-  if (danglingTracedPackages.length > 0)
-    throw Error(`Dangling traced runtime packages: ${danglingTracedPackages.join(", ")}`);
-  piCodingAgentRoot = runtimeRoot ? resolve(runtimeRoot, "node_modules/@earendil-works/pi-coding-agent") : null, piAiRoot = piCodingAgentRoot ? resolve(piCodingAgentRoot, "node_modules/@earendil-works/pi-ai") : null, piRuntimeEntries = piCodingAgentRoot && piAiRoot ? [resolve(piCodingAgentRoot, "dist/index.js"), resolve(piAiRoot, "dist/index.js")] : [];
-  if (piRuntimeEntries.length !== 2 || piRuntimeEntries.some((entry) => !existsSync2(entry)))
-    throw Error("Missing packaged Pi runtime entrypoints");
-  for (let entry of piRuntimeEntries) {
-    let importCheck = spawnSync(process.execPath, ["--input-type=module", "--eval", `import(${JSON.stringify(pathToFileURL(entry).href)})`], { cwd: runtimeRoot, encoding: "utf8" });
-    if (importCheck.status !== 0)
-      throw Error(`Standalone Pi runtime entrypoint is not importable: ${importCheck.stderr || importCheck.stdout}`);
-  }
-  piAiManifestPath = resolve(realpathSync(piAiRoot), "package.json"), piAiManifest = JSON.parse(readFileSync2(piAiManifestPath, "utf8")), requireFromPiAi = createRequire(piAiManifestPath);
-  for (let dependency of Object.keys(piAiManifest.dependencies ?? {})) {
-    let resolvedDependency = realpathSync(requireFromPiAi.resolve(dependency)), runtimeRelativePath = relative(runtimeRoot, resolvedDependency);
-    if (runtimeRelativePath === ".." || runtimeRelativePath.startsWith(`..${sep}`) || isAbsolute(runtimeRelativePath))
-      throw Error(`Pi AI dependency escaped standalone runtime: ${dependency}`);
-  }
+  const duplicatedPi = filesUnder(standaloneBase).filter((file) => file.split(sep).join("/").endsWith("/node_modules/@earendil-works/pi-coding-agent/package.json"));
+  if (duplicatedPi.length) throw Error("Next standalone must use the dedicated agent runtime instead of shipping another Pi tree");
   unexpected = filesUnder(standaloneBase).filter((file) => !isRuntimeFile(file));
   if (unexpected.length > 0)
     throw Error(`Standalone build contains non-runtime files:
@@ -205,12 +176,12 @@ function sleep(ms) {
 function timeoutAfter(ms, message) {
   return new Promise((_, reject) => setTimeout(() => reject(Error(message)), ms));
 }
-function connectToTarget(webSocketDebuggerUrl) {
+function connectToTarget(webSocketDebuggerUrl, onEvent = () => {}) {
   let websocket = new WebSocket(webSocketDebuggerUrl), id = 0, pending = new Map;
   return websocket.addEventListener("message", (message) => {
     let data = JSON.parse(message.data);
-    if (!data.id || !pending.has(data.id))
-      return;
+    if (!data.id) return onEvent(data);
+    if (!pending.has(data.id)) return;
     let { resolve: resolve2, reject } = pending.get(data.id);
     if (pending.delete(data.id), data.error)
       reject(Error(JSON.stringify(data.error)));
@@ -243,16 +214,16 @@ async function debugPortFor(userDataDir) {
 }
 async function pageTarget(debugPort) {
   for (let attempt = 0;attempt < 100; attempt += 1) {
-    let target = (await fetch(`http://127.0.0.1:${debugPort}/json/list`).then((response) => response.json())).find((entry) => entry.type === "page" && entry.url.startsWith(baseUrl));
+    let target = (await fetch(`http://127.0.0.1:${debugPort}/json/list`).then((response) => response.json())).find((entry) => entry.type === "page" && (entry.url === "about:blank" || entry.url.startsWith(baseUrl)));
     if (target)
       return target;
     await sleep(50);
   }
   throw Error("Chrome page target did not appear");
 }
-async function waitForComplete(page) {
+async function waitForComplete(page, expectedUrl) {
   for (let attempt = 0;attempt < 100; attempt += 1) {
-    if ((await page.send("Runtime.evaluate", { returnByValue: !0, expression: "document.readyState" })).result.value === "complete")
+    if ((await page.send("Runtime.evaluate", { returnByValue: !0, expression: `location.origin === ${JSON.stringify(new URL(expectedUrl).origin)} && document.readyState` })).result.value === "complete")
       return;
     await sleep(50);
   }
@@ -268,6 +239,9 @@ async function pageMetrics(page) {
       return {
         nav: nav ? nav.toJSON() : null,
         paints,
+        appDocument: Boolean(document.querySelector('script[src*="/_next/static/"]')),
+        busyIndicators: document.querySelectorAll('[aria-busy="true"], [role="progressbar"]').length,
+        stateLabels: ["Offline", "Unavailable", "Connecting", "Loading", "No models available", "No models", "Disconnected", "Retry", "Try again", "Indisponível", "Carregando"].filter((label) => (document.body?.innerText ?? "").toLowerCase().includes(label.toLowerCase())),
         resources: resources.length,
         scripts: resources.filter((entry) => entry.initiatorType === "script").length,
         css: resources.filter((entry) => entry.initiatorType === "link" || entry.name.endsWith(".css")).length,
@@ -277,6 +251,9 @@ async function pageMetrics(page) {
     })()`
   }), performanceMetrics = await page.send("Performance.getMetrics"), metric = Object.fromEntries(performanceMetrics.metrics.map((entry) => [entry.name, entry.value])), value = evaluated.result.value;
   return {
+    appDocument: value.appDocument,
+    busyIndicators: value.busyIndicators,
+    stateLabels: value.stateLabels,
     dclMs: value.nav.domContentLoadedEventEnd,
     loadMs: value.nav.loadEventEnd,
     fcpMs: value.paints["first-contentful-paint"] || 0,
@@ -299,24 +276,97 @@ async function routeResult(route) {
     "--disable-dev-shm-usage",
     "--window-size=1440,1000",
     `--user-data-dir=${userDataDir}`,
-    `${baseUrl}${route.path}`
+    "about:blank"
   ], { stdio: ["ignore", "ignore", "ignore"] });
   try {
-    let debugPort = await debugPortFor(userDataDir), target = await pageTarget(debugPort), page = await connectToTarget(target.webSocketDebuggerUrl);
+    let status = null, frameId = null, exceptions = 0, consoleErrors = 0;
+    const exceptionSites = [], consoleCategories = new Set(), httpErrors = new Map();
+    let page, blockedNavigation = false;
+    const onEvent = (event) => {
+      if (event.method === "Fetch.requestPaused") {
+        const allowed = new URL(event.params.request.url).origin === new URL(baseUrl).origin;
+        if (!allowed) blockedNavigation = true;
+        void page.send(allowed ? "Fetch.continueRequest" : "Fetch.failRequest", {
+          requestId: event.params.requestId, ...(allowed ? {} : { errorReason: "BlockedByClient" })
+        }).catch(() => undefined);
+      }
+      if (event.method === "Network.responseReceived" && event.params.response.status >= 400) {
+        const failedUrl = new URL(event.params.response.url);
+        if (failedUrl.origin === new URL(baseUrl).origin) {
+          const route = failedUrl.pathname.split("/").slice(0, 4).join("/");
+          const label = `${event.params.response.status} ${route}`;
+          httpErrors.set(label, (httpErrors.get(label) ?? 0) + 1);
+        }
+      }
+      if (event.method === "Runtime.exceptionThrown") {
+        exceptions += 1;
+        const details = event.params.exceptionDetails;
+        const frame = details.stackTrace?.callFrames?.[0];
+        const name = /^[A-Za-z]+Error$/.test(details.exception?.className ?? "") ? details.exception.className : "JavaScriptError";
+        const source = (frame?.url ?? details.url ?? "").split("?")[0].split("/").at(-1);
+        if (exceptionSites.length < 5) exceptionSites.push(`${name} ${source || "inline"}:${(frame?.lineNumber ?? details.lineNumber ?? 0) + 1}:${(frame?.columnNumber ?? details.columnNumber ?? 0) + 1} ${diagnosticErrorCategory(details.exception?.description ?? details.text ?? "")}`);
+      }
+      if (event.method === "Runtime.consoleAPICalled" && event.params.type === "error") {
+        consoleErrors += 1;
+        const message = event.params.args.map((value) => typeof value.value === "string" ? value.value : value.description ?? "").join(" ");
+        consoleCategories.add(diagnosticErrorCategory(message));
+      }
+      if (event.method === "Network.responseReceived" && event.params.type === "Document" && event.params.frameId === frameId) status = event.params.response.status;
+    };
+    let debugPort = await debugPortFor(userDataDir), target = await pageTarget(debugPort);
+    page = await connectToTarget(target.webSocketDebuggerUrl, onEvent);
     try {
-      return await page.send("Performance.enable"), await waitForComplete(page), await sleep(100), { path: route.path, ...await pageMetrics(page), budget: route };
+      await page.send("Page.enable");
+      await page.send("Network.enable");
+      await page.send("Fetch.enable", { patterns: [{ resourceType: "Document", requestStage: "Request" }] });
+      await page.send("Runtime.enable");
+      await page.send("Performance.enable");
+      frameId = (await page.send("Page.getFrameTree")).frameTree.frame.id;
+      if (browserToken) {
+        const cookie = await page.send("Network.setCookie", {
+          name: "local_studio_token", value: browserToken, url: baseUrl,
+          path: "/", httpOnly: true, secure: new URL(baseUrl).protocol === "https:", sameSite: "Strict"
+        });
+        if (!cookie.success) throw Error("Unable to seed profiler authentication cookie");
+      }
+      const url = `${baseUrl}${route.path}`;
+      await page.send("Page.navigate", { url });
+      await waitForComplete(page, url).catch((error) => {
+        if (blockedNavigation) throw Error("Cross-origin document navigation blocked");
+        throw error;
+      });
+      await sleep(Math.min(10000, Math.max(0, Number(process.env.LOCAL_STUDIO_PERF_OBSERVE_MS) || 1500)));
+      return { path: route.path, status, exceptions, consoleErrors, exceptionSites, consoleCategories: [...consoleCategories], httpErrors: [...httpErrors.entries()], ...await pageMetrics(page), budget: route };
     } finally {
       page.close();
     }
   } finally {
-    child.kill("SIGTERM"), await sleep(100), rmSync(userDataDir, { recursive: !0, force: !0, maxRetries: 5, retryDelay: 50 });
+    child.kill("SIGTERM");
+    for (let attempt = 0; attempt < 40 && child.exitCode === null && child.signalCode === null; attempt += 1) await sleep(50);
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    for (let attempt = 0; attempt < 20 && child.exitCode === null && child.signalCode === null; attempt += 1) await sleep(50);
+    rmSync(userDataDir, { recursive: !0, force: !0, maxRetries: 10, retryDelay: 100 });
   }
+}
+function diagnosticErrorCategory(message) {
+  if (/Cannot access .+ before initialization/.test(message)) return "access-before-initialization";
+  if (/Cannot read properties of (undefined|null)/.test(message)) return "missing-object-property";
+  if (/Minified React error #[0-9]+/.test(message)) return message.match(/Minified React error #[0-9]+/)[0];
+  if (/fetch failed|Failed to fetch/i.test(message)) return "fetch-failure";
+  if (/404|not found/i.test(message)) return "not-found";
+  if (/timeout|timed out/i.test(message)) return "timeout";
+  return "unclassified-message-redacted";
 }
 function formatNumber(value) {
   return value.toFixed(1).padStart(6, " ");
 }
 function violations(result) {
   let out = [];
+  for (const [label, count] of result.httpErrors) out.push(`HTTP resource error: ${label} (${count})`);
+  if (result.status !== 200) out.push(`document HTTP ${result.status ?? "unobserved"}`);
+  if (!result.appDocument) out.push("application scripts absent");
+  if (result.exceptions) out.push(`uncaught JavaScript exceptions: ${result.exceptions} (${result.exceptionSites.join("; ")})`);
+  if (result.consoleErrors) out.push(`console errors: ${result.consoleErrors} (${result.consoleCategories.join(", ")})`);
   if (result.dclMs > result.budget.dclMs)
     out.push(`dcl ${result.dclMs.toFixed(1)}ms > ${result.budget.dclMs}ms`);
   if (result.fcpMs > result.budget.fcpMs)
@@ -331,7 +381,7 @@ function violations(result) {
     out.push(`heap ${result.heapMiB.toFixed(1)}MiB > ${result.budget.heapMiB}MiB`);
   return out;
 }
-var defaultChromePaths, chromePath, baseUrl, routeTimeoutMs, routes, failures;
+var defaultChromePaths, chromePath, baseUrl, routeTimeoutMs, routes, failures, browserToken;
 var init_browser_perf_audit = __esm(async () => {
   init_perf_routes();
   defaultChromePaths = [
@@ -344,17 +394,37 @@ var init_browser_perf_audit = __esm(async () => {
   if (!chromePath)
     console.error("Chrome executable not found. Set LOCAL_STUDIO_PERF_CHROME."), process.exit(1);
   baseUrl = (process.env.LOCAL_STUDIO_PERF_URL || "http://127.0.0.1:3000").replace(/\/+$/, ""), routeTimeoutMs = Math.max(5000, Number.parseInt(process.env.LOCAL_STUDIO_PERF_BROWSER_TIMEOUT_MS || "15000", 10)), routes = browserRoutes();
+  const tokenFile = process.env.LOCAL_STUDIO_PERF_TOKEN_FILE;
+  const targetUrl = new URL(baseUrl);
+  if (!["http:", "https:"].includes(targetUrl.protocol) || targetUrl.username || targetUrl.password || targetUrl.search || targetUrl.hash) throw Error("Profiler URL must be an HTTP origin without credentials or query parameters");
+  if (tokenFile && !["127.0.0.1", "localhost", "[::1]"].includes(targetUrl.hostname)) throw Error("Profiler authentication is restricted to loopback");
+  browserToken = tokenFile ? readFileSync3(tokenFile, "utf8").trim() : "";
+  if (tokenFile && !browserToken) throw Error("Profiler token file is empty");
+  const requestedRoutes = process.env.LOCAL_STUDIO_PERF_ROUTES?.split(",").map((value) => value.trim());
+  if (requestedRoutes) {
+    routes = requestedRoutes.map((value) => {
+      const requested = new URL(value, baseUrl);
+      const known = routes.find((route) => route.path === requested.pathname);
+      if (!known || requested.origin !== targetUrl.origin || requested.username || requested.password) throw Error("Profiler route selection contains an unknown or external route");
+      return { ...known, path: `${requested.pathname}${requested.search}${requested.hash}` };
+    });
+  }
   console.log(`Local Studio browser perf audit: ${baseUrl}`);
-  console.log("route              dcl    load     fcp    task    heap nodes  text res scripts css");
+  console.log("route              dcl    load     fcp    task    heap nodes  text res scripts css HTTP exceptions consoleErrors busy states");
   failures = [];
   for (let route of routes) {
-    let result = await Promise.race([
-      routeResult(route).catch((error) => {
-        throw Error(`${route.path}: ${error instanceof Error ? error.message : String(error)}`);
-      }),
-      timeoutAfter(routeTimeoutMs, `${route.path} timed out after ${routeTimeoutMs}ms`)
-    ]), bad = violations(result);
-    if (console.log(`${result.path.padEnd(16)} ${formatNumber(result.dclMs)}ms ${formatNumber(result.loadMs)}ms ${formatNumber(result.fcpMs)}ms ${formatNumber(result.taskMs)}ms ${formatNumber(result.heapMiB)}MiB ${String(result.nodes).padStart(5, " ")} ${String(result.textChars).padStart(5, " ")} ${String(result.resources).padStart(3, " ")} ${String(result.scripts).padStart(7, " ")} ${String(result.css).padStart(3, " ")}`), bad.length > 0)
+    let result;
+    try {
+      result = await Promise.race([
+        routeResult(route),
+        timeoutAfter(routeTimeoutMs, `route timed out after ${routeTimeoutMs}ms`)
+      ]);
+    } catch (error) {
+      failures.push(`${route.path}: ${error instanceof Error ? error.message : "profiling failed"}`);
+      continue;
+    }
+    const bad = violations(result);
+    if (console.log(`${result.path.padEnd(16)} ${formatNumber(result.dclMs)}ms ${formatNumber(result.loadMs)}ms ${formatNumber(result.fcpMs)}ms ${formatNumber(result.taskMs)}ms ${formatNumber(result.heapMiB)}MiB ${String(result.nodes).padStart(5, " ")} ${String(result.textChars).padStart(5, " ")} ${String(result.resources).padStart(3, " ")} ${String(result.scripts).padStart(7, " ")} ${String(result.css).padStart(3, " ")} ${result.status} ${result.exceptions} ${result.consoleErrors} ${result.busyIndicators} ${result.stateLabels.join("|") || "none"}`), bad.length > 0)
       failures.push(`${result.path}: ${bad.join(", ")}`);
   }
   if (failures.length > 0) {
@@ -378,9 +448,9 @@ import {
 import path2 from "node:path";
 import { spawnSync as spawnSync2 } from "node:child_process";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
-var packageDir, distDir, bundlePath, runtimePackages, build, lydellDir, bundle, sourceRoot;
+var packageDir, distDir, bundlePath, nodeModulesDir, browserPackages, piPackages, externalPackages, resolvePackageDir, dependencyClosure, runtimePackages, build, lydellDir, bundle, sourceRoot;
 var init_bundle = __esm(() => {
-  packageDir = path2.resolve(path2.dirname(fileURLToPath2(import.meta.url)), "../../services/agent-runtime"), distDir = path2.join(packageDir, "dist"), bundlePath = path2.join(distDir, "standalone.mjs"), runtimePackages = [
+  packageDir = path2.resolve(path2.dirname(fileURLToPath2(import.meta.url)), "../../services/agent-runtime"), distDir = path2.join(packageDir, "dist"), bundlePath = path2.join(distDir, "standalone.mjs"), nodeModulesDir = path2.join(packageDir, "node_modules"), browserPackages = [
     "playwright-core",
     "chromium-bidi",
     "mitt",
@@ -388,33 +458,70 @@ var init_bundle = __esm(() => {
     "@silvia-odwyer/photon-node",
     "undici",
     "@lydell/node-pty"
+  ], piPackages = [
+    "@earendil-works/pi-coding-agent",
+    "@earendil-works/pi-agent-core",
+    "@earendil-works/pi-ai",
+    "@earendil-works/pi-tui",
+    "typebox"
+  ], externalPackages = [
+    "fsevents",
+    "playwright-core",
+    "@silvia-odwyer/photon-node",
+    "undici",
+    ...piPackages
   ];
+  resolvePackageDir = (fromDir, packageName) => {
+    let dir = fromDir;
+    for (;;) {
+      let candidate = path2.join(dir, "node_modules", ...packageName.split("/"));
+      if (existsSync4(path2.join(candidate, "package.json")))
+        return candidate;
+      let parent = path2.dirname(dir);
+      if (parent === dir)
+        return null;
+      dir = parent;
+    }
+  };
+  dependencyClosure = (packageNames) => {
+    let queue = packageNames.map((packageName) => ({ packageName, fromDir: packageDir })), visited = new Set, hoisted = [];
+    while (queue.length > 0) {
+      let { packageName, fromDir } = queue.shift(), resolved = resolvePackageDir(fromDir, packageName);
+      if (!resolved)
+        throw Error(`Missing agent runtime dependency: ${packageName}`);
+      if (visited.has(resolved))
+        continue;
+      visited.add(resolved);
+      let relative = path2.relative(nodeModulesDir, resolved).split(path2.sep);
+      if (relative[0] !== ".." && !relative.includes("node_modules"))
+        hoisted.push(relative.join("/"));
+      let manifest = JSON.parse(readFileSync5(path2.join(resolved, "package.json"), "utf8"));
+      for (let dependency of Object.keys(manifest.dependencies ?? {}))
+        queue.push({ packageName: dependency, fromDir: resolved });
+    }
+    return hoisted;
+  };
   rmSync2(distDir, { recursive: !0, force: !0 });
   mkdirSync(distDir, { recursive: !0 });
   build = spawnSync2("bun", [
     "build",
     "src/server.ts",
     "--target=node",
-    "--external",
-    "fsevents",
-    "--external",
-    "playwright-core",
-    "--external",
-    "@silvia-odwyer/photon-node",
-    "--external",
-    "undici",
+    ...externalPackages.flatMap((packageName) => ["--external", packageName]),
     "--outfile=dist/standalone.mjs"
   ], { cwd: packageDir, stdio: "inherit" });
   if (build.status !== 0)
     throw Error(`Agent runtime bundle failed with status ${build.status ?? "unknown"}`);
-  lydellDir = path2.join(packageDir, "node_modules", "@lydell");
+  runtimePackages = [...browserPackages];
+  lydellDir = path2.join(nodeModulesDir, "@lydell");
   if (existsSync4(lydellDir)) {
     for (let entry of readdirSync3(lydellDir))
       if (entry.startsWith("node-pty-"))
         runtimePackages.push(`@lydell/${entry}`);
   }
+  runtimePackages = [...new Set([...runtimePackages, ...dependencyClosure(piPackages)])];
   for (let packageName of runtimePackages) {
-    let segments = packageName.split("/"), source = path2.join(packageDir, "node_modules", ...segments), destination = path2.join(distDir, "node_modules", ...segments);
+    let segments = packageName.split("/"), source = path2.join(nodeModulesDir, ...segments), destination = path2.join(distDir, "node_modules", ...segments);
     if (!existsSync4(path2.join(source, "package.json")))
       throw Error(`Missing browser runtime package: ${packageName}`);
     mkdirSync(path2.dirname(destination), { recursive: !0 }), cpSync(source, destination, { recursive: !0 });
@@ -422,7 +529,13 @@ var init_bundle = __esm(() => {
   bundle = readFileSync5(bundlePath, "utf8"), sourceRoot = realpathSync2(path2.join(packageDir, "..", ".."));
   if (bundle.includes(sourceRoot))
     throw Error(`Agent runtime bundle contains the build-machine root: ${sourceRoot}`);
-  console.log(`Packaged portable browser runtime: ${runtimePackages.join(", ")}`);
+  for (let packageName of piPackages) {
+    if (!existsSync4(path2.join(distDir, "node_modules", ...packageName.split("/"), "package.json")))
+      throw Error(`Agent runtime is missing the external Pi package: ${packageName}`);
+  }
+  if (!bundle.includes(`"@earendil-works/pi-coding-agent"`))
+    throw Error("Agent runtime bundled @earendil-works/pi-coding-agent; the Pi extension loader needs it external");
+  console.log(`Packaged portable runtime: ${runtimePackages.length} packages (${browserPackages.join(", ")}, pi closure)`);
 });
 
 var exports_check_conventional_commits = {};
@@ -465,8 +578,7 @@ var init_check_conventional_commits = __esm(() => {
     "refactor",
     "release",
     "revert",
-    "style",
-    "test"
+    "style"
   ]), ignoredSubjects = [
     /^Merge /,
     /^Revert /,
@@ -481,7 +593,11 @@ var init_check_conventional_commits = __esm(() => {
     if (!range)
       fail("Usage: check-conventional-commits.mjs --message-file <path> | --range <base..head>");
     else {
-      let output2 = execFileSync2("git", ["log", "--format=%s", range], { encoding: "utf8" }).trim();
+      const excludeIndex = args.indexOf("--exclude-remote");
+      const remote = excludeIndex === -1 ? undefined : args[excludeIndex + 1];
+      if (excludeIndex !== -1 && !remote) throw Error("--exclude-remote requires a remote name");
+      const exclusions = remote ? ["--not", `--remotes=${remote}`] : [];
+      let output2 = execFileSync2("git", ["log", "--format=%s", range, ...exclusions], { encoding: "utf8" }).trim();
       (output2 ? output2.split(/\r?\n/) : []).forEach((subject, index) => validateSubject(subject, `commit ${index + 1}`));
     }
   }
@@ -492,18 +608,14 @@ Allowed types: ` + [...allowedTypes].join(", "));
 
 var exports_complete_standalone_build = {};
 import {
-  cpSync as cpSync2,
   existsSync as existsSync5,
-  lstatSync as lstatSync2,
   readdirSync as readdirSync4,
   readFileSync as readFileSync7,
   rmdirSync,
-  rmSync as rmSync3,
   statSync as statSync2,
-  symlinkSync,
   unlinkSync
 } from "node:fs";
-import { dirname as dirname2, relative as relative3, resolve as resolve2 } from "node:path";
+import { relative as relative3, resolve as resolve2 } from "node:path";
 function isRuntimeFile2(file2) {
   let path3 = relative3(standaloneBase2, file2).replaceAll("\\", "/");
   return [
@@ -540,47 +652,11 @@ function removeEmptyDirectories(directory) {
   if (directory !== standaloneBase2 && readdirSync4(directory).length === 0)
     rmdirSync(directory);
 }
-var projectRoot2, repoRoot, standaloneBase2, standaloneRoots, standaloneRoot, runtimeDependencyPaths, tracedPiPackageDirectory, unverified, pruned = 0;
+var projectRoot2, repoRoot, standaloneBase2, standaloneRoots, standaloneRoot, unverified, pruned = 0;
 var init_complete_standalone_build = __esm(() => {
   projectRoot2 = resolve2(import.meta.dirname, ".."), repoRoot = resolve2(projectRoot2, ".."), standaloneBase2 = resolve2(projectRoot2, ".next", "standalone"), standaloneRoots = [resolve2(standaloneBase2, "frontend"), standaloneBase2], standaloneRoot = standaloneRoots.find((root) => existsSync5(resolve2(root, "server.js")));
   if (!standaloneRoot)
     throw Error(`Missing standalone server under: ${standaloneBase2}`);
-  runtimeDependencyPaths = [
-    "node_modules/typebox",
-    "node_modules/@earendil-works/pi-coding-agent"
-  ];
-  for (let dependencyPath of runtimeDependencyPaths) {
-    let source = resolve2(projectRoot2, dependencyPath);
-    if (!existsSync5(source))
-      throw Error(`Missing runtime dependency source: ${dependencyPath}`);
-    let destination = resolve2(standaloneRoot, dependencyPath);
-    cpSync2(source, destination, { recursive: !0 });
-    let executableShimDirectories = readdirSync4(destination, {
-      recursive: !0,
-      withFileTypes: !0
-    }).filter((entry) => entry.isDirectory() && entry.name === ".bin").map((entry) => resolve2(entry.parentPath, entry.name));
-    for (let directory of executableShimDirectories)
-      rmSync3(directory, { recursive: !0, force: !0 });
-  }
-  tracedPiPackageDirectory = resolve2(standaloneRoot, ".next/node_modules/@earendil-works");
-  if (existsSync5(tracedPiPackageDirectory)) {
-    let packageTargets = new Map([
-      [
-        "pi-ai-",
-        resolve2(standaloneRoot, "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai")
-      ],
-      ["pi-coding-agent-", resolve2(standaloneRoot, "node_modules/@earendil-works/pi-coding-agent")]
-    ]);
-    for (let entry of readdirSync4(tracedPiPackageDirectory)) {
-      let target = [...packageTargets].find(([prefix]) => entry.startsWith(prefix))?.[1];
-      if (!target)
-        continue;
-      let link = resolve2(tracedPiPackageDirectory, entry);
-      if (!lstatSync2(link).isSymbolicLink())
-        throw Error(`Expected traced Pi package alias to be a symlink: ${link}`);
-      unlinkSync(link), symlinkSync(relative3(dirname2(link), target), link, "dir");
-    }
-  }
   unverified = [];
   for (let file2 of filesUnder2(standaloneBase2)) {
     if (isRuntimeFile2(file2))
@@ -597,7 +673,7 @@ var init_complete_standalone_build = __esm(() => {
 ${unverified.join(`
 `)}`);
   removeEmptyDirectories(standaloneBase2);
-  console.log(`  standalone repaired: +${runtimeDependencyPaths.length} runtime dependency trees, -${pruned} traced non-runtime files`);
+  console.log(`  standalone repaired: -${pruned} traced non-runtime files`);
 });
 
 var exports_controller_standards_audit = {};
@@ -718,242 +794,11 @@ function run() {
 }
 var require2, ts, SRC_DIR, MAX_FILES_PER_DIR, MAX_SUBDIRS_PER_DIR, STRUCTURE_COUNT_EXCLUDED_DIRS, findings, stats, modulesRoot, runtimeBoundaryFiles, managedRuntimeCount = 0, kebabCase;
 var init_controller_standards_audit = __esm(() => {
-  require2 = createRequire2(path3.resolve(process.cwd(), "package.json")), ts = require2("typescript"), SRC_DIR = path3.resolve(process.cwd(), "src"), MAX_FILES_PER_DIR = Number.parseInt(process.env.MAX_FILES_PER_DIR ?? "20", 10), MAX_SUBDIRS_PER_DIR = Number.parseInt(process.env.MAX_SUBDIRS_PER_DIR ?? "8", 10), STRUCTURE_COUNT_EXCLUDED_DIRS = new Set(["tests"]), findings = [], stats = {
+  require2 = createRequire2(path3.resolve(process.cwd(), "package.json")), ts = require2("typescript"), SRC_DIR = path3.resolve(process.cwd(), "src"), MAX_FILES_PER_DIR = Number.parseInt(process.env.MAX_FILES_PER_DIR ?? "20", 10), MAX_SUBDIRS_PER_DIR = Number.parseInt(process.env.MAX_SUBDIRS_PER_DIR ?? "8", 10), STRUCTURE_COUNT_EXCLUDED_DIRS = new Set(), findings = [], stats = {
     directories: 0,
     files: 0
   }, modulesRoot = path3.join(SRC_DIR, "modules"), runtimeBoundaryFiles = new Set(["http/bounded-body.ts", "http/effect-handler.ts", "main.ts"]), kebabCase = /^[a-z0-9-]+(\.[a-z0-9-]+)*$/;
   process.exit(run());
-});
-
-var exports_desktop_package_smoke = {};
-__export(exports_desktop_package_smoke, {
-  runDesktopPackageSmoke: () => runDesktopPackageSmoke
-});
-import { spawn as spawn2 } from "node:child_process";
-import {
-  existsSync as existsSync6,
-  mkdtempSync as mkdtempSync2,
-  mkdirSync as mkdirSync2,
-  readFileSync as readFileSync8,
-  rmSync as rmSync4,
-  writeFileSync as writeFileSync2
-} from "node:fs";
-import net from "node:net";
-import { createRequire as createRequire3 } from "node:module";
-import os from "node:os";
-import path4 from "node:path";
-import process2 from "node:process";
-import { fileURLToPath as fileURLToPath3 } from "node:url";
-function valueAfter2(args2, name) {
-  let index = args2.indexOf(name);
-  return index === -1 ? void 0 : args2[index + 1];
-}
-function delay(ms) {
-  return new Promise((resolve3) => setTimeout(resolve3, ms));
-}
-async function reservePort() {
-  let server = net.createServer();
-  await new Promise((resolve3, reject) => {
-    server.once("error", reject), server.listen(0, "127.0.0.1", resolve3);
-  });
-  let address = server.address(), port = typeof address === "object" && address ? address.port : 0;
-  if (await new Promise((resolve3, reject) => server.close((error) => error ? reject(error) : resolve3())), !port)
-    throw Error("Could not reserve a debugging port");
-  return port;
-}
-async function waitForFile(file2, timeoutMs) {
-  let started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    if (existsSync6(file2)) {
-      let value = readFileSync8(file2, "utf8").trim();
-      if (value)
-        return value;
-    }
-    await delay(200);
-  }
-  throw Error(`Timed out waiting for ${file2}`);
-}
-async function waitForJson(url, timeoutMs) {
-  let started = Date.now(), lastError;
-  while (Date.now() - started < timeoutMs) {
-    try {
-      let response = await fetch(url, { signal: AbortSignal.timeout(2000) });
-      if (response.ok)
-        return await response.json();
-      lastError = Error(`${url} returned ${response.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-    await delay(250);
-  }
-  throw Error(`Timed out waiting for ${url}: ${String(lastError)}`);
-}
-async function postJson(url, body2) {
-  let response = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body2),
-    signal: AbortSignal.timeout(30000)
-  }), payload = await response.json();
-  if (!response.ok || payload.ok !== !0)
-    throw Error(`${url} failed: ${response.status} ${JSON.stringify(payload)}`);
-  return payload;
-}
-async function waitForAgentRuntime(logFile, timeoutMs) {
-  let started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    if (existsSync6(logFile)) {
-      let url = [
-        ...readFileSync8(logFile, "utf8").matchAll(/agent-runtime: (?:\[agent-runtime\] )?listening on (http:\/\/127\.0\.0\.1:\d+)/g)
-      ].at(-1)?.[1];
-      if (url) {
-        let payload = await waitForJson(`${url}/health`, 1e4);
-        return { url, payload };
-      }
-    }
-    await delay(250);
-  }
-  throw Error(`Timed out waiting for agent runtime in ${logFile}`);
-}
-async function waitForPage(browser, origin, timeoutMs) {
-  let started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    for (let context of browser.contexts())
-      for (let page of context.pages())
-        if (page.url().startsWith(origin))
-          return page;
-    await delay(200);
-  }
-  throw Error(`Timed out waiting for Electron page at ${origin}`);
-}
-async function smokeTerminal(page) {
-  return page.evaluate(async () => {
-    let bridge = globalThis.localStudioDesktop;
-    if (!bridge)
-      throw Error("Desktop bridge is unavailable");
-    let status = await bridge.terminal.status();
-    if (!status.available)
-      throw Error(status.reason || "PTY is unavailable");
-    let session = await bridge.terminal.open({
-      cwd: "/tmp",
-      cols: 80,
-      rows: 24,
-      ownerKey: "desktop-package-smoke"
-    });
-    return new Promise((resolve3, reject) => {
-      let output2 = session.replay || "", timer = setTimeout(() => {
-        disposeData(), disposeExit(), reject(Error(`PTY smoke timed out: ${output2}`));
-      }, 1e4), finish = () => {
-        if (!output2.includes("LOCAL_STUDIO_PTY_OK"))
-          return;
-        clearTimeout(timer), disposeData(), disposeExit(), resolve3({ available: !0, output: "LOCAL_STUDIO_PTY_OK" });
-      }, disposeData = bridge.terminal.onData((id, chunk) => {
-        if (id !== session.id)
-          return;
-        output2 += chunk, finish();
-      }), disposeExit = bridge.terminal.onExit((id) => {
-        if (id !== session.id)
-          return;
-        finish();
-      });
-      bridge.terminal.write(session.id, "printf 'LOCAL_STUDIO_PTY_OK\\n'; exit\\n"), finish();
-    });
-  });
-}
-async function terminate(child) {
-  if (!child?.pid)
-    return;
-  try {
-    process2.kill(-child.pid, "SIGTERM");
-  } catch {}
-  await Promise.race([
-    child.exitCode === null && child.signalCode === null ? new Promise((resolve3) => child.once("exit", resolve3)) : Promise.resolve(),
-    delay(5000)
-  ]);
-  try {
-    process2.kill(-child.pid, "SIGKILL");
-  } catch {}
-}
-async function runDesktopPackageSmoke(args2 = process2.argv.slice(2)) {
-  let frontend = path4.resolve(path4.dirname(fileURLToPath3(import.meta.url)), ".."), requestedApp = valueAfter2(args2, "--app"), appPath = requestedApp ? path4.resolve(requestedApp) : path4.join(frontend, "dist-desktop", "mac-arm64", "Local Studio.app"), expectedVersion = valueAfter2(args2, "--expected-version"), executable = path4.join(appPath, "Contents", "MacOS", "Local Studio");
-  if (!existsSync6(executable))
-    throw Error(`Missing packaged executable: ${executable}`);
-  let temp = mkdtempSync2(path4.join(os.tmpdir(), "local-studio-package-smoke-")), userData = path4.join(temp, "user-data"), logFile = path4.join(userData, "logs", "desktop.log"), frontendPortFile = path4.join(userData, "embedded-frontend.port"), debugPort = await reservePort(), stdout = [], stderr = [];
-  mkdirSync2(userData, { recursive: !0 }), writeFileSync2(path4.join(userData, "api-settings.json"), `${JSON.stringify({
-    backendUrl: "http://127.0.0.1:65534",
-    apiKey: "",
-    voiceUrl: "",
-    voiceModel: "whisper-large-v3-turbo"
-  })}
-`, { mode: 384 });
-  let env = { ...process2.env };
-  delete env.ELECTRON_RUN_AS_NODE, Object.assign(env, {
-    LOCAL_STUDIO_AGENT_CWD: temp,
-    LOCAL_STUDIO_DESKTOP_APP_NAME: `Local Studio Smoke ${process2.pid}`,
-    LOCAL_STUDIO_DESKTOP_DISABLE_AUTO_UPDATE: "true",
-    LOCAL_STUDIO_DESKTOP_USER_DATA_DIR: userData
-  });
-  let child, browser;
-  try {
-    child = spawn2(executable, [`--remote-debugging-port=${debugPort}`], {
-      cwd: temp,
-      detached: !0,
-      env,
-      stdio: ["ignore", "pipe", "pipe"]
-    }), child.stdout.on("data", (chunk) => stdout.push(String(chunk))), child.stderr.on("data", (chunk) => stderr.push(String(chunk)));
-    let frontendPort = Number(await waitForFile(frontendPortFile, 60000));
-    if (!Number.isInteger(frontendPort) || frontendPort <= 0)
-      throw Error(`Invalid embedded frontend port: ${frontendPort}`);
-    let origin = `http://127.0.0.1:${frontendPort}`, desktopHealth = await waitForJson(`${origin}/api/desktop-health`, 30000), agentRuntime = await waitForAgentRuntime(logFile, 30000), embeddedBrowser = await postJson(`${agentRuntime.url}/api/agent/browser/navigate`, { url: `${origin}/agent` });
-    if (!String(embeddedBrowser.data?.url ?? "").startsWith(origin))
-      throw Error(`Packaged browser navigated to an unexpected URL: ${JSON.stringify(embeddedBrowser)}`);
-    browser = await chromium.connectOverCDP(`http://127.0.0.1:${debugPort}`);
-    let page = await waitForPage(browser, origin, 30000);
-    await page.waitForLoadState("domcontentloaded");
-    let agentResponse = await page.goto(`${origin}/agent`, {
-      waitUntil: "domcontentloaded",
-      timeout: 30000
-    });
-    if (!agentResponse?.ok())
-      throw Error(`Agent route returned ${agentResponse?.status() ?? "no response"}`);
-    let runtime = await page.evaluate(async () => {
-      if (!globalThis.localStudioDesktop)
-        throw Error("Desktop bridge is unavailable");
-      return globalThis.localStudioDesktop.getRuntime();
-    });
-    if (expectedVersion && runtime.appVersion !== expectedVersion)
-      throw Error(`Packaged app version ${runtime.appVersion} does not match ${expectedVersion}`);
-    let terminal = await smokeTerminal(page), result = {
-      appPath,
-      agentStatus: agentResponse.status(),
-      desktopHealth,
-      agentRuntime: agentRuntime.payload,
-      embeddedBrowser: embeddedBrowser.data,
-      runtime,
-      terminal
-    };
-    return console.log(JSON.stringify(result, null, 2)), result;
-  } catch (error) {
-    let diagnostics = [
-      existsSync6(logFile) ? readFileSync8(logFile, "utf8").slice(-12000) : "",
-      stdout.join("").slice(-4000),
-      stderr.join("").slice(-4000)
-    ].filter(Boolean).join(`
-`);
-    throw Error(`${error instanceof Error ? error.message : String(error)}
-${diagnostics}`);
-  } finally {
-    if (browser)
-      await browser.close().catch(() => {
-        return;
-      });
-    await terminate(child), rmSync4(temp, { recursive: !0, force: !0 });
-  }
-}
-var require3, chromium;
-var init_desktop_package_smoke = __esm(async () => {
-  require3 = createRequire3(path4.resolve(path4.dirname(fileURLToPath3(import.meta.url)), "../package.json")), { chromium } = require3("playwright-core");
-  await runDesktopPackageSmoke();
 });
 
 var exports_link_services_node_modules = {};
@@ -1128,7 +973,6 @@ var init_release_statement = __esm(() => {
     ["Fixes", /^(fix)(?:\(.+\))?!?: (.+)$/],
     ["Performance", /^(perf)(?:\(.+\))?!?: (.+)$/],
     ["Refactors", /^(refactor)(?:\(.+\))?!?: (.+)$/],
-    ["Tests", /^(test)(?:\(.+\))?!?: (.+)$/],
     ["Infrastructure", /^(build|ci|chore|release)(?:\(.+\))?!?: (.+)$/],
     ["Polish", /^(micro|style)(?:\(.+\))?!?: (.+)$/],
     ["Documentation", /^(docs)(?:\(.+\))?!?: (.+)$/]
@@ -1156,172 +1000,6 @@ var init_release_statement = __esm(() => {
     console.log("- No conventional release changes found for the selected range.");
 });
 
-var exports_install_desktop_app_test = {};
-import assert from "node:assert/strict";
-import { execFileSync as execFileSync4, spawnSync as spawnSync3 } from "node:child_process";
-import {
-  chmodSync,
-  existsSync as existsSync9,
-  mkdirSync as mkdirSync4,
-  mkdtempSync as mkdtempSync3,
-  readFileSync as readFileSync11,
-  readdirSync as readdirSync6,
-  rmSync as rmSync7,
-  statSync as statSync4,
-  writeFileSync as writeFileSync5
-} from "node:fs";
-import os2 from "node:os";
-import path8 from "node:path";
-import test from "node:test";
-import { fileURLToPath as fileURLToPath7 } from "node:url";
-function writeExecutable(file2, content) {
-  writeFileSync5(file2, content, { mode: 493 }), chmodSync(file2, 493);
-}
-function createHarness(t) {
-  let root = mkdtempSync3(path8.join(os2.tmpdir(), "local-studio-installer-"));
-  t.after(() => rmSync7(root, { recursive: !0, force: !0 }));
-  let applications = path8.join(root, "Applications"), rollbacks = path8.join(root, "Rollbacks"), commands = path8.join(root, "bin");
-  mkdirSync4(applications, { recursive: !0 }), mkdirSync4(commands, { recursive: !0 }), writeExecutable(path8.join(commands, "ditto"), `#!/usr/bin/env node
-const fs = require("node:fs");
-const path = require("node:path");
-const args = process.argv.slice(2);
-if (args[0] !== "-c") {
-  fs.cpSync(args[0], args[1], { recursive: true });
-  process.exit(0);
-}
-const source = args.at(-2);
-const destination = args.at(-1);
-if (process.env.LOCAL_STUDIO_TEST_FAIL_ARCHIVE === source) process.exit(1);
-const base = path.basename(source);
-const members = [];
-function walk(directory, relative) {
-  members.push(relative + "/");
-  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-    const next = path.join(directory, entry.name);
-    const member = relative + "/" + entry.name;
-    if (entry.isDirectory()) walk(next, member);
-    else members.push(member);
-  }
-}
-walk(source, base);
-fs.writeFileSync(destination, members.join("\\n") + "\\n");
-`), writeExecutable(path8.join(commands, "unzip"), `#!/usr/bin/env node
-const fs = require("node:fs");
-const args = process.argv.slice(2);
-const archive = args.at(-1);
-if (!fs.existsSync(archive)) process.exit(1);
-if (args[0] === "-Z1") process.stdout.write(fs.readFileSync(archive));
-`), writeExecutable(path8.join(commands, "codesign"), `#!/usr/bin/env node
-const target = process.argv.at(-1);
-if (process.env.LOCAL_STUDIO_TEST_FAIL_CODESIGN === target) process.exit(1);
-`), writeExecutable(path8.join(commands, "spctl"), `#!/usr/bin/env node
-const target = process.argv.at(-1);
-if (process.env.LOCAL_STUDIO_TEST_FAIL_SPCTL === target) process.exit(1);
-`), writeExecutable(path8.join(commands, "plist-buddy"), `#!/usr/bin/env node
-const fs = require("node:fs");
-const text = fs.readFileSync(process.argv.at(-1), "utf8");
-const match = text.match(/<key>CFBundleIdentifier<\\/key>\\s*<string>([^<]+)<\\/string>/);
-if (!match) process.exit(1);
-process.stdout.write(match[1] + "\\n");
-`);
-  let launchServicesLog = path8.join(root, "launch-services.log");
-  writeExecutable(path8.join(commands, "lsregister"), `#!/usr/bin/env node
-const fs = require("node:fs");
-fs.appendFileSync(process.env.LOCAL_STUDIO_TEST_LS_LOG, process.argv.slice(2).join(" ") + "\\n");
-`);
-  let env = {
-    ...process.env,
-    PATH: `${commands}:${process.env.PATH}`,
-    LOCAL_STUDIO_INSTALL_ROOT: applications,
-    LOCAL_STUDIO_ROLLBACK_ROOT: rollbacks,
-    LOCAL_STUDIO_LSREGISTER: path8.join(commands, "lsregister"),
-    LOCAL_STUDIO_PLIST_BUDDY: path8.join(commands, "plist-buddy"),
-    LOCAL_STUDIO_SKIP_RUNTIME_CLEANUP: "1",
-    LOCAL_STUDIO_TEST_LS_LOG: launchServicesLog
-  };
-  return { applications, env, launchServicesLog, rollbacks, root };
-}
-function createBundle(directory, name, id, marker) {
-  let executable = path8.join(directory, "Contents", "MacOS", name);
-  mkdirSync4(path8.dirname(executable), { recursive: !0 }), writeFileSync5(executable, marker, { mode: 493 }), chmodSync(executable, 493), writeFileSync5(path8.join(directory, "Contents", "Info.plist"), `<?xml version="1.0"?><plist><dict><key>CFBundleIdentifier</key><string>${id}</string></dict></plist>`);
-}
-function runInstaller(harness, args3, extraEnv = {}) {
-  return spawnSync3("bash", [installer, ...args3], {
-    cwd: repository,
-    encoding: "utf8",
-    env: { ...harness.env, ...extraEnv }
-  });
-}
-function installedMarker(applications, name) {
-  return readFileSync11(path8.join(applications, `${name}.app`, "Contents", "MacOS", name), "utf8");
-}
-var repository, installer;
-var init_install_desktop_app_test = __esm(() => {
-  repository = path8.resolve(path8.dirname(fileURLToPath7(import.meta.url)), "../.."), installer = path8.join(repository, "scripts", "install-desktop-app.sh");
-  test("migrates every legacy Local Studio bundle into non-app rollback archives", (t) => {
-    let harness = createHarness(t);
-    createBundle(path8.join(harness.applications, "Local Studio.app"), "Local Studio", "org.local.studio.desktop", "stable-current"), createBundle(path8.join(harness.applications, "Local Studio Dev.app"), "Local Studio Dev", "org.local.studio.desktop.dev", "dev-current"), createBundle(path8.join(harness.applications, "Local Studio.app.previous"), "Local Studio", "org.local.studio.desktop", "stable-old"), createBundle(path8.join(harness.applications, "Local Studio.app.previous", "Contents", "Frameworks", "Local Studio Helper.app"), "Local Studio Helper", "org.local.studio.desktop.helper", "helper"), createBundle(path8.join(harness.applications, "Local Studio Dev previous.app"), "Local Studio Dev", "org.local.studio.desktop.dev", "dev-old"), mkdirSync4(harness.rollbacks, { recursive: !0 }), writeFileSync5(path8.join(harness.rollbacks, "Local Studio.zip"), "corrupt");
-    let result = runInstaller(harness, ["--migrate-rollbacks"]);
-    assert.equal(result.status, 0, result.stderr), assert.deepEqual(readdirSync6(harness.applications).sort(), ["Local Studio Dev.app", "Local Studio.app"]), assert.equal(statSync4(path8.join(harness.rollbacks, "Local Studio.zip")).isFile(), !0), assert.equal(statSync4(path8.join(harness.rollbacks, "Local Studio Dev.zip")).isFile(), !0), assert.match(readFileSync11(path8.join(harness.rollbacks, "Local Studio.zip"), "utf8"), /^Contents\/Info\.plist$/m), assert.match(readFileSync11(path8.join(harness.rollbacks, "Local Studio Dev.zip"), "utf8"), /^Contents\/Info\.plist$/m), assert.equal(readdirSync6(harness.rollbacks).some((entry) => entry.endsWith(".app")), !1);
-    let launchServices = readFileSync11(harness.launchServicesLog, "utf8");
-    assert.match(launchServices, /-u .*Local Studio\.app\.previous/), assert.match(launchServices, /-u .*Local Studio Helper\.app/);
-  });
-  test("installs through a hidden staging path and archives the outgoing app", (t) => {
-    let harness = createHarness(t), built = path8.join(harness.root, "built", "Local Studio.app");
-    createBundle(built, "Local Studio", "org.local.studio.desktop", "new"), createBundle(path8.join(harness.applications, "Local Studio.app"), "Local Studio", "org.local.studio.desktop", "old"), createBundle(path8.join(harness.applications, "Local Studio backup.app"), "Local Studio", "org.local.studio.desktop", "older");
-    let result = runInstaller(harness, ["stable"], { LOCAL_STUDIO_BUILT_APP: built });
-    assert.equal(result.status, 0, result.stderr), assert.equal(installedMarker(harness.applications, "Local Studio"), "new"), assert.deepEqual(readdirSync6(harness.applications), ["Local Studio.app"]), assert.equal(existsSync9(path8.join(harness.rollbacks, "Local Studio.zip")), !0), assert.equal(readdirSync6(harness.applications).some((entry) => entry.includes("installing") || entry.includes("replaced")), !1);
-  });
-  test("restores the original app when final signature verification fails", (t) => {
-    let harness = createHarness(t), built = path8.join(harness.root, "built", "Local Studio.app"), target = path8.join(harness.applications, "Local Studio.app");
-    createBundle(built, "Local Studio", "org.local.studio.desktop", "new"), createBundle(target, "Local Studio", "org.local.studio.desktop", "old");
-    let result = runInstaller(harness, ["stable"], {
-      LOCAL_STUDIO_BUILT_APP: built,
-      LOCAL_STUDIO_TEST_FAIL_CODESIGN: target
-    });
-    assert.notEqual(result.status, 0), assert.equal(installedMarker(harness.applications, "Local Studio"), "old"), assert.deepEqual(readdirSync6(harness.applications), ["Local Studio.app"]);
-  });
-  test("restores the original stable app when Gatekeeper rejects the replacement", (t) => {
-    let harness = createHarness(t), built = path8.join(harness.root, "built", "Local Studio.app"), target = path8.join(harness.applications, "Local Studio.app");
-    createBundle(built, "Local Studio", "org.local.studio.desktop", "new"), createBundle(target, "Local Studio", "org.local.studio.desktop", "old");
-    let result = runInstaller(harness, ["stable"], {
-      LOCAL_STUDIO_BUILT_APP: built,
-      LOCAL_STUDIO_TEST_FAIL_SPCTL: target
-    });
-    assert.notEqual(result.status, 0), assert.equal(installedMarker(harness.applications, "Local Studio"), "old"), assert.deepEqual(readdirSync6(harness.applications), ["Local Studio.app"]);
-  });
-  test("preserves the current app when creating its rollback archive fails", (t) => {
-    let harness = createHarness(t), built = path8.join(harness.root, "built", "Local Studio.app"), target = path8.join(harness.applications, "Local Studio.app");
-    createBundle(built, "Local Studio", "org.local.studio.desktop", "new"), createBundle(target, "Local Studio", "org.local.studio.desktop", "old");
-    let result = runInstaller(harness, ["stable"], {
-      LOCAL_STUDIO_BUILT_APP: built,
-      LOCAL_STUDIO_TEST_FAIL_ARCHIVE: path8.join(target, "Contents")
-    });
-    assert.notEqual(result.status, 0), assert.equal(installedMarker(harness.applications, "Local Studio"), "old"), assert.deepEqual(readdirSync6(harness.applications), ["Local Studio.app"]);
-  });
-  test("no-backup install removes stale archives and discoverable legacy bundles", (t) => {
-    let harness = createHarness(t), built = path8.join(harness.root, "built", "Local Studio Dev.app");
-    createBundle(built, "Local Studio Dev", "org.local.studio.desktop.dev", "new"), createBundle(path8.join(harness.applications, "Local Studio Dev.app"), "Local Studio Dev", "org.local.studio.desktop.dev", "old"), createBundle(path8.join(harness.applications, "Local Studio Dev.app.previous"), "Local Studio Dev", "org.local.studio.desktop.dev", "older"), mkdirSync4(harness.rollbacks, { recursive: !0 }), writeFileSync5(path8.join(harness.rollbacks, "Local Studio Dev.zip"), "stale");
-    let result = runInstaller(harness, ["dev", "--no-backup"], { LOCAL_STUDIO_BUILT_APP: built });
-    assert.equal(result.status, 0, result.stderr), assert.equal(installedMarker(harness.applications, "Local Studio Dev"), "new"), assert.deepEqual(readdirSync6(harness.applications), ["Local Studio Dev.app"]), assert.equal(existsSync9(path8.join(harness.rollbacks, "Local Studio Dev.zip")), !1);
-  });
-  test("tracked operational scripts cannot create discoverable app backups", () => {
-    let files = execFileSync4("git", ["ls-files", "scripts", "frontend/scripts", ".github/workflows"], {
-      cwd: repository,
-      encoding: "utf8"
-    }).trim().split(`
-`).filter((file2) => file2 && file2 !== "scripts/project.mjs" && existsSync9(path8.join(repository, file2))), violations3 = [];
-    for (let file2 of files) {
-      let text = readFileSync11(path8.join(repository, file2), "utf8");
-      if (/\.app\.(?:previous|prev|pre|backup)|(?:previous|backup)\.app/i.test(text))
-        violations3.push(file2);
-      if (/ROLLBACK=.*\/Applications/i.test(text))
-        violations3.push(file2);
-    }
-    assert.deepEqual([...new Set(violations3)], []);
-  });
-});
-
 function value(env, name) {
   let candidate = env[name];
   return typeof candidate === "string" ? candidate.trim() : "";
@@ -1343,43 +1021,6 @@ function resolveNotarytoolCredentials(env, apiKeyPath) {
   throw Error("Apple notarization requires either the API key secret trio or the Apple ID secret trio");
 }
 
-var exports_release_notary_credentials_test = {};
-import assert2 from "node:assert/strict";
-import { test as test2 } from "node:test";
-var init_release_notary_credentials_test = __esm(() => {
-  test2("uses App Store Connect API credentials when the full trio is present", () => {
-    assert2.deepEqual(resolveNotarytoolCredentials({
-      APPLE_API_KEY_BASE64: "encoded-key",
-      APPLE_API_KEY_ID: "key-id",
-      APPLE_API_ISSUER: "issuer"
-    }, "/tmp/AuthKey.p8"), {
-      kind: "api-key",
-      apiKey: "encoded-key",
-      args: ["--key", "/tmp/AuthKey.p8", "--key-id", "key-id", "--issuer", "issuer"]
-    });
-  });
-  test2("uses Apple ID credentials when API credentials are unavailable", () => {
-    assert2.deepEqual(resolveNotarytoolCredentials({
-      APPLE_ID: "developer@example.com",
-      APPLE_APP_SPECIFIC_PASSWORD: "app-password",
-      APPLE_TEAM_ID: "team-id"
-    }, "/tmp/AuthKey.p8"), {
-      kind: "apple-id",
-      args: [
-        "--apple-id",
-        "developer@example.com",
-        "--password",
-        "app-password",
-        "--team-id",
-        "team-id"
-      ]
-    });
-  });
-  test2("rejects partial notarization credential sets", () => {
-    assert2.throws(() => resolveNotarytoolCredentials({ APPLE_ID: "developer@example.com" }, "/tmp/key.p8"), /requires either the API key secret trio or the Apple ID secret trio/);
-  });
-});
-
 var releasePackageArguments = ({ app, version, commit }) => [
   "--prepackaged",
   app,
@@ -1393,31 +1034,6 @@ var releasePackageArguments = ({ app, version, commit }) => [
   "--publish",
   "never"
 ];
-
-var exports_release_package_arguments_test = {};
-import assert3 from "node:assert/strict";
-import test3 from "node:test";
-var init_release_package_arguments_test = __esm(() => {
-  test3("release signing packaging never publishes implicitly", () => {
-    let args3 = releasePackageArguments({
-      app: "/tmp/Local Studio.app",
-      version: "2.9.0",
-      commit: "0123456789abcdef"
-    });
-    assert3.deepEqual(args3.slice(-2), ["--publish", "never"]), assert3.deepEqual(args3.slice(0, 2), ["--prepackaged", "/tmp/Local Studio.app"]);
-  });
-  test3("release signing notarizes and staples the app before packaging", () => {
-    let calls = [];
-    notarizeApplication("/tmp/Local Studio.app", "/tmp/Local Studio.zip", ["--key", "/tmp/key"], (command, args3) => calls.push([command, args3]));
-    assert3.deepEqual(calls, [
-      ["ditto", ["-c", "-k", "--keepParent", "/tmp/Local Studio.app", "/tmp/Local Studio.zip"]],
-      ["xcrun", ["notarytool", "submit", "/tmp/Local Studio.zip", "--key", "/tmp/key", "--wait", "--output-format", "json"]],
-      ["xcrun", ["stapler", "staple", "/tmp/Local Studio.app"]],
-      ["xcrun", ["stapler", "validate", "/tmp/Local Studio.app"]],
-      ["spctl", ["--assess", "--type", "execute", "--verbose=4", "/tmp/Local Studio.app"]]
-    ]);
-  });
-});
 
 var exports_sign_desktop_release = {};
 __export(exports_sign_desktop_release, {
@@ -1491,7 +1107,7 @@ function notarizeApplication(app, archive, credentials, execute = run2) {
   ]);
 }
 async function refreshUpdateMetadata(output3, version) {
-  let { buildBlockMap } = require4(path9.join(frontend, "node_modules", "app-builder-lib", "out", "targets", "blockmap", "blockmap.js")), YAML = require4(path9.join(frontend, "node_modules", "yaml")), zipName = `Local Studio-${version}-arm64-mac.zip`, dmgName = `Local Studio-${version}-arm64.dmg`, zipInfo = await buildBlockMap(path9.join(output3, zipName), "gzip", path9.join(output3, `${zipName}.blockmap`)), dmgInfo = await buildBlockMap(path9.join(output3, dmgName), "gzip", path9.join(output3, `${dmgName}.blockmap`)), updatePath = path9.join(output3, "latest-mac.yml"), current = YAML.parse(readFileSync12(updatePath, "utf8"));
+  let { buildBlockMap } = require4(path9.join(frontend, "node_modules", "app-builder-lib", "out", "targets", "blockmap", "blockmap.js")), YAML = require4(path9.join(frontend, "node_modules", "yaml")), zipName = `CRIAs AI-${version}-arm64-mac.zip`, dmgName = `CRIAs AI-${version}-arm64.dmg`, zipInfo = await buildBlockMap(path9.join(output3, zipName), "gzip", path9.join(output3, `${zipName}.blockmap`)), dmgInfo = await buildBlockMap(path9.join(output3, dmgName), "gzip", path9.join(output3, `${dmgName}.blockmap`)), updatePath = path9.join(output3, "latest-mac.yml"), current = YAML.parse(readFileSync12(updatePath, "utf8"));
   writeFileSync6(updatePath, YAML.stringify({
     version,
     files: [
@@ -1519,7 +1135,7 @@ async function signDesktopRelease(args3 = process.argv.slice(2)) {
     throw Error("--commit must be a full Git commit SHA");
   if (!prepackaged || !existsSync10(prepackaged))
     throw Error("--prepackaged must point to an unsigned app bundle");
-  let certificate = requireValue("CSC_LINK"), certificatePassword = requireValue("CSC_KEY_PASSWORD"), temporary = path9.join(os3.tmpdir(), `local-studio-release-${process.pid}`), apiKeyPath = path9.join(temporary, "AuthKey_notary.p8"), notaryCredentials = resolveNotarytoolCredentials(process.env, apiKeyPath), certificatePath = path9.join(temporary, "developer-id.p12"), keychainPath = path9.join(temporary, "release-signing.keychain-db"), keychainPassword = randomBytes(32).toString("hex"), originalKeychains = keychainList(), output3 = path9.join(frontend, "dist-desktop"), dmg = path9.join(output3, `Local Studio-${version}-arm64.dmg`), resolvedApp = path9.resolve(prepackaged), appNotaryArchive = path9.join(temporary, "Local Studio.app.zip"), entitlements = path9.join(frontend, "desktop", "resources", "entitlements.mac.plist");
+  let certificate = requireValue("CSC_LINK"), certificatePassword = requireValue("CSC_KEY_PASSWORD"), temporary = path9.join(os3.tmpdir(), `crias-ai-release-${process.pid}`), apiKeyPath = path9.join(temporary, "AuthKey_notary.p8"), notaryCredentials = resolveNotarytoolCredentials(process.env, apiKeyPath), certificatePath = path9.join(temporary, "developer-id.p12"), keychainPath = path9.join(temporary, "release-signing.keychain-db"), keychainPassword = randomBytes(32).toString("hex"), originalKeychains = keychainList(), output3 = path9.join(frontend, "dist-desktop"), dmg = path9.join(output3, `CRIAs AI-${version}-arm64.dmg`), resolvedApp = path9.resolve(prepackaged), appNotaryArchive = path9.join(temporary, "CRIAs AI.app.zip"), entitlements = path9.join(frontend, "desktop", "resources", "entitlements.mac.plist");
   try {
     if (rmSync8(temporary, { recursive: !0, force: !0 }), mkdirSync5(temporary, { recursive: !0, mode: 448 }), notaryCredentials.kind === "api-key")
       writeFileSync6(apiKeyPath, Buffer.from(notaryCredentials.apiKey, "base64"), {
@@ -1601,8 +1217,8 @@ async function signDesktopRelease(args3 = process.argv.slice(2)) {
       "--verbose=4",
       dmg
     ]);
-    let packagedApp = path9.join(output3, "mac-arm64", "Local Studio.app");
-    mkdirSync5(path9.dirname(packagedApp), { recursive: !0 }), rmSync8(packagedApp, { recursive: !0, force: !0 }), symlinkSync3(resolvedApp, packagedApp, "dir"), console.log(`Signed and notarized Local Studio ${version} from ${commit}`);
+    let packagedApp = path9.join(output3, "mac-arm64", "CRIAs AI.app");
+    mkdirSync5(path9.dirname(packagedApp), { recursive: !0 }), rmSync8(packagedApp, { recursive: !0, force: !0 }), symlinkSync3(resolvedApp, packagedApp, "dir"), console.log(`Signed and notarized CRIAs AI ${version} from ${commit}`);
   } finally {
     if (originalKeychains.length > 0)
       run2("security", ["list-keychains", "-d", "user", "-s", ...originalKeychains]);
@@ -1644,7 +1260,7 @@ function valueAfter4(args3, name) {
   return index === -1 ? void 0 : args3[index + 1];
 }
 function releaseAssetNames(version) {
-  let base = `Local Studio-${version}-arm64`;
+  let base = `CRIAs AI-${version}-arm64`;
   return [
     `${base}.dmg`,
     `${base}.dmg.blockmap`,
@@ -1666,7 +1282,7 @@ function sha256(file2) {
   return createHash("sha256").update(readFileSync13(file2)).digest("hex");
 }
 function packagedMetadata() {
-  let archive = path10.join(output3, "mac-arm64", "Local Studio.app", "Contents", "Resources", "app.asar");
+  let archive = path10.join(output3, "mac-arm64", "CRIAs AI.app", "Contents", "Resources", "app.asar");
   if (!existsSync11(archive))
     throw Error(`Missing packaged app archive: ${archive}`);
   let asar = require5(path10.join(frontend2, "node_modules", "@electron", "asar"));
@@ -1690,10 +1306,10 @@ function stageDesktopRelease(args3 = process.argv.slice(2)) {
   rmSync9(staging, { recursive: !0, force: !0 }), mkdirSync6(staging, { recursive: !0 });
   for (let [source, destination] of assets)
     copyFileSync(source, destination);
-  copyFileSync(requireAsset(`Local Studio-${version}-arm64.dmg`), path10.join(staging, "Local-Studio-arm64.dmg"));
+  copyFileSync(requireAsset(`CRIAs AI-${version}-arm64.dmg`), path10.join(staging, "CRIAs-AI-arm64.dmg"));
   let stagedNames = [
     ...names.map(releaseAssetName),
-    "Local-Studio-arm64.dmg"
+    "CRIAs-AI-arm64.dmg"
   ], manifest = {
     schemaVersion: 1,
     version,
@@ -1703,8 +1319,8 @@ function stageDesktopRelease(args3 = process.argv.slice(2)) {
       { sha256: sha256(path10.join(staging, name)) }
     ]))
   };
-  return writeFileSync7(path10.join(staging, "Local-Studio-release.json"), `${JSON.stringify(manifest, null, 2)}
-`), console.log(`Staged ${stagedNames.length + 1} Local Studio ${version} assets in ${staging}`), manifest;
+  return writeFileSync7(path10.join(staging, "CRIAs-AI-release.json"), `${JSON.stringify(manifest, null, 2)}
+`), console.log(`Staged ${stagedNames.length + 1} CRIAs AI ${version} assets in ${staging}`), manifest;
 }
 var root2, frontend2, output3, staging, require5;
 var init_stage_desktop_release = __esm(() => {
@@ -1938,10 +1554,10 @@ function packageAuditRead(relativePath) {
 }
 var init_validate_package_json = __esm(() => {
   packageRepository = resolve6(import.meta.dirname, "../.."), packageRequirements = [
-    ["package.json", ["doctor", "setup", "dev", "dev:controller", "build", "start", "start:controller", "test", "check", "test:integration"]],
+    ["package.json", ["doctor", "setup", "dev", "dev:controller", "build", "start", "start:controller", "check"]],
     ["frontend/package.json", ["dev", "build", "start", "desktop:dist", "check:quality"]],
-    ["controller/package.json", ["dev", "start", "typecheck", "lint", "check", "test"]],
-    ["services/agent-runtime/package.json", ["bundle", "build", "dev", "start", "test"]],
+    ["controller/package.json", ["dev", "start", "typecheck", "lint", "check"]],
+    ["services/agent-runtime/package.json", ["bundle", "build", "dev", "start"]],
     ["shared/package.json", []],
     ["controller/contracts/package.json", []]
   ], packageLocks = ["frontend/package-lock.json", "controller/bun.lock", "services/agent-runtime/bun.lock", "shared/bun.lock"], packageMissing = [];
@@ -2183,13 +1799,6 @@ async function afterPack(context) {
       "Re-run the build (run `npm run build` first if .next/standalone is absent)."
     ].join(`
   `));
-  let standaloneRoot = path.dirname(standaloneServer), missingRuntimeFile = [
-    path.join(standaloneRoot, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "index.js"),
-    path.join(standaloneRoot, "node_modules", "@earendil-works", "pi-coding-agent", "node_modules", "@earendil-works", "pi-ai", "package.json"),
-    path.join(standaloneRoot, "node_modules", "@earendil-works", "pi-coding-agent", "node_modules", "@earendil-works", "pi-ai", "dist", "providers", "data", "amazon-bedrock.json")
-  ].find((file) => !existsSync(file));
-  if (missingRuntimeFile)
-    throw Error(`Packaged app is missing a Pi runtime dependency: ${missingRuntimeFile}`);
   let agentRuntimeRoot = path.join(resourcesDir, "app", "agent-runtime"), agentRuntime = path.join(agentRuntimeRoot, "standalone.mjs"), missingAgentRuntimeFile = [
     agentRuntime,
     path.join(agentRuntimeRoot, "node_modules", "playwright-core", "package.json"),
@@ -2198,13 +1807,21 @@ async function afterPack(context) {
     path.join(agentRuntimeRoot, "node_modules", "mitt", "package.json"),
     path.join(agentRuntimeRoot, "node_modules", "devtools-protocol", "package.json"),
     path.join(agentRuntimeRoot, "node_modules", "@silvia-odwyer", "photon-node", "package.json"),
-    path.join(agentRuntimeRoot, "node_modules", "undici", "package.json")
+    path.join(agentRuntimeRoot, "node_modules", "undici", "package.json"),
+    path.join(agentRuntimeRoot, "node_modules", "typebox", "package.json"),
+    path.join(agentRuntimeRoot, "node_modules", "@earendil-works", "pi-agent-core", "package.json"),
+    path.join(agentRuntimeRoot, "node_modules", "@earendil-works", "pi-tui", "package.json"),
+    path.join(agentRuntimeRoot, "node_modules", "@earendil-works", "pi-ai", "dist", "compat.js"),
+    path.join(agentRuntimeRoot, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "index.js"),
+    path.join(agentRuntimeRoot, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "core", "extensions", "loader.js")
   ].find((file) => !existsSync(file));
   if (missingAgentRuntimeFile)
     throw Error(`Packaged app is missing an agent runtime dependency: ${missingAgentRuntimeFile}`);
   let agentRuntimeSource = readFileSync(agentRuntime, "utf8");
   if (/["'](?:[A-Za-z]:\\|\/(?:Users|home|root)\/)[^"'\n]*node_modules[\\/]/.test(agentRuntimeSource))
     throw Error("Packaged agent runtime contains a build-machine dependency path");
+  if (!agentRuntimeSource.includes(`"@earendil-works/pi-coding-agent"`))
+    throw Error("Packaged agent runtime bundled Pi instead of importing it; its extension loader would resolve no aliases");
   let missingPiLauncherMarker = [
     "resolveElectronNodeExecutable",
     "resolvePackagedPiCli",
@@ -2219,10 +1836,75 @@ async function afterPack(context) {
     if (!existsSync(helperExecutable))
       throw Error(`Packaged app is missing its Pi helper executable: ${helperExecutable}`);
   }
-  let packagedPiCli = path.join(resourcesDir, "app", "frontend", ".next", "standalone", "frontend", "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js");
+  let packagedPiCli = path.join(agentRuntimeRoot, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js");
   if (!existsSync(packagedPiCli))
     throw Error(`Packaged app is missing its Pi CLI: ${packagedPiCli}`);
   console.log(`  afterPack: embedded frontend and agent runtime present (${electronPlatformName})`);
+}
+
+
+async function remoteAccess(args3 = process.argv.slice(2)) {
+  let os5 = await import("node:os");
+  let fs5 = await import("node:fs");
+  let path5 = await import("node:path");
+  let { execFileSync } = await import("node:child_process");
+  let userData = path5.join(os5.homedir(), "Library", "Application Support", "Local Studio");
+  let tokenFile = path5.join(userData, "frontend-token");
+  let disable = args3.includes("--off");
+
+  let tailscale = ["/usr/local/bin/tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"]
+    .find((candidate) => fs5.existsSync(candidate));
+  if (!tailscale) throw Error("tailscale was not found");
+
+  let hostFile = path5.join(userData, "remote-host");
+  let userFile = path5.join(userData, "remote-user");
+
+  if (disable) {
+    execFileSync(tailscale, ["serve", "reset"], { stdio: "inherit" });
+    for (let file of [tokenFile, hostFile, userFile]) fs5.rmSync(file, { force: true });
+    console.log("Remote access is off. Restart CRIAs AI so it stops requiring the token.");
+    return;
+  }
+
+  let port = valueAfter(args3, "--port");
+  if (!port) {
+    try {
+      port = fs5.readFileSync(path5.join(userData, "embedded-frontend.port"), "utf8").trim();
+    } catch {
+      throw Error("CRIAs AI has not run yet; start it once, or pass --port");
+    }
+  }
+
+  if (!fs5.existsSync(tokenFile)) {
+    fs5.mkdirSync(userData, { recursive: true });
+    let { randomBytes: rb } = await import("node:crypto");
+    fs5.writeFileSync(tokenFile, rb(32).toString("base64url") + "\n", { mode: 0o600 });
+  }
+  let token = fs5.readFileSync(tokenFile, "utf8").trim();
+
+  execFileSync(tailscale, ["serve", "--bg", "--https=443", "http://127.0.0.1:" + port], {
+    stdio: "inherit",
+  });
+  let state = JSON.parse(execFileSync(tailscale, ["status", "--json"], { encoding: "utf8" }));
+  let dns = state.Self?.DNSName?.replace(/\.$/, "");
+  if (!dns) throw Error("this machine has no MagicDNS name; enable MagicDNS for the tailnet");
+  let login = state.User?.[state.Self?.UserID]?.LoginName ?? "";
+
+  fs5.writeFileSync(hostFile, dns + "\n", { mode: 0o600 });
+  if (/^[^\s,]+@[^\s,]+$/.test(login)) fs5.writeFileSync(userFile, login + "\n", { mode: 0o600 });
+  else fs5.rmSync(userFile, { force: true });
+
+  console.log("");
+  console.log("Remote access is on, for devices on this tailnet only.");
+  console.log("Restart CRIAs AI so its server starts requiring the token, then open this ONCE");
+  console.log("on the phone to pair it (the token moves into a cookie and drops out of the URL):");
+  console.log("");
+  console.log("  https://" + dns + "/agent?token=" + token);
+  console.log("");
+  console.log("Afterwards, and for Add to Home Screen, use:  https://" + dns + "/agent");
+  console.log("");
+  console.log("Reachable only from this tailnet" + (login ? ", and only as " + login : "") + ".");
+  console.log("Turn it off with:  npm run remote-access -- --off");
 }
 
 var project_entry_default = afterPack, root5 = path11.resolve(path11.dirname(fileURLToPath11(import.meta.url)), "../.."), commands = new Map([
@@ -2233,7 +1915,6 @@ var project_entry_default = afterPack, root5 = path11.resolve(path11.dirname(fil
   ["check-commits", () => Promise.resolve().then(() => (init_check_conventional_commits(), exports_check_conventional_commits))],
   ["complete-standalone", () => Promise.resolve().then(() => (init_complete_standalone_build(), exports_complete_standalone_build))],
   ["controller-standards", () => Promise.resolve().then(() => (init_controller_standards_audit(), exports_controller_standards_audit))],
-  ["desktop-smoke", () => init_desktop_package_smoke().then(() => exports_desktop_package_smoke)],
   ["doctor", async () => doctor()],
   ["link-services", () => Promise.resolve().then(() => (init_link_services_node_modules(), exports_link_services_node_modules))],
   ["perf", () => init_perf_audit().then(() => exports_perf_audit)],
@@ -2241,9 +1922,6 @@ var project_entry_default = afterPack, root5 = path11.resolve(path11.dirname(fil
   ["prepare-agent-runtime", async () => rmSync6(path11.join(root5, "services", "agent-runtime", "dist"), { recursive: !0, force: !0 })],
   ["prepare-next", () => Promise.resolve().then(() => (init_prepare_next_build(), exports_prepare_next_build))],
   ["release-notes", () => Promise.resolve().then(() => (init_release_statement(), exports_release_statement))],
-  ["self-test", async () => {
-    await Promise.resolve().then(() => (init_install_desktop_app_test(), exports_install_desktop_app_test)), await Promise.resolve().then(() => (init_release_notary_credentials_test(), exports_release_notary_credentials_test)), await Promise.resolve().then(() => (init_release_package_arguments_test(), exports_release_package_arguments_test));
-  }],
   ["setup", async () => setupRepository()],
   ["sign-release", () => init_sign_desktop_release().then(() => exports_sign_desktop_release)],
   ["stage-release", () => Promise.resolve().then(() => (init_stage_desktop_release(), exports_stage_desktop_release))],
@@ -2252,7 +1930,8 @@ var project_entry_default = afterPack, root5 = path11.resolve(path11.dirname(fil
   ["validate-package", () => Promise.resolve().then(() => (init_validate_package_json(), exports_validate_package_json))],
   ["validate-structure", () => Promise.resolve().then(() => (init_validate_barrel_dir_siblings(), exports_validate_barrel_dir_siblings))],
   ["validate-ui", () => Promise.resolve().then(() => (init_validate_ui_structure(), exports_validate_ui_structure))],
-  ["audit-layout", async () => auditLayout()]
+  ["audit-layout", async () => auditLayout()],
+  ["remote-access", async () => remoteAccess()]
 ]);
 function parsedVersion(value) {
   let match = value.match(/(\d+)\.(\d+)(?:\.(\d+))?/);
@@ -2292,10 +1971,10 @@ function setupRepository() {
   console.log("Repository setup complete");
 }
 function auditLayout() {
-  let expected = ["frontend/desktop/project.mjs", "scripts/install-controller.sh", "scripts/install-desktop-app.sh"], actual = readdirSync10(path11.join(root5, "scripts"), { withFileTypes: !0 }).filter((entry) => entry.isFile()).map((entry) => `scripts/${entry.name}`).sort(), executable = git(["ls-files", "-s"]).split("\n").filter((line) => line.startsWith("100755 ")).map((line) => line.split("\t")[1]).sort(), stale = ["frontend/scripts", "controller/scripts", "services/agent-runtime/scripts"].filter((directory) => existsSync(path11.join(root5, directory)));
-  if (JSON.stringify(actual) !== JSON.stringify(expected.slice(1)) || JSON.stringify(executable) !== JSON.stringify(expected) || stale.length > 0)
+  let expected = ["frontend/desktop/project.mjs", "frontend/desktop/speech/build.sh", "scripts/install-controller.sh", "scripts/install-desktop-app.sh"], expectedScripts = ["scripts/install-controller.sh", "scripts/install-desktop-app.sh"], actual = readdirSync10(path11.join(root5, "scripts"), { withFileTypes: !0 }).filter((entry) => entry.isFile()).map((entry) => `scripts/${entry.name}`).sort(), executable = git(["ls-files", "-s"]).split("\n").filter((line) => line.startsWith("100755 ")).map((line) => line.split("\t")[1]).sort(), stale = ["frontend/scripts", "controller/scripts", "services/agent-runtime/scripts"].filter((directory) => existsSync(path11.join(root5, directory)));
+  if (JSON.stringify(actual) !== JSON.stringify(expectedScripts) || JSON.stringify(executable) !== JSON.stringify(expected) || stale.length > 0)
     throw Error(`Automation layout drifted: scripts=${actual.join(",")}; executable=${executable.join(",")}; stale=${stale.join(",")}`);
-  console.log("Automation layout passed: exactly three scripts");
+  console.log("Automation layout passed: two scripts and the dictation helper build");
 }
 function git(args3, options = {}) {
   return execFileSync6("git", args3, { cwd: root5, encoding: "utf8", ...options }).trim();
@@ -2316,7 +1995,7 @@ function preCommit() {
   let branch = git(["branch", "--show-current"]);
   if (["main", "dev"].includes(branch))
     throw Error(`pre-commit: commits on ${branch} are blocked; use a work branch and PR`);
-  let files = stagedFiles(), lines = git(["diff", "--cached", "--numstat"]).split(`
+  let files = stagedFiles(), activeFiles = files.filter((file2) => existsSync(path11.join(root5, file2))), lines = git(["diff", "--cached", "--numstat"]).split(`
 `).reduce((total, row) => {
     let [added, removed, file2] = row.split("\t");
     if (!/^\d+$/.test(added ?? "") || !/^\d+$/.test(removed ?? ""))
@@ -2325,38 +2004,24 @@ function preCommit() {
       return total;
     return total + Number(added) + Number(removed);
   }, 0);
-  if (files.length > 15 || lines > 600)
-    throw Error(`pre-commit: staged change is too large (${files.length} files, ${lines} source lines); limit is 15 files and 600 source lines`);
-  if (files.some((file2) => /^(frontend|shared|tests\/frontend)\//.test(file2)))
+  if (activeFiles.length > 15 || lines > 600)
+    throw Error(`pre-commit: staged change is too large (${activeFiles.length} files, ${lines} source lines); limit is 15 files and 600 source lines`);
+  if (activeFiles.some((file2) => /^(frontend|shared)\//.test(file2)))
     run3("npm", ["run", "precommit"], path11.join(root5, "frontend"));
-  if (files.some((file2) => file2.startsWith("controller/")))
+  if (activeFiles.some((file2) => file2.startsWith("controller/")))
     run3("bun", ["run", "typecheck"], path11.join(root5, "controller"));
 }
 function prePush() {
   let remote = process.argv[2], url = process.argv[3], updates = readFileSync17(0, "utf8").trim();
   for (let update of updates ? updates.split(`
 `) : []) {
-    let [localRef, localSha, remoteRef, remoteSha] = update.trim().split(/\s+/);
+    let [localRef, localSha, remoteRef] = update.trim().split(/\s+/);
     if (["refs/heads/main", "refs/heads/dev"].includes(remoteRef))
       throw Error(`pre-push: direct pushes to ${remoteRef} are blocked; merge through GitHub`);
-    if (/^0{40}$/.test(localSha))
-      continue;
-    let range2;
-    if (/^0{40}$/.test(remoteSha)) {
-      let defaultRef;
-      try {
-        defaultRef = git(["symbolic-ref", "--quiet", "--short", `refs/remotes/${remote}/HEAD`]);
-      } catch {
-        defaultRef = `${remote}/main`;
-      }
-      try {
-        range2 = `${git(["merge-base", defaultRef, localSha])}..${localSha}`;
-      } catch {
-        range2 = localSha;
-      }
-    } else
-      range2 = `${remoteSha}..${localSha}`;
-    console.log(`Checking conventional commits for ${localRef} -> ${remote}/${remoteRef} (${url})`), run3(process.execPath, [path11.join(root5, "scripts/project.mjs"), "check-commits", "--range", range2]);
+    if (/^0{40}$/.test(localSha)) continue;
+    git(["remote", "get-url", remote]);
+    console.log(`Checking outgoing conventional commits for ${localRef} -> ${remote}/${remoteRef} (${url})`);
+    run3(process.execPath, [path11.join(root5, "scripts/project.mjs"), "check-commits", "--range", localSha, "--exclude-remote", remote]);
   }
   run3("npm", ["run", "check:static"], path11.join(root5, "frontend")), run3("npm", ["run", "check:cleanup"], path11.join(root5, "frontend")), run3(process.execPath, [path11.join(root5, "scripts/project.mjs"), "assert-standalone"]);
 }

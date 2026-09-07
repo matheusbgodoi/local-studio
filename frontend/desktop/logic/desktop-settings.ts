@@ -1,4 +1,5 @@
 import { app } from "electron";
+import type { DictationShortcutMode } from "../dictation-shortcut-contract";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { writeJsonAtomic } from "../helpers/fs-json";
@@ -14,6 +15,8 @@ export interface QuickPanelSize {
 interface DesktopSettings {
   quickPanelHotkey?: string;
   quickPanelThreadSize?: QuickPanelSize;
+  dictationShortcutHotkey?: string;
+  dictationShortcutMode?: DictationShortcutMode;
 }
 
 const MIN_THREAD_SIZE: QuickPanelSize = { width: 320, height: 280 };
@@ -46,6 +49,26 @@ export function getStoredQuickPanelHotkey(): string | null {
 
 export function setStoredQuickPanelHotkey(hotkey: string): void {
   writeSettings({ quickPanelHotkey: hotkey });
+}
+
+export function getStoredDictationShortcut(): {
+  hotkey: string | null;
+  mode: DictationShortcutMode | null;
+} {
+  const settings = readSettings();
+  const hotkey =
+    typeof settings.dictationShortcutHotkey === "string" && settings.dictationShortcutHotkey.trim()
+      ? settings.dictationShortcutHotkey.trim()
+      : null;
+  const mode =
+    settings.dictationShortcutMode === "toggle" || settings.dictationShortcutMode === "hold"
+      ? settings.dictationShortcutMode
+      : null;
+  return { hotkey, mode };
+}
+
+export function setStoredDictationShortcut(hotkey: string, mode: DictationShortcutMode): void {
+  writeSettings({ dictationShortcutHotkey: hotkey, dictationShortcutMode: mode });
 }
 
 export function getStoredQuickPanelThreadSize(): QuickPanelSize | null {

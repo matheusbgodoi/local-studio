@@ -12,6 +12,7 @@ import {
   compactToolText,
   type ToolKind,
 } from "@/features/agent/ui/timeline/tool-metadata";
+import { isImageGenerationTool } from "@/features/agent/ui/timeline/generated-image-block";
 
 export type ActivitySegment =
   | { kind: "reasoning"; id: string; blocks: ThinkingBlock[] }
@@ -19,6 +20,7 @@ export type ActivitySegment =
 
 export type RoutedBlock =
   | { kind: "activity-group"; id: string; segments: ActivitySegment[] }
+  | { kind: "image-tool"; block: ToolBlock }
   | { kind: "content"; block: TextBlock }
   | { kind: "event"; block: EventBlock };
 
@@ -71,6 +73,11 @@ export function groupAssistantBlocks(blocks: AssistantBlock[]): RoutedBlock[] {
 
   for (const block of blocks) {
     if (block.kind === "tool") {
+      if (isImageGenerationTool(block)) {
+        flushActivity();
+        routed.push({ kind: "image-tool", block });
+        continue;
+      }
       flushReasoning();
       tools.push(block);
       continue;

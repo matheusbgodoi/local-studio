@@ -7,8 +7,11 @@ import {
   isPlaceholderSessionTitle,
   newId,
   nowLabel,
+  type ChatMessageAttachment,
+  type QueuedMessage,
   type SessionTab,
 } from "@/features/agent/messages";
+import type { AgentImageInput } from "@/features/agent/contracts";
 import { type SessionEngine } from "@/features/agent/runtime/engine";
 import {
   beginSessionSubmit,
@@ -29,8 +32,8 @@ import {
 type UseChatPaneSendFlowOptions = {
   activeTab: SessionTab | null;
   attachments: ChatAttachment[];
-  browserToolEnabled: boolean;
   clearAttachments: () => void;
+  consumeAttachments: (ids: readonly string[]) => void;
   cwd: string;
   engine: SessionEngine;
   modelId: string;
@@ -44,11 +47,18 @@ type UseChatPaneSendFlowOptions = {
   updateTab: UpdateTab;
 };
 
+type PreparedControlMessage = {
+  attachments: ChatMessageAttachment[];
+  images: AgentImageInput[];
+  runtimeText: string;
+  text: string;
+};
+
 export function useChatPaneSendFlow({
   activeTab,
   attachments,
-  browserToolEnabled,
   clearAttachments,
+  consumeAttachments,
   cwd,
   engine,
   modelId,
@@ -66,7 +76,7 @@ export function useChatPaneSendFlow({
   const abortSubmitInFlightRef = useRef<SessionSubmitGuard>(new Set());
 
   const buildPromptArgs = useCallback(
-    (sessionId: string, rawText: string, effectiveBrowserEnabled = browserToolEnabled) => {
+    (sessionId: string, rawText: string) => {
       const text = rawText.trim();
       const attachedText = attachmentPrompt(attachments, { modelSupportsVision });
       const attachmentSummary =
@@ -78,7 +88,6 @@ export function useChatPaneSendFlow({
       const selection = tools.selectionFor(sessionId);
       const contextText = selectedContextPrompt(text, selection.skills);
       const browserContextText = browserContextPrompt({
-        enabled: effectiveBrowserEnabled,
         backend: tools.browser.backend,
         url: tools.browser.url,
         vision: modelSupportsVision,
@@ -112,12 +121,11 @@ export function useChatPaneSendFlow({
         userText,
         images,
         attachments: messageAttachments,
-        browserToolEnabled: effectiveBrowserEnabled,
         skills: selection.skills,
         promptTemplates: selection.promptTemplates,
       };
     },
-    [attachments, browserToolEnabled, modelId, modelSupportsVision, tools],
+    [attachments, modelId, modelSupportsVision, tools],
   );
 
   const submitPrompt = useCallback(
@@ -127,7 +135,7 @@ export function useChatPaneSendFlow({
       if ((!rawText.trim() && attachments.length === 0) || !modelId || readingAttachments) {
         return Promise.resolve();
       }
-      const args = buildPromptArgs(targetId, rawText, browserToolEnabled);
+      const args = buildPromptArgs(targetId, rawText);
       const currentSelection = tools.selectionFor(targetId);
       if (currentSelection.skills.length > 0) {
         tools.setSelection(targetId, { ...currentSelection, skills: [] });
@@ -140,7 +148,6 @@ export function useChatPaneSendFlow({
     [
       activeTab,
       attachments.length,
-      browserToolEnabled,
       buildPromptArgs,
       clearAttachments,
       engine,
@@ -152,14 +159,31 @@ export function useChatPaneSendFlow({
     ],
   );
 
+  const submitQueuedPrompt = useCallback(
+    (item: QueuedMessage, targetSessionId: string) => {
+      const queuedAttachments = item.attachments ?? [];
+      return engine.submitPrompt({
+        text: item.text,
+        prompt: item.runtimeText ?? item.text,
+        displayText: item.text,
+        userText: item.text,
+        images: imageInputsFromAttachments(queuedAttachments),
+        attachments: queuedAttachments,
+        targetSessionId,
+      });
+    },
+    [engine],
+  );
+
   const queueAndSendControl = useCallback(
     (
       mode: "steer" | "follow_up",
-      text: string,
+      payload: PreparedControlMessage,
       tab: SessionTab,
       runtime: string,
       cwdHint?: string,
     ) => {
+      const { attachments: queuedAttachments, images, runtimeText, text } = payload;
       const queuedId = newId("queue");
       // A steer lands in the transcript immediately, dimmed, so the user sees it
       // the moment they send it; the runtime echo clears `pending` once Pi shows
@@ -172,7 +196,17 @@ export function useChatPaneSendFlow({
         error: "",
         queue:
           mode === "follow_up"
-            ? [...(t.queue ?? []), { id: queuedId, mode, text, sent: true }]
+            ? [
+                ...(t.queue ?? []),
+                {
+                  id: queuedId,
+                  mode,
+                  text,
+                  runtimeText,
+                  attachments: queuedAttachments,
+                  sent: true,
+                },
+              ]
             : t.queue,
         messages: pendingSteerId
           ? [
@@ -181,6 +215,7 @@ export function useChatPaneSendFlow({
                 id: pendingSteerId,
                 role: "user",
                 text,
+                attachments: queuedAttachments,
                 pending: true,
                 awaitingEcho: true,
                 timestamp: nowLabel(),
@@ -196,6 +231,8 @@ export function useChatPaneSendFlow({
               engine.sendControl({
                 mode,
                 text,
+                message: runtimeText,
+                images,
                 runtime,
                 sessionId: tab.id,
                 piSessionId: tab.piSessionId,
@@ -211,10 +248,11 @@ export function useChatPaneSendFlow({
                 : t.messages,
             ...(result.ok ? {} : { input: text, error: result.error || "Message failed" }),
           }));
+          if (result.ok) consumeAttachments(queuedAttachments.map((attachment) => attachment.id));
         }),
       );
     },
-    [engine, resetComposerHeight, updateTab],
+    [consumeAttachments, engine, resetComposerHeight, updateTab],
   );
 
   // Single-flight a submit through one of the in-flight guards: bail if this
@@ -260,11 +298,22 @@ export function useChatPaneSendFlow({
             catch: () => running,
           });
           if (acceptsControl) {
-            if (!text) return;
+            const args = buildPromptArgs(activeTab.id, text);
+            const mode = args.attachments.length > 0 ? "follow_up" : "steer";
             yield* Effect.tryPromise({
               try: () =>
                 runGuardedSubmit(controlSubmitInFlightRef.current, activeTab.id, () =>
-                  queueAndSendControl("steer", text, activeTab, runtime),
+                  queueAndSendControl(
+                    mode,
+                    {
+                      attachments: args.attachments,
+                      images: args.images,
+                      runtimeText: args.prompt,
+                      text: args.displayText,
+                    },
+                    activeTab,
+                    runtime,
+                  ),
                 ),
               catch: (error) => error,
             });
@@ -283,6 +332,7 @@ export function useChatPaneSendFlow({
     [
       activeTab,
       attachments.length,
+      buildPromptArgs,
       engine,
       modelId,
       queueAndSendControl,
@@ -293,10 +343,63 @@ export function useChatPaneSendFlow({
     ],
   );
 
+  const sendTextMessage = useCallback(
+    (rawText: string) => {
+      if (!activeTab) return Promise.reject(new Error("Open a conversation to use this action"));
+      if (!modelId) return Promise.reject(new Error("Select a model to use this action"));
+      const text = rawText.trim();
+      if (!text) return Promise.resolve();
+      const runtime = activeTab.id;
+      return Effect.runPromise(
+        Effect.gen(function* () {
+          const acceptsControl = yield* Effect.tryPromise({
+            try: () => engine.acceptsControl(activeTab, runtime),
+            catch: () => running,
+          });
+          if (acceptsControl) {
+            yield* Effect.tryPromise({
+              try: () =>
+                runGuardedSubmit(controlSubmitInFlightRef.current, activeTab.id, () =>
+                  queueAndSendControl(
+                    "follow_up",
+                    { attachments: [], images: [], runtimeText: text, text },
+                    activeTab,
+                    runtime,
+                    cwd,
+                  ),
+                ),
+              catch: (error) => error,
+            });
+            return;
+          }
+          yield* Effect.tryPromise({
+            try: () =>
+              runGuardedSubmit(composerSubmitInFlightRef.current, activeTab.id, () =>
+                engine.submitPrompt({
+                  text,
+                  prompt: text,
+                  displayText: text,
+                  userText: text,
+                  targetSessionId: activeTab.id,
+                }),
+              ),
+            catch: (error) => error,
+          });
+        }),
+      );
+    },
+    [activeTab, cwd, engine, modelId, queueAndSendControl, runGuardedSubmit, running],
+  );
+
   const queueMessage = useCallback(() => {
     if (!activeTab) return Promise.resolve();
     const text = activeTab.input.trim();
-    if (!text || isPlaceholderSessionTitle(text)) return Promise.resolve();
+    if (
+      readingAttachments ||
+      ((!text || isPlaceholderSessionTitle(text)) && attachments.length === 0)
+    ) {
+      return Promise.resolve();
+    }
     if (!modelId) {
       updateTab(activeTab.id, (t) => ({ ...t, error: "Select a model to send." }));
       return Promise.resolve();
@@ -309,10 +412,22 @@ export function useChatPaneSendFlow({
           catch: () => running,
         });
         if (acceptsControl) {
+          const args = buildPromptArgs(activeTab.id, text);
           yield* Effect.tryPromise({
             try: () =>
               runGuardedSubmit(controlSubmitInFlightRef.current, activeTab.id, () =>
-                queueAndSendControl("follow_up", text, activeTab, runtime, cwd),
+                queueAndSendControl(
+                  "follow_up",
+                  {
+                    attachments: args.attachments,
+                    images: args.images,
+                    runtimeText: args.prompt,
+                    text: args.displayText,
+                  },
+                  activeTab,
+                  runtime,
+                  cwd,
+                ),
               ),
             catch: (error) => error,
           });
@@ -329,10 +444,13 @@ export function useChatPaneSendFlow({
     );
   }, [
     activeTab,
+    attachments.length,
+    buildPromptArgs,
     cwd,
     engine,
     modelId,
     queueAndSendControl,
+    readingAttachments,
     runGuardedSubmit,
     submitPrompt,
     updateTab,
@@ -347,6 +465,7 @@ export function useChatPaneSendFlow({
         .sendControl({
           mode: "follow_up",
           text: item.text,
+          message: item.runtimeText,
           runtime: activeTab.id,
           sessionId: activeTab.id,
           piSessionId: activeTab.piSessionId,
@@ -372,6 +491,7 @@ export function useChatPaneSendFlow({
         .sendControl({
           mode: "follow_up",
           text: item.text,
+          message: item.runtimeText,
           runtime: activeTab.id,
           sessionId: activeTab.id,
           piSessionId: activeTab.piSessionId,
@@ -402,6 +522,8 @@ export function useChatPaneSendFlow({
               engine.sendControl({
                 mode: "steer",
                 text: item.text,
+                message: item.runtimeText,
+                images: imageInputsFromAttachments(item.attachments ?? []),
                 runtime,
                 sessionId: activeTab.id,
                 piSessionId: activeTab.piSessionId,
@@ -435,12 +557,31 @@ export function useChatPaneSendFlow({
       }));
       const [next, ...remaining] = pending;
       if (!next) return;
-      await submitPrompt(next, tab.id);
-      for (const text of remaining) {
-        await queueAndSendControl("follow_up", text, tab, tab.id, cwd);
+      await submitQueuedPrompt(next, tab.id);
+      for (const item of remaining) {
+        await queueAndSendControl(
+          "follow_up",
+          {
+            attachments: item.attachments ?? [],
+            images: imageInputsFromAttachments(item.attachments ?? []),
+            runtimeText: item.runtimeText ?? item.text,
+            text: item.text,
+          },
+          tab,
+          tab.id,
+          cwd,
+        );
       }
     });
-  }, [activeTab, cwd, engine, queueAndSendControl, runGuardedSubmit, submitPrompt, updateTab]);
+  }, [
+    activeTab,
+    cwd,
+    engine,
+    queueAndSendControl,
+    runGuardedSubmit,
+    submitQueuedPrompt,
+    updateTab,
+  ]);
 
   // Re-run the last user turn after a failure (a 503, a network blip). On a
   // *send* failure the text is restored to the composer, but a turn that errors
@@ -457,5 +598,14 @@ export function useChatPaneSendFlow({
     });
   }, [activeTab, modelId, runGuardedSubmit, submitPrompt, updateTab]);
 
-  return { sendMessage, queueMessage, removeQueued, editQueued, steerQueued, abortTurn, retryLast };
+  return {
+    sendMessage,
+    sendTextMessage,
+    queueMessage,
+    removeQueued,
+    editQueued,
+    steerQueued,
+    abortTurn,
+    retryLast,
+  };
 }

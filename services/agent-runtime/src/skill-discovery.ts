@@ -10,6 +10,13 @@ export type SkillRow = {
   source: string;
   path: string;
   instructions?: string;
+  /**
+   * The name Pi resolves this skill by — the SKILL.md frontmatter `name`, else
+   * the skill directory's basename (pi dist/core/skills.js loadSkillFromFile).
+   * `name` above is Studio's display label and is NOT interchangeable: it
+   * de-slugs and prefixes plugin skills, so `/skill:<name>` would miss.
+   */
+  piName: string;
 };
 
 export type SkillSource = {
@@ -58,6 +65,22 @@ export function codexAppSkillSources(): SkillSource[] {
   ]);
 }
 
+/** The name Pi resolves this skill by: frontmatter `name:`, else the directory
+ *  basename (pi dist/core/skills.js loadSkillFromFile). Only the head of
+ *  SKILL.md is read — the frontmatter block is always first and small; if its
+ *  closing fence is not within that window we fall back rather than risk
+ *  matching a `name:` line from the body. */
+export function piSkillName(dir: string): string {
+  const fallback = path.basename(dir);
+  const head = readCapped(path.join(dir, "SKILL.md"), 4096);
+  if (!head || !head.startsWith("---")) return fallback;
+  const end = head.indexOf("\n---", 3);
+  if (end === -1) return fallback;
+  const match = /^name:[ \t]*(.+)$/m.exec(head.slice(0, end));
+  const value = match?.[1]?.trim().replace(/^["']|["']$/g, "");
+  return value || fallback;
+}
+
 function skillNameFromDir(dir: string): string {
   const parts = dir.split(path.sep);
   const skillsIndex = parts.lastIndexOf("skills");
@@ -87,6 +110,7 @@ export function loadSkillInstructions(
     source: source.source,
     path: resolved,
     instructions,
+    piName: piSkillName(resolved),
   };
 }
 
@@ -108,7 +132,15 @@ export function discoverSkills(
     if (entries.includes("SKILL.md")) {
       const name = skillNameFromDir(dir);
       const key = name.toLowerCase();
-      if (!byName.has(key)) byName.set(key, { id: `${source}:${key}`, name, source, path: dir });
+      if (!byName.has(key)) {
+        byName.set(key, {
+          id: `${source}:${key}`,
+          name,
+          source,
+          path: dir,
+          piName: piSkillName(dir),
+        });
+      }
       return;
     }
     for (const entry of entries) {

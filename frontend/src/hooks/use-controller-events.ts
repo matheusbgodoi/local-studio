@@ -7,30 +7,29 @@ import {
   isControllerStreamEventType,
 } from "@/lib/controller-events-contract";
 import { useCallback, useRef, useState } from "react";
-import {
-  BACKEND_URL_CHANGED_EVENT,
-  getApiKey,
-  resolveControllerEventsBaseUrl,
-} from "@/lib/api/connection";
+import { BACKEND_URL_CHANGED_EVENT } from "@/lib/api/connection";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
+import { captureControllerIdentity, type ControllerIdentity } from "@/lib/controller-identity";
 
 interface SSEPayload<T = unknown> {
   data: T;
   timestamp: string;
 }
 
-export function useControllerEvents(apiBaseUrl: string = resolveControllerEventsBaseUrl()) {
+export function useControllerEvents(apiBaseUrl: string = "/api/proxy") {
   const eventSourceRef = useRef<EventSource | null>(null);
   const [backendRevision, setBackendRevision] = useState(0);
 
-  const handleMessage = useCallback((event: MessageEvent) => {
+  const handleMessage = useCallback((event: MessageEvent, identity: ControllerIdentity) => {
     try {
       const payload = JSON.parse(event.data) as SSEPayload<Record<string, unknown>>;
       const eventType = event.type || "message";
       const data = payload.data ?? {};
       const channel = getBrowserEventChannelForControllerEvent(eventType);
       if (channel) {
-        window.dispatchEvent(new CustomEvent(channel, { detail: { type: eventType, data } }));
+        window.dispatchEvent(
+          new CustomEvent(channel, { detail: { type: eventType, data, ...identity } }),
+        );
       } else if (!isControllerStreamEventType(eventType)) {
         console.warn("[Controller SSE] Unhandled event type", { eventType, data });
       }
@@ -39,10 +38,7 @@ export function useControllerEvents(apiBaseUrl: string = resolveControllerEvents
     }
   }, []);
 
-  const apiKey = getApiKey();
-  const sseUrl = apiKey
-    ? `${apiBaseUrl}/events?api_key=${encodeURIComponent(apiKey)}`
-    : `${apiBaseUrl}/events`;
+  const sseUrl = `${apiBaseUrl}/events`;
 
   useMountSubscription(() => {
     if (eventSourceRef.current) {
@@ -51,6 +47,7 @@ export function useControllerEvents(apiBaseUrl: string = resolveControllerEvents
     let disposed = false;
     let reconnectFiber: Fiber.Fiber<void, unknown> | null = null;
     let failureStreak = 0;
+    const identity = captureControllerIdentity();
 
     const open = () => {
       if (disposed) return;
@@ -59,7 +56,7 @@ export function useControllerEvents(apiBaseUrl: string = resolveControllerEvents
 
       const onDelivered = (event: MessageEvent) => {
         failureStreak = 0;
-        handleMessage(event);
+        handleMessage(event, identity);
       };
 
       for (const type of CONTROLLER_EVENT_TYPES) {
@@ -91,7 +88,10 @@ export function useControllerEvents(apiBaseUrl: string = resolveControllerEvents
   }, [backendRevision, handleMessage, sseUrl]);
 
   useMountSubscription(() => {
-    const reconnect = () => setBackendRevision((value) => value + 1);
+    const reconnect = () => {
+      captureControllerIdentity();
+      setBackendRevision((value) => value + 1);
+    };
     window.addEventListener(BACKEND_URL_CHANGED_EVENT, reconnect);
     return () => window.removeEventListener(BACKEND_URL_CHANGED_EVENT, reconnect);
   }, []);

@@ -7,6 +7,7 @@ import {
 import {
   DEFAULT_FONT_FAMILY_ID,
   DEFAULT_FONT_SIZE_ID,
+  THEME_BY_ID,
   type FontFamilyId,
   type FontSizeId,
   type ThemeId,
@@ -39,6 +40,15 @@ export interface AppSlice {
   setLastOpenFileByProject: (cwd: string, rel: string) => void;
 }
 
+export const DEFAULT_SIDEBAR_WIDTH = 224;
+
+const LEGACY_DEFAULT_SIDEBAR_WIDTHS = new Set([204, 220, 224, 240, 260, 275]);
+
+function restoredSidebarWidth(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return LEGACY_DEFAULT_SIDEBAR_WIDTHS.has(value) ? DEFAULT_SIDEBAR_WIDTH : value;
+}
+
 const createAppSlice: StateCreator<AppSlice, [], [], AppSlice> = (set) => ({
   sidebar: { collapsed: false, mobileOpen: false },
   setSidebarCollapsed: (collapsed) =>
@@ -55,7 +65,7 @@ const createAppSlice: StateCreator<AppSlice, [], [], AppSlice> = (set) => ({
     }),
   toggleSidebarMobileOpen: () =>
     set((state) => ({ sidebar: { ...state.sidebar, mobileOpen: !state.sidebar.mobileOpen } })),
-  sidebarWidth: 275,
+  sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
   setSidebarWidth: (sidebarWidth) => set({ sidebarWidth }),
   fileViewerFontSize: 12,
   setFileViewerFontSize: (fileViewerFontSize) => set({ fileViewerFontSize }),
@@ -78,12 +88,19 @@ export interface ThemeSlice {
 }
 
 const createThemeSlice: StateCreator<ThemeSlice, [], [], ThemeSlice> = (set) => ({
-  themeId: "zai-dark",
+  themeId: "crias-dark",
   fontFamilyId: DEFAULT_FONT_FAMILY_ID,
   fontSizeId: DEFAULT_FONT_SIZE_ID,
   setThemeId: (themeId: ThemeId) => {
     const appliedThemeId = applyThemeToDocument(themeId);
-    set({ themeId: appliedThemeId });
+    const preferredFontFamilyId = THEME_BY_ID.get(appliedThemeId)?.fontFamilyId;
+    const appliedFontFamilyId = preferredFontFamilyId
+      ? applyFontFamilyToDocument(preferredFontFamilyId)
+      : undefined;
+    set({
+      themeId: appliedThemeId,
+      ...(appliedFontFamilyId ? { fontFamilyId: appliedFontFamilyId } : {}),
+    });
   },
   setFontFamilyId: (fontFamilyId: FontFamilyId) => {
     const appliedFontFamilyId = applyFontFamilyToDocument(fontFamilyId);
@@ -116,14 +133,27 @@ const createAppStoreImpl: StateCreator<AppStore, [], [], AppStore> = (set, ...ar
   setMobileNavOpen: (mobileNavOpen) => set({ mobileNavOpen }),
 });
 
-const storage = createJSONStorage(() =>
+let appStorePersistenceReady = false;
+
+const baseStorage = createJSONStorage(() =>
   typeof window !== "undefined" ? localStorage : (undefined as unknown as Storage),
 );
+
+const storage = baseStorage
+  ? {
+      ...baseStorage,
+      setItem: (...args: Parameters<typeof baseStorage.setItem>) =>
+        appStorePersistenceReady ? baseStorage.setItem(...args) : undefined,
+      removeItem: (...args: Parameters<typeof baseStorage.removeItem>) =>
+        appStorePersistenceReady ? baseStorage.removeItem(...args) : undefined,
+    }
+  : undefined;
 
 export const useAppStore = create<AppStore>()(
   devtools(
     persist(createAppStoreImpl, {
       name: "local-studio-state",
+      version: 1,
       storage,
       skipHydration: true,
       partialize: (state) => ({
@@ -136,19 +166,18 @@ export const useAppStore = create<AppStore>()(
         fileViewerFontSize: state.fileViewerFontSize,
         lastOpenFileByProject: state.lastOpenFileByProject,
       }),
+      migrate: (persisted, version) => {
+        if (version !== 0 || !persisted || typeof persisted !== "object") return persisted;
+        const state = persisted as Record<string, unknown>;
+        return state.themeId === "zai-dark" ? { ...state, themeId: "crias-dark" } : state;
+      },
       merge: (persisted, current) => {
         const persistedRecord = (persisted ?? {}) as Record<string, unknown>;
         const persistedStore = (persisted ?? {}) as Partial<AppStore>;
         return {
           ...current,
           ...persistedStore,
-          sidebarWidth:
-            persistedRecord.sidebarWidth === 240 ||
-            persistedRecord.sidebarWidth === 220 ||
-            persistedRecord.sidebarWidth === 224 ||
-            persistedRecord.sidebarWidth === 204
-              ? 275
-              : (persistedStore.sidebarWidth ?? current.sidebarWidth),
+          sidebarWidth: restoredSidebarWidth(persistedRecord.sidebarWidth, current.sidebarWidth),
           sidebar: {
             ...current.sidebar,
             collapsed: persistedRecord.sidebarCollapsed === true,
@@ -168,10 +197,14 @@ export const useAppStore = create<AppStore>()(
 
 if (typeof window !== "undefined") {
   void (async () => {
-    await hydrateDurableUiPreferences();
-    await useAppStore.persist.rehydrate();
-    scheduleDurableUiPreferencesSave();
-    useAppStore.subscribe(() => scheduleDurableUiPreferencesSave());
+    try {
+      await hydrateDurableUiPreferences();
+      await useAppStore.persist.rehydrate();
+    } finally {
+      appStorePersistenceReady = true;
+      scheduleDurableUiPreferencesSave();
+      useAppStore.subscribe(() => scheduleDurableUiPreferencesSave());
+    }
   })();
 }
 

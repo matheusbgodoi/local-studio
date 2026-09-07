@@ -8,13 +8,33 @@ interface Window {
       platform: string;
       packaged: boolean;
       releaseChannel: "dev" | "stable";
+      distribution: "owner-fork";
+      updatePolicy: "manual-merge" | "owner-feed";
     }>;
-    getUpdateStatus?(): Promise<{ status: string; version?: string; message?: string }>;
-    startUpdate?(): Promise<{ status: string; version?: string; message?: string }>;
-    getKittylitterPairingJson?(): Promise<import("../desktop/interfaces").KittylitterPairingResult>;
-    copyKittylitterPairingJson?(pairingJson: string): Promise<{
-      ok: boolean;
-      error?: string;
+    getUpdateStatus?(): Promise<{
+      status: string;
+      version?: string;
+      message?: string;
+      progress?: number;
     }>;
+    startUpdate?(): Promise<{
+      status: string;
+      version?: string;
+      message?: string;
+      progress?: number;
+    }>;
+    saveTextFile?(
+      request: import("../desktop/interfaces").SaveTextFileRequest,
+    ): Promise<import("../desktop/interfaces").SaveTextFileResult>;
+    generateSessionTitle?(
+      excerpt: string,
+      locale: string,
+    ): Promise<import("../desktop/interfaces").SessionTitleResult>;
+    getRemoteAccessInfo?(): Promise<import("../desktop/interfaces").RemoteAccessInfo>;
+    getRemoteAccessPairingCode?(): Promise<
+      import("../desktop/interfaces").RemoteAccessPairingCodeResult
+    >;
+    copyRemoteAccessToken?(): Promise<{ ok: boolean }>;
+    dictationShortcut?: import("../desktop/interfaces").DictationShortcutBridge;
   };
 }

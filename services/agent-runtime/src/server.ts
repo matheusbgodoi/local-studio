@@ -1,8 +1,33 @@
 import { serve } from "@hono/node-server";
+import { agenticRuntime } from "./agentic/service";
 import { startAutomationScheduler } from "./automation-scheduler";
+import { configureInferenceHttpTimeout } from "./http-dispatcher";
 import { createAgentRuntimeApp } from "./http/app";
+import { unloadLocalModels } from "./local-model-unload";
+import { networkService } from "./network";
+import { resetBoundaryScopedResources } from "./network/boundary-reset";
+
+configureInferenceHttpTimeout();
+
+//
+// The jail binds a process when it is spawned and cannot be applied to one
+// already running, so anything long-lived carries the policy in force when it
+// started. Registered here, in the entry point, because the things that must be
+// dropped are the browser, the connector pool and the PTYs — and having the
+// network service import those would pull Playwright and a native pty binding
+// into every bundle that merely reads the network status.
+//
+networkService().onBoundaryChange(resetBoundaryScopedResources);
 
 startAutomationScheduler();
+
+//
+// Constructed at boot, not on first request: this is what reconciles Runs the
+// last process left unfinished, and what publishes the control surface the
+// model's tools reach for. A chat session that started before it existed could
+// not create a Run.
+//
+agenticRuntime();
 
 const { app, litterBridgeGateway } = createAgentRuntimeApp();
 const port = Number(process.env.PORT) > 0 ? Number(process.env.PORT) : 8081;
@@ -14,6 +39,38 @@ serve({ fetch: app.fetch, port, hostname: "127.0.0.1" }, (info) => {
   );
 });
 
+//
+// The tunnel is a child of this process and does not die with it on its own.
+// Left behind it holds the proxy port, and the next start finds the port taken
+// and respawns a tunnel that cannot bind — so shutting it down is not tidiness,
+// it is what keeps the next launch working. SIGTERM is what the desktop shell
+// sends, so the stop has to happen before the exit rather than in the exit
+// handler, where nothing asynchronous would finish.
+//
+const stopNetwork = async (): Promise<void> => {
+  try {
+    await networkService().shutdown();
+  } catch {
+    // a tunnel that will not stop must not keep the process alive
+  }
+};
+
+//
+// Quitting the app is a clearer statement than going idle: the owner is done,
+// so the local model should stop occupying a third of a 24 GB machine rather
+// than waiting out the idle timer.
+//
+const releaseLocalModels = async (): Promise<void> => {
+  try {
+    await unloadLocalModels();
+  } catch {
+    // a model that will not unload must not keep the process alive
+  }
+};
+
 process.once("exit", () => litterBridgeGateway.dispose());
-process.once("SIGINT", () => process.exit(0));
-process.once("SIGTERM", () => process.exit(0));
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.once(signal, () => {
+    void Promise.all([stopNetwork(), releaseLocalModels()]).then(() => process.exit(0));
+  });
+}

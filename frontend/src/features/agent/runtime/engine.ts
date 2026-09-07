@@ -16,7 +16,9 @@ import {
 } from "@/features/agent/composer-context";
 import type { Session, SessionId, UpdateSession } from "@/features/agent/runtime/types";
 import type { BrowserBackend, ToolSelection } from "@/features/agent/tools/types";
+import type { NetworkPolicy } from "@shared/agent/network-policy";
 import type {
+  AgentImageInput,
   AgentQueueAction,
   AgentThinkingLevel,
   AgentToolAccess,
@@ -43,7 +45,7 @@ export type UseSessionEngineDeps = {
   thinkingLevel: AgentThinkingLevel;
   toolAccess: AgentToolAccess;
   cwd: string;
-  browserToolEnabled: boolean;
+  networkPolicy: NetworkPolicy;
   browserBackend: BrowserBackend;
   onPiSessionIdChange?: (piSessionId: string) => void;
   /** Mutate a single session record. */
@@ -79,6 +81,8 @@ export type SessionEngine = {
 export type AgentControlRequest = {
   mode: "steer" | "follow_up";
   text: string;
+  message?: string;
+  images?: AgentImageInput[];
   runtime: string;
   sessionId: SessionId;
   piSessionId?: string | null;
@@ -94,7 +98,7 @@ export function useSessionEngine(deps: UseSessionEngineDeps): SessionEngine {
     thinkingLevel,
     toolAccess,
     cwd,
-    browserToolEnabled,
+    networkPolicy,
     browserBackend,
     onPiSessionIdChange,
     updateSession,
@@ -113,16 +117,24 @@ export function useSessionEngine(deps: UseSessionEngineDeps): SessionEngine {
 
   const sendControl = useCallback(
     (request: AgentControlRequest): Promise<{ ok: boolean; error?: string }> => {
-      const { mode, text, runtime, sessionId, piSessionId, queueAction, queueReplacement } =
-        request;
-      if (!text.trim() || !modelId) return Promise.resolve({ ok: false });
+      const {
+        mode,
+        text,
+        message: preparedMessage,
+        images,
+        runtime,
+        sessionId,
+        piSessionId,
+        queueAction,
+        queueReplacement,
+      } = request;
+      if (!(preparedMessage ?? text).trim() || !modelId) return Promise.resolve({ ok: false });
       return Effect.runPromise(
         Effect.gen(function* () {
           const selection = selectionForRef.current(sessionId);
           const skills = selection.skills ?? EMPTY_SKILLS;
           const promptTemplates = selection.promptTemplates ?? EMPTY_PROMPT_TEMPLATES;
-          const browserEnabledForTurn = browserToolEnabled;
-          const message = selectedContextPrompt(text, skills);
+          const message = preparedMessage ?? selectedContextPrompt(text, skills);
           const contextualQueueReplacement = queueReplacement
             ? selectedContextPrompt(queueReplacement, skills)
             : undefined;
@@ -134,12 +146,13 @@ export function useSessionEngine(deps: UseSessionEngineDeps): SessionEngine {
                 thinkingLevel,
                 toolAccess,
                 message,
+                images,
                 cwd: cwd.trim() || undefined,
                 piSessionId,
                 mode,
                 queueAction,
                 queueReplacement: contextualQueueReplacement,
-                browserToolEnabled: browserEnabledForTurn,
+                networkPolicy,
                 browserSessionId: runtime,
                 browserBackend,
                 skills,
@@ -175,7 +188,7 @@ export function useSessionEngine(deps: UseSessionEngineDeps): SessionEngine {
       );
     },
     [
-      browserToolEnabled,
+      networkPolicy,
       browserBackend,
       cwd,
       modelId,
@@ -191,7 +204,7 @@ export function useSessionEngine(deps: UseSessionEngineDeps): SessionEngine {
       submitPromptTurn(
         {
           activeTabId,
-          browserToolEnabled,
+          networkPolicy,
           browserBackend,
           cwd,
           modelId,
@@ -210,7 +223,7 @@ export function useSessionEngine(deps: UseSessionEngineDeps): SessionEngine {
       thinkingLevel,
       toolAccess,
       cwd,
-      browserToolEnabled,
+      networkPolicy,
       browserBackend,
       onPiSessionIdChange,
       updateSession,
@@ -308,11 +321,12 @@ export function useSessionEngine(deps: UseSessionEngineDeps): SessionEngine {
               // own title would be the tail slice's first user message, not the
               // session's first prompt.
               modelId:
-                session.modelId ||
                 meta?.modelId ||
+                session.modelId ||
                 replayModelId ||
                 runtimeStatus?.modelId ||
                 modelId,
+              networkPolicy: meta?.executionPolicy?.networkPolicy ?? session.networkPolicy,
               title: meta?.title ?? title ?? session.title,
               startedAt: meta?.startedAt ?? startedAt ?? session.startedAt,
               tokenStats: tokenStats ?? undefined,
@@ -418,7 +432,7 @@ export function useSessionEngine(deps: UseSessionEngineDeps): SessionEngine {
                 toolAccess,
                 cwd: cwd.trim() || undefined,
                 piSessionId: session.piSessionId,
-                browserToolEnabled,
+                networkPolicy,
                 browserSessionId: session.id,
                 browserBackend,
                 skills: selectionForRef.current(sessionId).skills ?? EMPTY_SKILLS,
@@ -450,7 +464,7 @@ export function useSessionEngine(deps: UseSessionEngineDeps): SessionEngine {
           ),
         ),
       ),
-    [browserToolEnabled, browserBackend, cwd, loadAndReplay, modelId, thinkingLevel, updateSession],
+    [networkPolicy, browserBackend, cwd, loadAndReplay, modelId, thinkingLevel, updateSession],
   );
 
   const acceptsControl = useCallback(

@@ -89,7 +89,7 @@ export function StepBringup({
 
       <ChecklistRow
         state={serveState}
-        title={`Serve with ${backend}`}
+        title={`Launch with ${backend}`}
         meta={serveState === "done" ? "running" : null}
       >
         <ServeStep

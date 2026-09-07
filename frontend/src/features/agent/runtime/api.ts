@@ -15,6 +15,8 @@ import type {
   AgentToolAccess,
 } from "@/features/agent/contracts";
 import type { BrowserBackend } from "@/features/agent/tools/types";
+import type { NetworkPolicy } from "@shared/agent/network-policy";
+import type { ExecutionPolicy } from "@shared/agent/execution-policy";
 import type {
   ComposerPromptTemplateRef,
   ComposerSkillRef,
@@ -160,6 +162,7 @@ export type CanonicalSessionMeta = {
   modelId: string | null;
   startedAt: string | null;
   piSessionId: string | null;
+  executionPolicy: ExecutionPolicy | null;
   usage?: SessionUsageTotals | null;
 };
 
@@ -218,7 +221,12 @@ export type CompactSessionArgs = {
   toolAccess?: AgentToolAccess;
   cwd?: string;
   piSessionId?: string | null;
-  browserToolEnabled: boolean;
+  //
+  // A compaction restarts the runtime when the fingerprint moves, so it carries
+  // the same policy the turns do — compacting a protected conversation must not
+  // rebuild it unprotected.
+  //
+  networkPolicy: NetworkPolicy;
   browserSessionId?: string;
   browserBackend?: BrowserBackend;
   skills: ComposerSkillRef[];
@@ -260,7 +268,7 @@ export type SubmitTurnArgs = {
   mode?: "steer" | "follow_up";
   queueAction?: AgentQueueAction;
   queueReplacement?: string;
-  browserToolEnabled: boolean;
+  networkPolicy: NetworkPolicy;
   browserSessionId?: string;
   browserBackend?: BrowserBackend;
   skills: ComposerSkillRef[];

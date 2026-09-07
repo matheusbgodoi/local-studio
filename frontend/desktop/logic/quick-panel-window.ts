@@ -134,11 +134,16 @@ export function toggleQuickPanel(appUrl: string): void {
   showQuickPanel(appUrl);
 }
 
-export function showQuickPanel(appUrl: string): void {
+export function showQuickPanel(appUrl: string): BrowserWindow {
   const window = ensureQuickPanel(appUrl);
   applyBounds(window, anchoredBounds(window, currentModeSize()));
   window.show();
   window.focus();
+  return window;
+}
+
+export function getQuickPanelWindow(): BrowserWindow | null {
+  return panel && !panel.isDestroyed() ? panel : null;
 }
 
 export function hideQuickPanel(): void {

@@ -5,6 +5,7 @@ import { documentRoute, defineRoutes, mergeRoutes } from "../../http/route-regis
 import { effectHandler } from "../../http/effect-handler";
 import type { AppContext } from "../../app-context";
 import { emptyResponse } from "./usage/usage-utilities";
+import { parseUsageQuery, withUsageQuery } from "./usage/usage-query";
 
 const USAGE_CACHE_TTL_MS = 15_000;
 
@@ -28,23 +29,45 @@ export const registerUsageRoutes = defineRoutes((app, context) => {
       documentRoute,
       effectHandler((ctx) => {
         const includeController = ctx.req.query("include_controller") === "true";
-        const usageEffect = Effect.gen(function* () {
-          if (usageCache && Date.now() - usageCache.at < USAGE_CACHE_TTL_MS) {
-            return yield* withControllerUsage(context, usageCache.body, includeController);
-          }
-          const usage = yield* observeControllerFunction(
-            context,
-            "usage.aggregateInferenceRequests",
-            () => context.stores.inferenceRequestStore.aggregateEffect(),
-          );
-          const body: UsageStats = usage ?? emptyResponse();
-          usageCache = { at: Date.now(), body };
-          return yield* withControllerUsage(context, body, includeController);
+        const usageEffect = parseUsageQuery({
+          period: ctx.req.query("period"),
+          model: ctx.req.query("model"),
+          tz: ctx.req.query("tz"),
         }).pipe(
-          Effect.catch((error) => {
-            context.logger.error(`[Usage] Error fetching usage stats: ${(error as Error).message}`);
-            return withControllerUsage(context, emptyResponse(), includeController);
-          }),
+          Effect.flatMap((query) =>
+            Effect.gen(function* () {
+              if (usageCache && Date.now() - usageCache.at < USAGE_CACHE_TTL_MS) {
+                return yield* withControllerUsage(
+                  context,
+                  withUsageQuery(usageCache.body, query),
+                  includeController,
+                );
+              }
+              const usage = yield* observeControllerFunction(
+                context,
+                "usage.aggregateInferenceRequests",
+                () => context.stores.inferenceRequestStore.aggregateEffect(),
+              );
+              const body: UsageStats = usage ?? emptyResponse();
+              usageCache = { at: Date.now(), body };
+              return yield* withControllerUsage(
+                context,
+                withUsageQuery(body, query),
+                includeController,
+              );
+            }).pipe(
+              Effect.catch((error) => {
+                context.logger.error(
+                  `[Usage] Error fetching usage stats: ${(error as Error).message}`,
+                );
+                return withControllerUsage(
+                  context,
+                  withUsageQuery(emptyResponse(), query),
+                  includeController,
+                );
+              }),
+            ),
+          ),
         );
         return usageEffect.pipe(Effect.map((body) => ctx.json(body)));
       }),

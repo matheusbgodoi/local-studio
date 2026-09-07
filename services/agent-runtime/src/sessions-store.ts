@@ -2,32 +2,26 @@ import {
   closeSync,
   createReadStream,
   existsSync,
+  mkdirSync,
   openSync,
+  readFileSync,
   readSync,
   realpathSync,
   readdirSync,
+  renameSync,
   statSync,
+  unlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import readline from "node:readline";
-import {
-  getAgentDir,
-  SessionManager,
-  SettingsManager,
-} from "@earendil-works/pi-coding-agent";
+import { getAgentDir, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { resolveDataDir } from "./data-dir";
-import {
-  cleanSessionTitle,
-  sessionTitleFromUserPrompt,
-} from "../../../shared/agent/session-title";
+import { cleanSessionTitle, sessionTitleFromUserPrompt } from "../../../shared/agent/session-title";
 import { readSessionListMetadata } from "./session-metadata-store";
 import type { SessionSummary } from "../../../shared/agent/session-summary";
-import {
-  emptyUsageTotals,
-  readSessionUsageTotals,
-  type SessionUsageTotals,
-} from "./session-usage";
+import { emptyUsageTotals, readSessionUsageTotals, type SessionUsageTotals } from "./session-usage";
 export type { SessionSummary } from "../../../shared/agent/session-summary";
 
 export type SessionEvent = Record<string, unknown> & { type?: string };
@@ -69,11 +63,12 @@ export function encodeCwdForPi(cwd: string): string {
 export function configuredPiSessionDir(cwd: string): string | undefined {
   const envSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR?.trim();
   if (envSessionDir) {
-    const expanded = envSessionDir === "~"
-      ? homedir()
-      : envSessionDir.startsWith(`~${path.sep}`)
-        ? path.join(homedir(), envSessionDir.slice(2))
-        : envSessionDir;
+    const expanded =
+      envSessionDir === "~"
+        ? homedir()
+        : envSessionDir.startsWith(`~${path.sep}`)
+          ? path.join(homedir(), envSessionDir.slice(2))
+          : envSessionDir;
     return path.resolve(expanded);
   }
   return SettingsManager.create(cwd, getAgentDir()).getSessionDir();
@@ -148,7 +143,7 @@ type SummaryCacheEntry = {
   complete: boolean;
   core: Omit<
     SessionSummary,
-    "updatedAt" | "archived" | "archivedAt" | "parentSessionId" | "subagentName"
+    "updatedAt" | "archived" | "archivedAt" | "parentSessionId" | "subagentName" | "executionPolicy"
   > | null;
 };
 const summaryCache = new Map<string, SummaryCacheEntry>();
@@ -163,6 +158,7 @@ function summaryFromCore(core: SummaryCacheEntry["core"], mtime: Date): SessionS
     archivedAt: null,
     parentSessionId: null,
     subagentName: null,
+    executionPolicy: null,
   };
 }
 
@@ -242,7 +238,16 @@ function applySessionMetadata(
   summary: SessionSummary,
   metadataFor: SessionMetadataLookup,
 ): SessionSummary {
-  return { ...summary, ...metadataFor(summary.id) };
+  const metadata = metadataFor(summary.id);
+  return {
+    ...summary,
+    modelId: metadata.modelId ?? summary.modelId,
+    archived: metadata.archived,
+    archivedAt: metadata.archivedAt,
+    parentSessionId: metadata.parentSessionId,
+    subagentName: metadata.subagentName,
+    executionPolicy: metadata.executionPolicy,
+  };
 }
 
 function summaryRelevantTime(summary: SessionSummary, archivedOnly: boolean): number {
@@ -306,6 +311,7 @@ async function readListCandidate(
     if (!summary?.id) return null;
     if (!sessionCwdMatches(summary.cwd, cwd)) return null;
     if (options.wantedIds.size > 0 && !options.wantedIds.has(summary.id)) return null;
+    if (metadataFor(summary.id).internal) return null;
     const decorated = applySessionMetadata(summary, metadataFor);
     return summaryMatchesListOptions(decorated, options) ? decorated : null;
   } catch {
@@ -367,6 +373,41 @@ export async function listSessions(
   return options.limit && options.limit > 0 ? summaries.slice(0, options.limit) : summaries;
 }
 
+export type SessionSearchCandidate = {
+  filepath: string;
+  mtimeMs: number;
+  size: number;
+  summary: SessionSummary;
+};
+
+export async function listSessionSearchCandidates(cwd: string): Promise<SessionSearchCandidate[]> {
+  const metadataFor = readSessionListMetadata();
+  const options = normalizeListOptions({ includeArchived: true });
+  const candidates = new Map<string, SessionSearchCandidate>();
+  for (const candidate of listCandidateFiles(cwd)) {
+    const summary = await readListCandidate(
+      cwd,
+      candidate.dir,
+      candidate.filename,
+      options,
+      metadataFor,
+    );
+    if (!summary) continue;
+    const filepath = path.join(candidate.dir, candidate.filename);
+    const stats = statSync(filepath);
+    const existing = candidates.get(summary.id);
+    if (!existing || summary.updatedAt > existing.summary.updatedAt) {
+      candidates.set(summary.id, {
+        filepath,
+        mtimeMs: stats.mtimeMs,
+        size: stats.size,
+        summary,
+      });
+    }
+  }
+  return [...candidates.values()];
+}
+
 const PI_SESSION_ID_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 const PI_SESSION_HEADER_BYTE_CAP = 64 * 1024;
 
@@ -415,6 +456,64 @@ export function findSessionFile(cwd: string, sessionId: string): string | null {
   return matches.values().next().value ?? null;
 }
 
+//
+// Move a conversation from one project to another.
+//
+// A session's project is not a field that can be re-pointed: it is WHERE the
+// transcript lives. `sessionsDirsForCwd` derives the directory from the cwd, and
+// `findSessionFile` additionally requires the file's own first-line header to
+// name that same cwd. So a move is a file move plus a header rewrite, and doing
+// only one of the two leaves a conversation that no project can list.
+//
+// Refuses rather than guesses: an id that does not resolve to exactly one file
+// under the source project (findSessionFile returns null when ambiguous), or a
+// destination that already holds a file by that name, is left untouched.
+//
+// The rewrite goes to a temporary file in the DESTINATION directory and is then
+// renamed into place, so a crash mid-write cannot leave a half-written
+// transcript where a whole one is expected. The source is removed only after
+// that rename succeeds; the reverse order could lose the conversation.
+//
+export function moveSessionToWorkspace(
+  sourceCwd: string,
+  targetCwd: string,
+  sessionId: string,
+): void {
+  if (sessionCwdMatches(sourceCwd, targetCwd)) return;
+  const source = findSessionFile(sourceCwd, sessionId);
+  if (!source) throw new Error("session not found in this project");
+
+  const targetDir = sessionsDirsForCwd(targetCwd)[0];
+  if (!targetDir) throw new Error("the destination project has no session directory");
+  const destination = path.join(targetDir, path.basename(source));
+  if (existsSync(destination))
+    throw new Error("the destination already has a session by that name");
+
+  const raw = readFileSync(source, "utf8");
+  const newline = raw.indexOf("\n");
+  if (newline < 0) throw new Error("the session file has no header line");
+  const header = JSON.parse(raw.slice(0, newline)) as Record<string, unknown>;
+  if (header.type !== "session" || header.id !== sessionId) {
+    throw new Error("the session file header does not describe this session");
+  }
+  header.cwd = path.resolve(targetCwd);
+
+  mkdirSync(targetDir, { recursive: true });
+  const temporary = `${destination}.moving-${process.pid}`;
+  try {
+    writeFileSync(temporary, JSON.stringify(header) + raw.slice(newline), "utf8");
+    renameSync(temporary, destination);
+  } catch (error) {
+    try {
+      unlinkSync(temporary);
+    } catch {
+      // nothing to clean up
+    }
+    throw error;
+  }
+  unlinkSync(source);
+}
+
 export type LoadSessionOptions = {
   // Return only the last N transcript messages (snapped back to a user-turn
   // boundary so no assistant/tool group is cut mid-turn). Omit for a full read.
@@ -429,6 +528,7 @@ export type LoadSessionMeta = {
   modelId: string | null;
   startedAt: string | null;
   piSessionId: string | null;
+  executionPolicy: import("../../../shared/agent/execution-policy").ExecutionPolicy | null;
   // Lifetime spend for the whole rollout, not just the returned page. A tail
   // load only returns recent events, but what the session cost includes every
   // turn that compaction has since discarded.
@@ -466,10 +566,13 @@ function parseEvent(line: string): SessionEvent | null {
 function activeBranchEvents(filepath: string, events: SessionEvent[]): SessionEvent[] {
   try {
     const activeIds = new Set(
-      SessionManager.open(filepath).buildContextEntries().map((entry) => entry.id),
+      SessionManager.open(filepath)
+        .buildContextEntries()
+        .map((entry) => entry.id),
     );
     return events.filter(
-      (event) => event.type === "session" || (typeof event.id === "string" && activeIds.has(event.id)),
+      (event) =>
+        event.type === "session" || (typeof event.id === "string" && activeIds.has(event.id)),
     );
   } catch {
     return events;
@@ -585,6 +688,7 @@ async function readSessionHead(
     startedAt: null,
     usage: emptyUsageTotals(),
     piSessionId: null,
+    executionPolicy: null,
   };
   const stream = createReadStream(filepath, { encoding: "utf-8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
@@ -732,6 +836,9 @@ export async function loadSession(
       readSessionHead(filepath),
       readSessionUsageTotals(filepath),
     ]);
+    const stored = readSessionListMetadata()(sessionId);
+    meta.modelId = stored.modelId ?? meta.modelId;
+    meta.executionPolicy = stored.executionPolicy;
     meta.usage = usage;
     const hasHeader = events.some((event) => event.type === "session");
     return {

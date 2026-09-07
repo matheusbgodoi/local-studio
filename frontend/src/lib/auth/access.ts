@@ -30,13 +30,28 @@ function trimmedEnv(name: string): string {
 // is unchanged), and only requires a token once LOCAL_STUDIO_FRONTEND_TOKEN is
 // set. Set the token when serving the frontend on an untrusted network.
 export function resolveAccessPosture(): AccessDecision {
-  // The desktop app embeds a loopback-only Next server — always open, even if a
-  // token is set elsewhere in the environment.
+  //
+  // AN EXPLICIT TOKEN ALWAYS WINS, including over the desktop posture.
+  //
+  // The desktop build used to answer everything unauthenticated, on the correct
+  // reasoning that it binds 127.0.0.1 and nothing off the machine can address
+  // that. But the owner can publish it — `tailscale serve`, a reverse proxy —
+  // and the process cannot tell that happened: such a proxy runs on this machine
+  // and connects over loopback like anything else. A Host-header check does not
+  // help either, since the client chooses the Host header.
+  //
+  // So the signal is the one thing a client cannot forge: whether the OWNER set
+  // a token. Setting it is the act of saying "this is reachable from somewhere
+  // I do not fully trust", and from then on every request needs it — the desktop
+  // window included, which the Electron shell handles by seeding the cookie into
+  // its own session.
+  //
+  const token = trimmedEnv("LOCAL_STUDIO_FRONTEND_TOKEN");
+  if (token) return { kind: "require-token", token };
+  // The desktop app embeds a loopback-only Next server.
   if (trimmedEnv("LOCAL_STUDIO_DATA_DIR")) return { kind: "allow", reason: "desktop" };
   // Local development (`next dev`) is loopback and single-user.
   if (process.env.NODE_ENV !== "production") return { kind: "allow", reason: "development" };
-  const token = trimmedEnv("LOCAL_STUDIO_FRONTEND_TOKEN");
-  if (token) return { kind: "require-token", token };
   // No token configured: open. Setting the token is the opt-in to gating.
   return { kind: "allow", reason: "no-token" };
 }

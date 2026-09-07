@@ -1,10 +1,3 @@
-// Sitegeist browser tool extension for Local Studio.
-//
-// Registers Pi `sitegeist_*` tools that each make one HTTP JSON-RPC 2.0 call to
-// the local sitegeist relay (`${SITEGEIST_RELAY_URL}/rpc`), which forwards to the
-// sitegeist Chrome extension over WebSocket. Enable through
-// LOCAL_STUDIO_BROWSER_BACKEND=sitegeist while the browser tool toggle is on.
-
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type, type Static, type TSchema } from "typebox";
 
@@ -18,54 +11,58 @@ type RelayResponse = { result?: unknown; error?: { code?: number; message?: stri
 const DEFAULT_RELAY_URL = "http://127.0.0.1:7717";
 const DEFAULT_TIMEOUT_MS = 120_000;
 
-const RELAY_URL = (process.env.SITEGEIST_RELAY_URL || DEFAULT_RELAY_URL).replace(/\/+$/, "");
-const RELAY_TOKEN = process.env.SITEGEIST_RELAY_TOKEN ?? "";
-const RELAY_SESSION_ID =
-  process.env.SITEGEIST_RELAY_SESSION_ID ||
-  process.env.LOCAL_STUDIO_BROWSER_SESSION_ID ||
-  "default";
-const TIMEOUT_MS = (() => {
+type RelayConfig = { url: string; token: string; sessionId: string; timeoutMs: number };
+
+function relayConfig(): RelayConfig {
   const value = Number(process.env.SITEGEIST_RELAY_TOOL_TIMEOUT_MS);
-  return Number.isFinite(value) && value > 0 ? Math.trunc(value) : DEFAULT_TIMEOUT_MS;
-})();
+  return {
+    url: (process.env.SITEGEIST_RELAY_URL || DEFAULT_RELAY_URL).replace(/\/+$/, ""),
+    token: process.env.SITEGEIST_RELAY_TOKEN ?? "",
+    sessionId:
+      process.env.SITEGEIST_RELAY_SESSION_ID ||
+      process.env.LOCAL_STUDIO_BROWSER_SESSION_ID ||
+      "default",
+    timeoutMs: Number.isFinite(value) && value > 0 ? Math.trunc(value) : DEFAULT_TIMEOUT_MS,
+  };
+}
 
 async function callRelay(
+  config: RelayConfig,
   method: string,
   params: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<unknown> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
   const abort = () => controller.abort();
   signal?.addEventListener("abort", abort, { once: true });
   if (signal?.aborted) controller.abort();
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    "X-Sitegeist-Session": RELAY_SESSION_ID,
+    "X-Sitegeist-Session": config.sessionId,
   };
-  if (RELAY_TOKEN) headers.Authorization = `Bearer ${RELAY_TOKEN}`;
+  if (config.token) headers.Authorization = `Bearer ${config.token}`;
 
-  const response = await fetch(`${RELAY_URL}/rpc`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params }),
-    signal: controller.signal,
-  }).finally(() => {
+  try {
+    const response = await fetch(`${config.url}/rpc`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params }),
+      signal: controller.signal,
+    });
+
+    const body = (await response.json().catch(() => ({}))) as RelayResponse;
+    if (!response.ok || body.error) {
+      throw new Error(body.error?.message || `sitegeist relay HTTP ${response.status}`);
+    }
+    return body.result;
+  } finally {
     clearTimeout(timeout);
     signal?.removeEventListener("abort", abort);
-  });
-
-  const body = (await response.json().catch(() => ({}))) as RelayResponse;
-  if (!response.ok || body.error) {
-    throw new Error(body.error?.message || `sitegeist relay HTTP ${response.status}`);
   }
-  return body.result;
 }
 
-// Tool definitions: each maps a `sitegeist_*` tool to one relay method. `pick`
-// projects the validated params into the JSON-RPC params object (dropping
-// undefined keys), keeping registration declarative.
 type ToolDef<S extends TSchema> = {
   name: string;
   method: string;
@@ -212,6 +209,7 @@ const TOOLS = [
 ] as const;
 
 async function runTool(
+  config: RelayConfig,
   name: string,
   method: string,
   params: Record<string, unknown>,
@@ -219,11 +217,11 @@ async function runTool(
   signal?: AbortSignal,
 ): Promise<ToolResult> {
   try {
-    const result = await callRelay(method, rpcParams, signal);
+    const result = await callRelay(config, method, rpcParams, signal);
     const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
     return {
       content: [{ type: "text", text }],
-      details: { method, params, data: result, relaySessionId: RELAY_SESSION_ID },
+      details: { method, params, data: result, relaySessionId: config.sessionId },
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -234,10 +232,10 @@ async function runTool(
   }
 }
 
-async function relayCapabilities(): Promise<Set<string> | null> {
+async function relayCapabilities(config: RelayConfig): Promise<Set<string> | null> {
   try {
     const controller = new AbortController();
-    const result = await callRelay("relay.capabilities", {}, controller.signal);
+    const result = await callRelay(config, "relay.capabilities", {}, controller.signal);
     const methods = (result as { methods?: unknown })?.methods;
     return Array.isArray(methods)
       ? new Set(methods.filter((m): m is string => typeof m === "string"))
@@ -248,10 +246,9 @@ async function relayCapabilities(): Promise<Set<string> | null> {
 }
 
 export default async function registerSitegeistBrowserExtension(pi: ExtensionAPI) {
-  // Capability discovery: register only the tools the connected extension
-  // implements. If discovery fails (relay down), register everything and let
-  // each call surface the relay error.
-  const supported = await relayCapabilities();
+  const config = relayConfig();
+
+  const supported = await relayCapabilities(config);
 
   for (const tool of TOOLS) {
     if (supported && !supported.has(tool.method)) continue;
@@ -262,7 +259,7 @@ export default async function registerSitegeistBrowserExtension(pi: ExtensionAPI
       parameters: tool.parameters,
       execute(_id, params, signal) {
         const args = params as Record<string, unknown>;
-        return runTool(tool.name, tool.method, args, tool.pick(params as never), signal);
+        return runTool(config, tool.name, tool.method, args, tool.pick(params as never), signal);
       },
     });
   }

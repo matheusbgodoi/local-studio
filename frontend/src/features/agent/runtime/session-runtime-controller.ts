@@ -44,8 +44,6 @@ const RESUME_RECONNECT_DELAY_MS = 1_000;
 const RUNTIME_POLL_INTERVAL_MS = 5_000;
 const RUNTIME_POLL_IDLE_GRACE_MS = 10_000;
 
-type ScheduleFrame = (callback: () => void) => { cancel: () => void };
-
 export type SessionRuntimeBinding = {
   /** Single state commit boundary — one patchSession dispatch per call. */
   commit: (sessionId: SessionId, patch: (session: Session) => Session) => void;
@@ -53,19 +51,6 @@ export type SessionRuntimeBinding = {
   getSession: (sessionId: SessionId) => Session | undefined;
   /** Read all current workspace sessions (the binding's live ref). */
   getSessions: () => readonly Session[];
-};
-
-export type SessionRuntimeControllerDeps = {
-  api?: Partial<{
-    listRuntimeSessions: typeof listRuntimeSessions;
-    loadRuntimeStatus: typeof loadRuntimeStatus;
-    subscribeRuntimeEvents: typeof subscribeRuntimeEvents;
-  }>;
-  scheduleFrame?: ScheduleFrame;
-  reconnectDelayMs?: number;
-  idleReconnectMs?: number;
-  pollIntervalMs?: number;
-  pollIdleGraceMs?: number;
 };
 
 export type SessionRuntimeController = {
@@ -128,6 +113,7 @@ function patchRuntimeStatus(status: RuntimeStatus): Partial<Session> {
   return {
     ...(status.piSessionId ? { piSessionId: status.piSessionId } : {}),
     ...(status.modelId ? { modelId: status.modelId } : {}),
+    ...(status.networkPolicy ? { networkPolicy: status.networkPolicy } : {}),
     ...(status.contextUsage !== undefined ? { contextUsage: status.contextUsage } : {}),
   };
 }
@@ -137,20 +123,13 @@ function sameRuntimePatch(session: Session, patch: Partial<Session>, status: str
     session.status === status &&
     (patch.piSessionId === undefined || session.piSessionId === patch.piSessionId) &&
     (patch.modelId === undefined || session.modelId === patch.modelId) &&
+    (patch.networkPolicy === undefined || session.networkPolicy === patch.networkPolicy) &&
     (patch.contextUsage === undefined ||
       JSON.stringify(session.contextUsage ?? null) === JSON.stringify(patch.contextUsage ?? null))
   );
 }
 
-export function createSessionRuntimeController(
-  deps: SessionRuntimeControllerDeps = {},
-): SessionRuntimeController {
-  const api = { listRuntimeSessions, loadRuntimeStatus, subscribeRuntimeEvents, ...deps.api };
-  const reconnectDelayMs = deps.reconnectDelayMs ?? RESUME_RECONNECT_DELAY_MS;
-  const idleReconnectMs = deps.idleReconnectMs ?? RESUME_IDLE_RECONNECT_MS;
-  const pollIntervalMs = deps.pollIntervalMs ?? RUNTIME_POLL_INTERVAL_MS;
-  const pollIdleGraceMs = deps.pollIdleGraceMs ?? RUNTIME_POLL_IDLE_GRACE_MS;
-
+export function createSessionRuntimeController(): SessionRuntimeController {
   let binding: SessionRuntimeBinding | null = null;
   const cursors = new Map<SessionId, RuntimeCursor>();
   const streamContext: SessionStreamContext = { liveAssistantIds: new Map() };
@@ -227,7 +206,6 @@ export function createSessionRuntimeController(
   // imperative facade is unchanged so the controller's contract holds.
   const coalescer = createEffectTextDeltaCoalescer({
     applyPiEvent: applyEvent,
-    scheduleFrame: deps.scheduleFrame,
   });
 
   const enqueueEvent = (
@@ -339,7 +317,8 @@ export function createSessionRuntimeController(
   // the finish (genuine restart) and ends the grace early.
   const withinFinishGrace = (sessionId: SessionId, fetchStartedAt: number): boolean => {
     const finishedAt = turnFinishedAt.get(sessionId);
-    if (finishedAt === undefined || fetchStartedAt - finishedAt >= pollIdleGraceMs) return false;
+    if (finishedAt === undefined || fetchStartedAt - finishedAt >= RUNTIME_POLL_IDLE_GRACE_MS)
+      return false;
     const acceptedAt = turnAcceptedAt.get(sessionId);
     return acceptedAt === undefined || acceptedAt <= finishedAt;
   };
@@ -475,7 +454,8 @@ export function createSessionRuntimeController(
   // the active branch is the recovery path and must always apply.
   const idleFromRuntimeList = (session: Session, status: RuntimeStatus, fetchStartedAt: number) => {
     const acceptedAt = turnAcceptedAt.get(session.id);
-    if (acceptedAt !== undefined && fetchStartedAt - acceptedAt < pollIdleGraceMs) return;
+    if (acceptedAt !== undefined && fetchStartedAt - acceptedAt < RUNTIME_POLL_IDLE_GRACE_MS)
+      return;
     const patch = patchRuntimeStatus(status);
     dropLiveTarget(session.id);
     commit(session.id, (current) => {
@@ -503,7 +483,7 @@ export function createSessionRuntimeController(
         const epoch = pollEpoch;
         const fetchStartedAt = Date.now();
         const entries = yield* Effect.tryPromise({
-          try: () => api.listRuntimeSessions(),
+          try: () => listRuntimeSessions(),
           catch: (error) => error,
         });
         if (epoch !== pollEpoch || !binding) return;
@@ -536,20 +516,19 @@ export function createSessionRuntimeController(
       if (closed || reconnecting) return;
       reconnecting = true;
       sub?.close();
-      // Capped fixed-delay reconnect on a real timer so it is interruptible on
-      // close and deterministically drivable under test clocks.
+      // Capped fixed-delay reconnect on a real timer so close can interrupt it.
       reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
         reconnecting = false;
         if (!closed) connect();
-      }, reconnectDelayMs);
+      }, RESUME_RECONNECT_DELAY_MS);
     };
 
     const reconcileLiveness = () => {
       void Effect.runPromise(
         Effect.gen(function* () {
           const status = yield* Effect.tryPromise({
-            try: () => api.loadRuntimeStatus(runtime, piSessionId),
+            try: () => loadRuntimeStatus(runtime, piSessionId),
             catch: () => null,
           });
           if (closed) return;
@@ -592,7 +571,7 @@ export function createSessionRuntimeController(
       // (Re)connect from the highest RECEIVED seq — an unflushed coalesced
       // delta is still in memory, so replaying it would double-apply.
       const after = reconnectAfter(cursors.get(sessionId) ?? adoptExternalCursor(undefined));
-      sub = api.subscribeRuntimeEvents(runtime, after, piSessionId, {
+      sub = subscribeRuntimeEvents(runtime, after, piSessionId, {
         onPayload: (payload) => {
           if (closed) return;
           lastPayloadAt = Date.now();
@@ -609,12 +588,12 @@ export function createSessionRuntimeController(
     connect();
 
     const watchdogFiber =
-      idleReconnectMs > 0
+      RESUME_IDLE_RECONNECT_MS > 0
         ? (Effect.runFork(
             Effect.sync(() => {
-              if (closed || Date.now() - lastPayloadAt < idleReconnectMs) return;
+              if (closed || Date.now() - lastPayloadAt < RESUME_IDLE_RECONNECT_MS) return;
               void reconcileLiveness();
-            }).pipe(Effect.repeat(Schedule.spaced(idleReconnectMs))),
+            }).pipe(Effect.repeat(Schedule.spaced(RESUME_IDLE_RECONNECT_MS))),
           ) as never)
         : null;
 
@@ -716,12 +695,10 @@ export function createSessionRuntimeController(
     pollNow: () => {
       stopPoll();
       if (!binding || binding.getSessions().length === 0) return;
-      // One immediate reconcile, then a steady interval. setInterval (unlike
-      // Effect.repeat) does not fire an extra immediate iteration, so pollNow
-      // produces exactly one fetch up front, and the timer is drivable under a
-      // test clock.
+      // One immediate reconcile, then a steady interval. setInterval does not
+      // fire an extra immediate iteration, so pollNow produces one fetch up front.
       void pollOnce();
-      pollTimer = setInterval(() => void pollOnce(), pollIntervalMs);
+      pollTimer = setInterval(() => void pollOnce(), RUNTIME_POLL_INTERVAL_MS);
     },
     closeAll: () => {
       stopPoll();

@@ -4,7 +4,8 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { Effect } from "effect";
 import { listProjectsFromStore, resolveAllowedWorkspace } from "./projects-store";
-import { hasEnabledConnectorsSync } from "./connectors-service";
+import { hasEagerConnectorsSync } from "./connectors-service";
+import { defaultSkillSources } from "./skill-discovery";
 import type { AgentThinkingLevel, AgentToolAccess } from "../../../shared/agent/agent-turn";
 
 export type RuntimeSkillRef = {
@@ -19,15 +20,85 @@ export type RuntimePromptTemplateRef = {
   path?: string;
 };
 
+import type { NetworkPolicy } from "../../../shared/agent/network-policy";
+import type { ExecutionPolicy } from "../../../shared/agent/execution-policy";
+
 export type RuntimeStartOptions = {
   thinkingLevel?: AgentThinkingLevel;
   toolAccess?: AgentToolAccess;
-  browserToolEnabled?: boolean;
+  networkPolicy?: NetworkPolicy;
+  executionPolicy?: ExecutionPolicy;
   browserSessionId?: string;
   browserBackend?: "embedded" | "sitegeist";
   skills?: RuntimeSkillRef[];
   promptTemplates?: RuntimePromptTemplateRef[];
 };
+
+// ---------------------------------------------------------------------------
+// Personal skills: discoverable by /skill:, invisible to the model.
+//
+// Pi resolves `/skill:<name>` against resourceLoader.getSkills().skills
+// (dist/core/agent-session.js _expandSkillCommand), so it can only expand a
+// skill it has DISCOVERED. But the same list feeds formatSkillsForPrompt
+// (dist/core/skills.js), which dumps <available_skills> — name, description and
+// location — into EVERY system prompt.
+//
+// formatSkillsForPrompt filters `disableModelInvocation` out; _expandSkillCommand
+// does not. Marking the personal roots model-invocation-disabled therefore buys
+// resolvable /skill:name at ZERO prompt cost. We do it at runtime through the
+// resource loader's `skillsOverride` hook instead of writing frontmatter into
+// the user's skill repos.
+// ---------------------------------------------------------------------------
+
+export type PiSkillLike = { filePath: string; disableModelInvocation?: boolean };
+type PiSkillDiagnostic = { path?: string };
+
+/** Roots Studio's own catalogue walks (skill-discovery.ts). Only existing dirs
+ *  are handed to Pi so its loader never emits "skill path does not exist". */
+export function personalSkillRoots(): string[] {
+  return uniqueExistingPaths(defaultSkillSources().map((entry) => entry.dir));
+}
+
+export function isPersonalSkillPath(filePath: string, roots: string[]): boolean {
+  const resolved = path.resolve(filePath);
+  return roots.some((root) => {
+    const base = path.resolve(root);
+    return (
+      resolved === base || resolved.startsWith(base.endsWith(path.sep) ? base : base + path.sep)
+    );
+  });
+}
+
+/** Pure `skillsOverride`: hide every personal skill from the system prompt while
+ *  leaving it in the set /skill:<name> resolves against. Bundled Studio skills
+ *  (the browser skill) live outside these roots and stay model-invocable. */
+export function markPersonalSkillsModelInvocationDisabled<
+  T extends { skills: PiSkillLike[]; diagnostics: PiSkillDiagnostic[] },
+>(base: T, roots: string[]): T {
+  if (roots.length === 0) return base;
+  return {
+    ...base,
+    skills: base.skills.map((skill) =>
+      skill.disableModelInvocation || !isPersonalSkillPath(skill.filePath, roots)
+        ? skill
+        : { ...skill, disableModelInvocation: true },
+    ),
+    // Before this policy Pi never loaded the personal roots, so it never
+    // reported on them. Handing it hundreds of third-party SKILL.md files must
+    // not start filling the diagnostics panel with their name collisions and
+    // description warnings — those belong to the skill repos, not to Studio.
+    diagnostics: base.diagnostics.filter(
+      (diagnostic) =>
+        typeof diagnostic.path !== "string" || !isPersonalSkillPath(diagnostic.path, roots),
+    ),
+  };
+}
+
+export function personalSkillsOverride<
+  T extends { skills: PiSkillLike[]; diagnostics: PiSkillDiagnostic[] },
+>(roots: string[] = personalSkillRoots()): (base: T) => T {
+  return (base) => markPersonalSkillsModelInvocationDisabled(base, roots);
+}
 
 export type AgentSessionOptionsInput = {
   options: RuntimeStartOptions;
@@ -53,7 +124,7 @@ function resolveDefaultAgentCwd(): string {
     const usable = listProjectsFromStore().find((entry) => entry.exists);
     if (usable) return usable.path;
   } catch {
-    // The project registry is optional during first run and test setup.
+    // The project registry is optional during first run.
   }
 
   const cwd = process.cwd();
@@ -215,7 +286,14 @@ export function runtimeOptionsFingerprint(options: RuntimeStartOptions): string 
   return JSON.stringify({
     thinkingLevel: options.thinkingLevel ?? "high",
     toolAccess: options.toolAccess ?? "full",
-    browser: options.browserToolEnabled === true,
+    //
+    // The network policy is in the fingerprint because it changes what the
+    // runtime's children are wrapped in, and a runtime already started with the
+    // wrong wrapper cannot be corrected in place. Browser is NOT in it any
+    // more: it is always loaded, so it can never differ between two starts.
+    //
+    networkPolicy: options.networkPolicy ?? "direct",
+    behaviorProfile: options.executionPolicy?.behaviorProfile ?? null,
     browserBackend: browserBackend(options),
     browserSessionId: options.browserSessionId ?? "",
     skills,
@@ -247,10 +325,6 @@ export function deriveFrontendBase(env: NodeJS.ProcessEnv = process.env): string
   return `http://127.0.0.1:${port}`;
 }
 
-function shouldLoadBrowserTool(options: RuntimeStartOptions): boolean {
-  return options.browserToolEnabled === true;
-}
-
 function browserBackend(options: RuntimeStartOptions): "embedded" | "sitegeist" {
   const backend = options.browserBackend ?? process.env.LOCAL_STUDIO_BROWSER_BACKEND;
   if (backend === "sitegeist") return "sitegeist";
@@ -270,14 +344,20 @@ function browserSkillPathFor(backend: "embedded" | "sitegeist"): string | null {
 function runtimeExtensionPaths(options: RuntimeStartOptions): string[] {
   const timeoutExtensionPath = resolveTimeoutExtensionPath();
   const agentPolicyExtensionPath = resolveAgentPolicyExtensionPath();
-  const browserExtensionPath = shouldLoadBrowserTool(options)
-    ? browserExtensionPathFor(browserBackend(options))
-    : null;
+  //
+  // The browser is a normal capability now. It used to be gated on a
+  // per-conversation switch, which described a tool rather than a route:
+  // turning it off never removed the agent's internet, because bash, curl,
+  // python, node, git and every MCP were still there. The model picks the right
+  // tool for the job, and what the traffic is allowed to do is the network
+  // policy's business, not the tool list's.
+  //
+  const browserExtensionPath = browserExtensionPathFor(browserBackend(options));
   return uniqueExistingPaths([
     timeoutExtensionPath,
     agentPolicyExtensionPath,
     browserExtensionPath,
-    hasEnabledConnectorsSync() ? resolveConnectorsExtensionPath() : null,
+    hasEagerConnectorsSync() ? resolveConnectorsExtensionPath() : null,
     resolveSubagentsExtensionPath(),
     // Lets the agent create/list/delete scheduled automations.
     resolveAutomationsExtensionPath(),
@@ -288,11 +368,16 @@ function runtimeExtensionPaths(options: RuntimeStartOptions): string[] {
 }
 
 function runtimeSkillPaths(options: RuntimeStartOptions): string[] {
-  const loadBrowser = shouldLoadBrowserTool(options);
   const backend = browserBackend(options);
   return uniqueExistingPaths([
     ...selectedSkillPaths(options.skills ?? []),
-    loadBrowser ? browserSkillPathFor(backend) : null,
+    browserSkillPathFor(backend),
+    // Personal roots are ALWAYS handed to Pi so `/skill:<name>` resolves. They
+    // cost nothing in the prompt because personalSkillsOverride marks them
+    // model-invocation-disabled, and they are not part of
+    // runtimeOptionsFingerprint (which hashes options.skills), so adding them
+    // never restarts a runtime.
+    ...personalSkillRoots(),
   ]);
 }
 
@@ -309,6 +394,17 @@ function runtimeEnvInjections(
     SITEGEIST_RELAY_TOKEN: env.SITEGEIST_RELAY_TOKEN ?? relay.SITEGEIST_RELAY_TOKEN ?? "",
     SITEGEIST_RELAY_SESSION_ID: options.browserSessionId ?? "",
   };
+}
+
+//
+// Whether the relay backend exists at all on this machine. The composer only
+// offers the browser-backend switch when it does — a control that switches to a
+// backend nobody configured is worse than no control, and it was sitting in the
+// composer's most valuable slot being mistaken for something else.
+//
+export function sitegeistRelayUrl(): string {
+  const env = process.env;
+  return (env.SITEGEIST_RELAY_URL ?? readSitegeistRelayEnv(env).SITEGEIST_RELAY_URL ?? "").trim();
 }
 
 function readSitegeistRelayEnv(env: NodeJS.ProcessEnv): Record<string, string> {

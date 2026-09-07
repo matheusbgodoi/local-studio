@@ -7,6 +7,7 @@ import type { ChatMessage, QueuedMessage, TokenStats } from "@/features/agent/me
 import type { ComposerSkillRef } from "@/features/agent/composer-context";
 import type { RuntimeContextUsage } from "@/features/agent/runtime/api";
 import type { AgentThinkingLevel } from "@/features/agent/contracts";
+import type { NetworkPolicy } from "@shared/agent/network-policy";
 
 // The session identity string — the same value a pane stores as `sessionId`.
 export type SessionId = string;
@@ -35,6 +36,11 @@ export type Session = {
   cwd?: string;
   modelId?: string;
   thinkingLevel?: AgentThinkingLevel;
+  // What this conversation asked the network boundary for. It rides with the
+  // session for the same reason `thinkingLevel` does — it is the owner's choice
+  // for THIS conversation, it must survive a reload, and two panes may differ.
+  // Absent means `DEFAULT_NETWORK_POLICY` ("direct").
+  networkPolicy?: NetworkPolicy;
   title: string;
   messages: ChatMessage[];
   status: SessionStatus;

@@ -1,7 +1,7 @@
 // Tool surface types — split into two pieces:
 //
 // 1. UI state (workspace-global): which side panel is open, panel width,
-//    browser tool toggle, browser URL.
+//    which browser backend drives the pane, browser URL.
 // 2. Per-session selection: which skills/templates the composer has armed for
 //    a given session. Lives in a flat map keyed by SessionId so panes /
 //    sessions stay independent of tool choice.
@@ -18,6 +18,7 @@ import type { SessionId } from "@/features/agent/runtime/types";
 export const COMPUTER_TAB_IDS = [
   "status",
   "tools",
+  "run",
   "side-chat",
   "browser",
   "files",
@@ -29,8 +30,9 @@ export type ComputerTab = (typeof COMPUTER_TAB_IDS)[number];
 
 export type BrowserBackend = "embedded" | "sitegeist";
 
+// The browser is a normal capability of every turn, so there is no on/off flag
+// here: only which backend drives it and what it is currently pointed at.
 export type BrowserState = {
-  enabled: boolean;
   backend: BrowserBackend;
   url: string;
   input: string;
@@ -61,6 +63,22 @@ export type ContextAttachRequest = {
 export type ToolSelection = {
   skills: ComposerSkillRef[];
   promptTemplates: ComposerPromptTemplateRef[];
+  /**
+   * Personal MCP connectors armed for this session (`/mcp <name>`), by
+   * connector id. Session-scoped and additive: a fresh session has none, so its
+   * request carries zero personal MCP tool schemas. Deliberately NOT persisted
+   * with the tab — activation belongs to a live agent session, not to a pane
+   * that was reopened.
+   */
+  connectors?: string[];
+};
+
+/** A personal connector the user can arm, as the composer sees it. */
+export type ConnectorCatalogueRow = {
+  connectorId: string;
+  alias: string;
+  label: string;
+  description: string;
 };
 
 export type ToolSelectionMap = ReadonlyMap<SessionId, ToolSelection>;
@@ -68,4 +86,5 @@ export type ToolSelectionMap = ReadonlyMap<SessionId, ToolSelection>;
 export const EMPTY_SELECTION: ToolSelection = {
   skills: [],
   promptTemplates: [],
+  connectors: [],
 };

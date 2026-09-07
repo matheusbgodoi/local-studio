@@ -168,7 +168,7 @@ export function VoiceCreator({
             onChange={onConsent}
             disabled={pending !== null}
             label="I confirm this is my own voice and consent to cloning it on this controller."
-            description="Local Studio rejects voice profiles without this explicit confirmation."
+            description="CRIAs AI rejects voice profiles without this explicit confirmation."
           />
           <Button onClick={() => void save()} loading={pending === "create"} disabled={!canCreate}>
             Save voice profile
