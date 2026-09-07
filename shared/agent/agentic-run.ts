@@ -1,3 +1,4 @@
+import { OperationalCheckSchema, OperationalWitnessSchema } from "./operational-check";
 import { Schema } from "effect";
 import { NetworkPolicySchema } from "./network-policy";
 
@@ -67,6 +68,9 @@ export const AcceptanceCriterionSchema = Schema.Struct({
   satisfied: Schema.Boolean,
   evidence: nullableString,
   evidenceSource: Schema.optional(Schema.Literals(["model_report", "runtime_observation"])),
+  check: Schema.optional(OperationalCheckSchema),
+  checkSource: Schema.optional(Schema.Literal("model_declared")),
+  witness: Schema.optional(OperationalWitnessSchema),
 });
 
 export const AgenticRunSchema = Schema.Struct({

@@ -54,3 +54,13 @@ SOURCE FINDING: the frontend proxied the long-running subagent POST through glob
 DECIDED / APPLIED in source: only the subagent POST uses native Node HTTP/HTTPS with a bounded fifteen-minute-plus-thirty-second response envelope. Caller cancellation and downstream response cancellation still reach the upstream request. Other runtime proxy routes retain their existing transport. No dependency or background replay mechanism was added. [Node HTTP request documentation](https://nodejs.org/docs/latest-v22.x/api/http.html#httprequesturl-options-callback) documents the AbortSignal cancellation used here.
 
 MEASURED / PROVEN offline: a hand-run `bun:test` check launches the actual Node frontend helper against temporary loopback endpoints and verifies delayed headers, response/status preservation, caller abort, explicit deadline and downstream stream disposal. Bun's own Node HTTP emulation did not implement these cancellation semantics in the initial probe; the qualifying process uses Node, matching the packaged frontend. This does not substitute for installed acceptance beyond the previous five-minute header boundary.
+
+## Operational check contracts (source qualification)
+
+DECIDED / APPLIED in source: durable plans may declare an exact command and workspace-relative cwd (expected exit code zero), or an exact file path and SHA-256. Plain acceptance strings remain model-reported assertions. The runtime assigns `model_declared` provenance and ignores proposed satisfaction/witness fields. A changed plan invalidates operational evidence rather than carrying it by description.
+
+An execution owner is captured only for the exact working logical agent, its current RUNNING task, the matching unique RUNNING attempt, and the current plan revision. Conversation-level active-task guesses cannot produce this binding. New operational criteria also require a witness reference; the existing completion guard remains enforced.
+
+TARGET / NOT APPLIED at this milestone: raw execution capture and automatic witness writing. These contracts alone do not restore autonomous executable acceptance. A genuine successful execution proves the declared check's outcome, not that a model-selected check adequately tests the owner's goal. Independent check provenance and tamper-resistant isolation are not implemented.
+
+MEASURED / PROVEN: deterministic offline schema/provenance/ownership checks, existing control-plane/control-tool checks, and runtime TypeScript qualification. Installed acceptance remains separate.

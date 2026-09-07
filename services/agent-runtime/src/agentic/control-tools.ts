@@ -1,3 +1,5 @@
+import { Schema } from "effect";
+import { ProposedAcceptanceSchema } from "../../../../shared/agent/operational-check";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { agenticControlHost } from "./control-host";
 import { validateProgress, validateProposal } from "./control-plane";
@@ -23,9 +25,9 @@ const TASK_ITEM = {
     },
     acceptance: {
       type: "array",
-      items: { type: "string" },
+      items: Schema.toJsonSchemaDocument(ProposedAcceptanceSchema).schema,
       description:
-        "What observable evidence would prove this task done. One entry per check, stated so it can be verified by running something.",
+        "Assertions are model reports. Use {description, check:{kind:command, command, cwd}} for an exact command with exit code zero, or {description, check:{kind:file, path, sha256}} for exact bytes. Paths are workspace-relative. These are model-declared operational checks, not independent proof of the goal.",
     },
   },
 } as const;
@@ -48,8 +50,8 @@ export const AGENTIC_ROUTING_INSTRUCTIONS = [
   "Durable work runtime:",
   "- When a request is substantial multi-step work that should survive this conversation — building, refactoring, migrating, investigating across many steps — call `plan_agentic_run` FIRST, with a plan, and then carry it out.",
   "- When a request is a question, an explanation, a lookup or a single small edit, just answer. Do NOT create a run for it.",
-  "- Inside a run, report through `report_task_progress` rather than by describing progress in prose. State the evidence that proves each acceptance criterion — the command you ran and what it printed.",
-  "- A task is finished when its acceptance criteria are met, not when you feel done. The runtime enforces that.",
+  "- Inside a run, report through `report_task_progress` rather than by describing progress in prose. Report what you observed; prose is model-reported evidence, never execution proof.",
+  "- Executable criteria require runtime observations matching their declared specifications. Assertions remain model-reported; a passing model-declared check is not independent verification of the goal.",
   "- If the approach is not working, call `revise_agentic_plan` with what you learned instead of repeating the same attempt.",
 ].join("\n");
 

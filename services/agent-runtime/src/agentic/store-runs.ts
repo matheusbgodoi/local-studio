@@ -210,7 +210,7 @@ export function createRunStore(context: AgenticStoreContext) {
         );
         const provenByDescription = new Map(
           (carried?.acceptance ?? [])
-            .filter(criterionIsSatisfied)
+            .filter((criterion) => criterionIsSatisfied(criterion) && !criterion.check)
             .map((criterion) => [`${criterion.kind}:${criterion.description}`, criterion] as const),
         );
         const acceptance = JSON.stringify(

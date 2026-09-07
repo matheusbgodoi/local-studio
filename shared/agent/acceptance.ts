@@ -7,7 +7,7 @@ export function requiresRuntimeEvidence(criterion: AcceptanceCriterion): boolean
 export function criterionIsSatisfied(criterion: AcceptanceCriterion): boolean {
   return (
     criterion.satisfied &&
-    (!requiresRuntimeEvidence(criterion) || criterion.evidenceSource === "runtime_observation")
+    (!requiresRuntimeEvidence(criterion) || (criterion.evidenceSource === "runtime_observation" && (!criterion.check || !!criterion.witness)))
   );
 }
 

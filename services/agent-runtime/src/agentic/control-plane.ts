@@ -1,3 +1,5 @@
+import { Schema } from "effect";
+import { ProposedAcceptanceSchema, type ProposedAcceptance } from "../../../../shared/agent/operational-check";
 import { criterionIsSatisfied } from "../../../../shared/agent/acceptance";
 import type { AcceptanceCriterion, AgenticTask } from "./contract";
 import { validatePlan } from "./dag";
@@ -14,7 +16,7 @@ export type ProposedTask = {
   title: string;
   description: string;
   dependsOn?: string[];
-  acceptance: string[];
+  acceptance: ProposedAcceptance[];
 };
 
 export type ProposedAgent = {
@@ -77,7 +79,23 @@ export function validateProposal(input: unknown): ValidatedPlan | ValidationFail
     if (titles.has(title)) return { ok: false, reason: `two tasks share the title "${title}"` };
     titles.add(title);
 
-    const acceptance = asStringArray(task.acceptance);
+    let acceptance: ProposedAcceptance[];
+    try {
+      acceptance = Schema.decodeUnknownSync(Schema.Array(ProposedAcceptanceSchema))(task.acceptance).map((entry) => {
+        if (typeof entry === "string") {
+          if (!entry.trim()) throw new Error("empty criterion");
+          return entry.trim();
+        }
+        const check = entry.check;
+        const relative = check.kind === "command" ? check.cwd : check.path;
+        if (!entry.description.trim() || !relative || relative.startsWith("/") || relative.includes("\\") || relative.split("/").includes("..") || relative.includes("\0")) throw new Error("invalid check path");
+        if (check.kind === "command" && (!check.command.trim() || check.command.length > MAX_TEXT_LENGTH || check.command.includes("\0"))) throw new Error("invalid command");
+        if (check.kind === "file" && !/^[a-f0-9]{64}$/.test(check.sha256)) throw new Error("file check requires an exact lowercase SHA-256");
+        return entry;
+      });
+    } catch {
+      return { ok: false, reason: `task "${title}" needs nonempty assertions or exact command/file check specifications with workspace-relative paths` };
+    }
     if (acceptance.length === 0) {
       return {
         ok: false,
@@ -96,10 +114,11 @@ export function validateProposal(input: unknown): ValidatedPlan | ValidationFail
       description: trimmed(task.description, MAX_TEXT_LENGTH) || title,
       dependencies: asStringArray(task.dependsOn),
       acceptance: acceptance.map(
-        (description, position): AcceptanceCriterion => ({
+        (entry, position): AcceptanceCriterion => ({
           id: criterionId(index, position),
-          description: description.slice(0, MAX_TEXT_LENGTH),
-          kind: "assertion",
+          description: (typeof entry === "string" ? entry : entry.description).slice(0, MAX_TEXT_LENGTH),
+          kind: typeof entry === "string" ? "assertion" : entry.check.kind,
+          ...(typeof entry === "string" ? {} : { check: entry.check, checkSource: "model_declared" as const }),
           satisfied: false,
           evidence: null,
         }),

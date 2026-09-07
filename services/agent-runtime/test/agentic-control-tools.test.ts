@@ -1,14 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-// Relative on purpose: bun resolves no `@/` alias from this package.
 import { setAgenticControlHost, type AgenticControlHost } from "../src/agentic/control-host";
 import { AGENTIC_ROUTING_INSTRUCTIONS, createAgenticControlExtension } from "../src/agentic/control-tools";
 import { createFakeExtensionApi } from "./support/fake-extension-api";
 import { createHarness, createTestControlHost, type Harness } from "./support/agentic-harness";
-
-//
-// These drive the tools exactly as the model does — same names, same argument
-// shapes, same return strings — with only the model itself absent.
-//
 
 const CHAT_SESSION = "chat-session";
 
@@ -136,8 +130,6 @@ describe("progress is reported through a tool, and checked", () => {
     const { harness, fake } = boot();
     await fake.callTool("plan_agentic_run", plan);
     const runId = harness.store.listRuns()[0]?.id as string;
-    // "Prove it" depends on "Write it": finish the dependency the way the model
-    // would, so the task under test is genuinely startable.
     harness.store.updateTask(harness.store.listTasks(runId)[0]?.id as string, { status: "SUCCEEDED" });
     const prove = harness.store.listTasks(runId)[1];
 
@@ -163,8 +155,7 @@ describe("progress is reported through a tool, and checked", () => {
       ],
       complete: true,
     });
-    // Settled on the spot, not one inference later.
-    expect(reply).toContain("marked this task complete");
+    expect(reply).toContain("model-reported completion");
     expect(harness.store.requireTask(prove?.id as string).status).toBe("SUCCEEDED");
   });
 
@@ -220,17 +211,6 @@ describe("the model can rewrite its own plan", () => {
     expect(harness.store.requireRun(runId).planRevision).toBe(1);
   });
 });
-
-//
-// Raised by an adversarial review of the control plane and confirmed against
-// the code before being fixed.
-//
-//
-// Found by the first real-Qwen acceptance run. A capable model did thirty tool
-// calls inside ONE turn: it proved a task, watched it stay RUNNING because the
-// runtime only adjudicated between turns, saw its dependents still BLOCKED, and
-// burned two plan revisions working around a gate that had already been met.
-//
 describe("the plan moves while the model is still working", () => {
   test("a task whose criteria are all met settles at once, and its dependents open", async () => {
     const { harness, fake } = boot();
@@ -246,11 +226,9 @@ describe("the plan moves while the model is still working", () => {
       evidence: [{ criterion: "t1c1", evidence: "cat stats.py showed mean and median" }],
       complete: true,
     });
-
-    // Settled inside the turn, not one inference later.
     expect(harness.store.requireTask(write?.id as string).status).toBe("SUCCEEDED");
     expect(harness.store.requireTask(prove?.id as string).status).toBe("READY");
-    expect(reply).toContain("marked this task complete");
+    expect(reply).toContain("model-reported completion");
     expect(reply).toContain("Now ready to start: Prove it");
   });
 
@@ -267,8 +245,6 @@ describe("the plan moves while the model is still working", () => {
         { title: "Prove it", acceptance: ["the selftest printed OK"] },
       ],
     });
-
-    // No dependencies left, so nothing may still read as blocked.
     for (const task of harness.store.listTasks(runId)) {
       expect(task.dependencies.length).toBe(0);
       expect(task.status).not.toBe("BLOCKED");
