@@ -95,6 +95,7 @@ export class PlaywrightManager {
   private profileClosed = false;
   private stopping: Promise<void> | null = null;
   private closing: Promise<void> | null = null;
+  private removing: Promise<void> | null = null;
 
   isAvailable(): boolean {
     return findBrowserBinary() !== null;
@@ -120,7 +121,8 @@ export class PlaywrightManager {
 
   async ensure(): Promise<BrowserContext> {
     if (this.stopping) await this.stopping;
-    if (this.closing) throw new Error("Browser is still closing; retry after cleanup completes");
+    if (this.closing || this.removing)
+      throw new Error("Browser is still closing; retry after cleanup completes");
     managers.add(this);
     if (this.context) return this.context;
     if (this.launching) return this.launching;
@@ -177,7 +179,8 @@ export class PlaywrightManager {
 
   async setInteractive(headful: boolean): Promise<BrowserContext> {
     if (this.stopping) await this.stopping;
-    if (this.closing) throw new Error("Browser is still closing; retry after cleanup completes");
+    if (this.closing || this.removing)
+      throw new Error("Browser is still closing; retry after cleanup completes");
     if (this.headful === headful && this.context) return this.context;
     if (this.launching) await this.launching.catch(() => undefined);
     const previous = this.context;
@@ -197,40 +200,55 @@ export class PlaywrightManager {
   private async closeProfile(): Promise<void> {
     const pending = this.launching;
     if (pending && !(await finishBrowserCleanup("browser startup", () => pending))) return;
+    if (this.closing) {
+      const closing = this.closing;
+      await finishBrowserCleanup("context closure", () => closing);
+      return;
+    }
     const context = this.context;
     if (context) {
-      if (!this.closing) {
-        const closing = Promise.resolve()
-          .then(() => context.close())
-          .then(() => {
-            if (this.context === context) {
-              this.profileClosed = true;
-              this.context = null;
-            }
-          })
-          .finally(() => {
-            if (this.closing === closing) this.closing = null;
-          });
-        this.closing = closing;
-      }
-      const closing = this.closing;
-      if (!(await finishBrowserCleanup("context closure", () => closing))) return;
+      const closing = Promise.resolve()
+        .then(() => context.close())
+        .then(async () => {
+          if (this.context === context) {
+            this.profileClosed = true;
+            this.context = null;
+          }
+          if (!this.context) await this.removeClosedProfile();
+          managers.delete(this);
+        })
+        .catch(() => {
+          if (!this.context || this.context === context) this.profileClosed = false;
+          console.warn("[browser] close cleanup failed; child profile retained");
+        })
+        .finally(() => {
+          if (this.closing === closing) this.closing = null;
+        });
+      this.closing = closing;
+      await finishBrowserCleanup("context closure", () => closing);
+      return;
     }
-    if (this.temporaryProfile) {
-      if (!this.profileClosed) {
-        console.warn("[browser] child profile retained because browser closure was not confirmed");
-      } else {
-        const directory = this.temporaryProfile;
-        if (
-          await finishBrowserCleanup("temporary profile removal", () =>
-            rm(directory, { recursive: true, force: true }),
-          )
-        ) {
-          this.temporaryProfile = null;
-        }
-      }
-    }
+    await finishBrowserCleanup("temporary profile removal", () => this.removeClosedProfile());
     managers.delete(this);
+  }
+
+  private async removeClosedProfile(): Promise<void> {
+    if (this.removing) return this.removing;
+    const directory = this.temporaryProfile;
+    if (!directory) return;
+    if (!this.profileClosed || this.context) {
+      console.warn("[browser] child profile retained because browser closure was not confirmed");
+      return;
+    }
+    const removing = rm(directory, { recursive: true, force: true })
+      .then(() => {
+        if (this.temporaryProfile === directory) this.temporaryProfile = null;
+      })
+      .finally(() => {
+        if (this.removing === removing) this.removing = null;
+      });
+    this.removing = removing;
+    return removing;
   }
 }
 
