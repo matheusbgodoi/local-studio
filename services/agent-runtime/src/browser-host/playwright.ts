@@ -120,6 +120,7 @@ export class PlaywrightManager {
 
   async ensure(): Promise<BrowserContext> {
     if (this.stopping) await this.stopping;
+    if (this.closing) throw new Error("Browser is still closing; retry after cleanup completes");
     managers.add(this);
     if (this.context) return this.context;
     if (this.launching) return this.launching;
@@ -161,8 +162,10 @@ export class PlaywrightManager {
       .then((context) => {
         this.context = context;
         context.once("close", () => {
-          this.profileClosed = true;
-          if (this.context === context) this.context = null;
+          if (this.context === context) {
+            this.profileClosed = true;
+            this.context = null;
+          }
         });
         return context;
       })
@@ -173,6 +176,8 @@ export class PlaywrightManager {
   }
 
   async setInteractive(headful: boolean): Promise<BrowserContext> {
+    if (this.stopping) await this.stopping;
+    if (this.closing) throw new Error("Browser is still closing; retry after cleanup completes");
     if (this.headful === headful && this.context) return this.context;
     if (this.launching) await this.launching.catch(() => undefined);
     const previous = this.context;
@@ -194,15 +199,22 @@ export class PlaywrightManager {
     if (pending && !(await finishBrowserCleanup("browser startup", () => pending))) return;
     const context = this.context;
     if (context) {
-      this.closing ??= Promise.resolve()
-        .then(() => context.close())
-        .finally(() => {
-          this.closing = null;
-        });
+      if (!this.closing) {
+        const closing = Promise.resolve()
+          .then(() => context.close())
+          .then(() => {
+            if (this.context === context) {
+              this.profileClosed = true;
+              this.context = null;
+            }
+          })
+          .finally(() => {
+            if (this.closing === closing) this.closing = null;
+          });
+        this.closing = closing;
+      }
       const closing = this.closing;
       if (!(await finishBrowserCleanup("context closure", () => closing))) return;
-      this.profileClosed = true;
-      this.context = null;
     }
     if (this.temporaryProfile) {
       if (!this.profileClosed) {
