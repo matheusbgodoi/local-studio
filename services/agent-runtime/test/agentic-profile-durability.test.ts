@@ -71,9 +71,9 @@ describe("the durable runtime records the checkpoint and the profile, and confus
     const [physical] = groupByPhysicalModel(normalizeOpenAIModels(LIVE_MODELS));
     expect(physical?.primary.id).toBe("qwen-daily");
     expect(physical?.primary.behaviorProfile).toBe("standard");
-    expect(physical?.profiles.find((entry) => entry.id === "qwen-uncensored")?.behaviorProfileDefault).toBe(
-      undefined,
-    );
+    expect(
+      physical?.profiles.find((entry) => entry.id === "qwen-uncensored")?.behaviorProfileDefault,
+    ).toBe(undefined);
   });
 
   test("a run persists both, and a restart restores both unchanged", () => {
@@ -100,6 +100,7 @@ describe("the durable runtime records the checkpoint and the profile, and confus
         sessionId: "s",
         piSessionId: "p",
         cwd: "/tmp/p",
+        networkPolicy: "vpn_protected",
       });
       first.store.close();
 
@@ -109,6 +110,7 @@ describe("the durable runtime records the checkpoint and the profile, and confus
         expect(restored.modelId).toBe("qwen-uncensored");
         expect(restored.physicalModelId).toBe("qwen-daily");
         expect(restored.behaviorProfile).toBe("uncensored");
+        expect(restored.networkPolicy).toBe("vpn_protected");
         expect(restored.contextWindow).toBe(176_128);
       } finally {
         second.dispose();
@@ -121,9 +123,9 @@ describe("the durable runtime records the checkpoint and the profile, and confus
   test("compaction and resume never move the profile a run was started with", async () => {
     const harness = createHarness({
       model: {
-        id: "qwen-daily",
+        id: "qwen-uncensored",
         physicalModelId: "qwen-daily",
-        behaviorProfile: "standard",
+        behaviorProfile: "uncensored",
         contextWindow: 9_000,
         maxTokens: 2_000,
       },
@@ -149,12 +151,15 @@ describe("the durable runtime records the checkpoint and the profile, and confus
 
       expect(harness.store.listCheckpoints(run.id).length).toBeGreaterThanOrEqual(1);
       const finished = harness.store.requireRun(run.id);
-      expect(finished.behaviorProfile).toBe("standard");
+      expect(finished.behaviorProfile).toBe("uncensored");
+      expect(finished.networkPolicy).toBe("direct");
       expect(finished.physicalModelId).toBe("qwen-daily");
       const agent = harness.store.listAgents(run.id)[0];
-      expect(agent?.behaviorProfile).toBe("standard");
+      expect(agent?.behaviorProfile).toBe("uncensored");
       expect(agent?.physicalModelId).toBe("qwen-daily");
-      expect(harness.store.listEvents(run.id).some((event) => event.type === "COMPACTED")).toBe(true);
+      expect(harness.store.listEvents(run.id).some((event) => event.type === "COMPACTED")).toBe(
+        true,
+      );
     } finally {
       harness.dispose();
     }
@@ -214,7 +219,17 @@ describe("ordinary chat is not a Run and is left exactly as it was", () => {
   test("no agentic table takes a name the controller sweeps on every open", () => {
     const harness = createHarness();
     try {
-      const swept = ["jobs", "chat_sessions", "chat_messages", "chat_runs", "chat_usage", "sessions", "messages", "runs", "usage"];
+      const swept = [
+        "jobs",
+        "chat_sessions",
+        "chat_messages",
+        "chat_runs",
+        "chat_usage",
+        "sessions",
+        "messages",
+        "runs",
+        "usage",
+      ];
       const present = harness.store.tableNames();
       expect(present).toContain("agentic_runs");
       for (const table of swept) expect(present).not.toContain(table);

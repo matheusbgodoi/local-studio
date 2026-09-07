@@ -6,6 +6,7 @@ import type { SubagentRun } from "../../../shared/agent/subagent";
 import {
   saveSubagentRun,
   readSubagentRuns,
+  readSessionExecutionPolicy,
   setSubagentLink,
   setSessionArchived,
   forgetSessionMetadata,
@@ -38,6 +39,11 @@ test("fresh process restores completed results and marks unfinished children int
     startedAt: "2026-09-07T00:00:00Z",
     finishedAt: null,
     cwd: dir,
+    modelId: "qwen-uncensored",
+    executionPolicy: {
+      behaviorProfile: "uncensored",
+      networkPolicy: "vpn_protected",
+    },
   };
   try {
     await Promise.all([
@@ -60,6 +66,10 @@ test("fresh process restores completed results and marks unfinished children int
       finishedAt: null,
     });
     expect(restored.find((x) => x.id === "run-a")?.error).toContain("not automatically resumed");
+    expect(restored.find((x) => x.id === "run-a")?.executionPolicy).toEqual({
+      behaviorProfile: "uncensored",
+      networkPolicy: "vpn_protected",
+    });
     expect(restored.find((x) => x.id === "run-b")).toMatchObject({
       status: "done",
       result: "Observed module map",
@@ -67,6 +77,10 @@ test("fresh process restores completed results and marks unfinished children int
     });
     expect(freshList(dir, "other-parent")).toEqual([]);
     expect(readSubagentRuns("parent").find((x) => x.id === "run-a")?.status).toBe("running");
+    expect(readSessionExecutionPolicy("child-a")).toEqual({
+      behaviorProfile: "uncensored",
+      networkPolicy: "vpn_protected",
+    });
     await forgetSessionMetadata("child-b");
     expect(freshList(dir, "parent").map((x) => x.id)).toEqual(["run-a"]);
   } finally {
