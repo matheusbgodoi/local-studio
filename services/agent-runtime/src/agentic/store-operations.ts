@@ -1,12 +1,3 @@
-//
-// Tool operations, artifacts and compaction checkpoints.
-//
-// A side-effecting operation carries an idempotency key and a request hash.
-// After a crash the runtime asks this table what it had already done, and an
-// operation that was in flight is handed back for RECONCILIATION against the
-// real external state rather than blindly replayed.
-//
-
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -48,14 +39,10 @@ export type RecordArtifactInput = {
 };
 
 export const hashRequest = (request: unknown): string =>
-  createHash("sha256").update(JSON.stringify(request ?? null)).digest("hex");
+  createHash("sha256")
+    .update(JSON.stringify(request ?? null))
+    .digest("hex");
 
-//
-// Four characters per token is the ratio the runtime uses everywhere it must
-// size a payload it has not tokenised. It is deliberately an over-estimate for
-// prose and an under-estimate for nothing that matters: the budget only needs
-// to know whether a payload is small, large, or absurd.
-//
 export const estimateTokens = (content: string): number => Math.ceil(content.length / 4);
 
 const PREVIEW_HEAD = 1200;
@@ -86,7 +73,11 @@ export function createOperationStore(context: AgenticStoreContext, artifactsRoot
   const setStatus = (
     key: string,
     status: AgenticOperationStatus,
-    patch: { externalState?: string | null; resultArtifactId?: string | null; result?: unknown } = {},
+    patch: {
+      externalState?: string | null;
+      resultArtifactId?: string | null;
+      result?: unknown;
+    } = {},
   ): AgenticToolOperation => {
     const current = requireOperation(key);
     context.run(
@@ -95,7 +86,9 @@ export function createOperationStore(context: AgenticStoreContext, artifactsRoot
       status,
       patch.externalState === undefined ? current.externalState : patch.externalState,
       patch.resultArtifactId === undefined ? current.resultArtifactId : patch.resultArtifactId,
-      patch.result === undefined ? JSON.stringify(current.result ?? null) : JSON.stringify(patch.result ?? null),
+      patch.result === undefined
+        ? JSON.stringify(current.result ?? null)
+        : JSON.stringify(patch.result ?? null),
       ms(),
       key,
     );
@@ -132,13 +125,6 @@ export function createOperationStore(context: AgenticStoreContext, artifactsRoot
     }
     if (existing.requestHash !== requestHash) return { kind: "mismatch", operation: existing };
     if (existing.status === "COMMITTED") return { kind: "cached", operation: existing };
-    //
-    // Only UNKNOWN means "a process died with this in flight" — recovery is
-    // what puts an operation there. STARTED means this process began it and is
-    // still running it, which happens when a turn is aborted or when a model
-    // issues the same command twice in one batch. Treating STARTED as
-    // reconcile poisoned that command for the rest of the Run.
-    //
     if (existing.sideEffecting && existing.status === "UNKNOWN") {
       return { kind: "reconcile", operation: existing };
     }
@@ -205,6 +191,8 @@ export function createOperationStore(context: AgenticStoreContext, artifactsRoot
     reason: string;
     tokensBefore: number;
     tokensAfter: number;
+    beforeMeasured?: boolean;
+    afterMeasured?: boolean;
     targetTokens: number;
     usableLimit: number;
     durationMs: number;
@@ -218,8 +206,8 @@ export function createOperationStore(context: AgenticStoreContext, artifactsRoot
     const sequence = Number(previous?.sequence ?? 0) + 1;
     context.run(
       `INSERT INTO agentic_checkpoints(id, run_id, task_id, sequence, reason, tokens_before,
-         tokens_after, target_tokens, usable_limit, duration_ms, working_set_json, created_at_ms)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+         tokens_after, before_measured, after_measured, target_tokens, usable_limit, duration_ms, working_set_json, created_at_ms)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       id,
       input.runId,
       input.taskId,
@@ -227,6 +215,8 @@ export function createOperationStore(context: AgenticStoreContext, artifactsRoot
       input.reason,
       input.tokensBefore,
       input.tokensAfter,
+      Number(input.beforeMeasured ?? input.tokensBefore > 0),
+      Number(input.afterMeasured ?? input.tokensAfter > 0),
       input.targetTokens,
       input.usableLimit,
       input.durationMs,
@@ -244,16 +234,23 @@ export function createOperationStore(context: AgenticStoreContext, artifactsRoot
     markOperationStarted: (key: string): AgenticToolOperation => setStatus(key, "STARTED"),
     commitOperation: (
       key: string,
-      patch: { result?: unknown; resultArtifactId?: string | null; externalState?: string | null } = {},
+      patch: {
+        result?: unknown;
+        resultArtifactId?: string | null;
+        externalState?: string | null;
+      } = {},
     ): AgenticToolOperation => setStatus(key, "COMMITTED", patch),
     failOperation: (key: string, externalState: string | null = null): AgenticToolOperation =>
       setStatus(key, "FAILED", { externalState }),
-    markOperationUnknown: (key: string, externalState: string | null = null): AgenticToolOperation =>
-      setStatus(key, "UNKNOWN", { externalState }),
+    markOperationUnknown: (
+      key: string,
+      externalState: string | null = null,
+    ): AgenticToolOperation => setStatus(key, "UNKNOWN", { externalState }),
     listOperations: (runId: string): AgenticToolOperation[] =>
-      all("SELECT * FROM agentic_tool_operations WHERE run_id = ? ORDER BY created_at_ms ASC", runId).map(
-        toOperation,
-      ),
+      all(
+        "SELECT * FROM agentic_tool_operations WHERE run_id = ? ORDER BY created_at_ms ASC",
+        runId,
+      ).map(toOperation),
     recordArtifact,
     getArtifact,
     readArtifactSlice,

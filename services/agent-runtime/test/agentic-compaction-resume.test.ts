@@ -1,26 +1,18 @@
 import { describe, expect, test } from "bun:test";
-// Relative on purpose: bun resolves no `@/` alias from this package.
 import { DEFAULT_CONTEXT_BUDGET_POLICY } from "../src/agentic/context-budget";
 import { createAgenticScheduler } from "../src/agentic/scheduler";
 import { createHarness, criterion, driveToSettled, task } from "./support/agentic-harness";
 
-//
-// The acceptance condition the P0 handoff names: an unfinished task survives
-// context pressure and the SAME task resumes automatically, more than once,
-// with nobody typing "continue".
-//
-// The scripted agent makes genuine progress — one acceptance criterion per
-// turn — while the context grows past the budget several times over. Progress
-// matters: a turn that changed nothing is a stall, and a stall is supposed to
-// replan rather than spin (that rule is pinned in agentic-stall-replan).
-//
 const CRITERIA = Array.from({ length: 12 }, (_, index) => criterion(`c${index + 1}`));
 const GROWTH = { contextGrowth: 1_800, outputTokens: 200 };
 
 const longTaskBackend = () => ({
   contextWindow: 9_000,
   turns: [
-    ...CRITERIA.map((entry) => ({ text: `TASK_EVIDENCE ${entry.id}: verified by command output`, ...GROWTH })),
+    ...CRITERIA.map((entry) => ({
+      text: `TASK_EVIDENCE ${entry.id}: verified by command output`,
+      ...GROWTH,
+    })),
     { text: "TASK_COMPLETE", ...GROWTH },
   ],
 });
@@ -35,7 +27,10 @@ const startLongTask = (harness: ReturnType<typeof createHarness>) =>
     tasks: [task("Backend implementation", [], CRITERIA)],
   });
 
-const smallWindow = () => ({ model: { contextWindow: 9_000, maxTokens: 2_000 }, backend: longTaskBackend() });
+const smallWindow = () => ({
+  model: { contextWindow: 9_000, maxTokens: 2_000 },
+  backend: longTaskBackend(),
+});
 
 describe("context pressure checkpoints, compacts and resumes the same task by itself", () => {
   test("one unfinished task is carried through at least three compactions and then completes", async () => {
@@ -49,7 +44,10 @@ describe("context pressure checkpoints, compacts and resumes the same task by it
         const compactionsBefore = harness.store.listCheckpoints(run.id).length;
         await harness.service.onTurnSettled(run.id);
         const current = harness.store.requireTask(taskId);
-        if (harness.store.listCheckpoints(run.id).length > compactionsBefore && current.status === "RUNNING") {
+        if (
+          harness.store.listCheckpoints(run.id).length > compactionsBefore &&
+          current.status === "RUNNING"
+        ) {
           sawRunningAfterCompaction += 1;
         }
       }
@@ -164,14 +162,6 @@ describe("context pressure checkpoints, compacts and resumes the same task by it
     }
   });
 
-  //
-  // Found by the first real-Qwen run: with a narrowed budget the very first
-  // launch tried to compact a session holding nothing but its system prompt,
-  // and the backend refused. The usable limit already excludes the output
-  // reserve, so adding it back as "the next operation" double-counted it; and
-  // compaction can only remove what is NOT the working set, so a session that
-  // is already at or below its working set has nothing to gain from one.
-  //
   test("a fresh session is never compacted just because the budget is narrow", async () => {
     const harness = createHarness({
       model: { contextWindow: 176_128, maxTokens: 32_768 },
@@ -208,12 +198,6 @@ describe("context pressure checkpoints, compacts and resumes the same task by it
     }
   });
 
-  //
-  // Found by a real-Qwen run: the backend refuses to compact a session it
-  // considers too short, whatever its token count. A refusal means no headroom
-  // can be created here, not that the goal is over — so the run carries on
-  // with the rebuilt working set and only gives up if it keeps happening.
-  //
   test("a backend that refuses to compact does not end the run", async () => {
     const harness = createHarness({
       model: { contextWindow: 9_000, maxTokens: 2_000 },
@@ -240,7 +224,8 @@ describe("context pressure checkpoints, compacts and resumes the same task by it
       expect(first?.status).toBe("RUNNING");
       expect(first?.prompts).toBeGreaterThan(1);
       expect(
-        harness.store.listEvents(run.id).find((event) => event.type === "COMPACTION_REFUSED")?.summary,
+        harness.store.listEvents(run.id).find((event) => event.type === "COMPACTION_REFUSED")
+          ?.summary,
       ).toContain("too small");
     } finally {
       harness.dispose();
@@ -267,12 +252,7 @@ describe("context pressure checkpoints, compacts and resumes the same task by it
     }
   });
 
-  //
-  // Against the real card the backend reported no context usage until the next
-  // turn produced some, so every checkpoint read "-> 0 tokens". Zero is a
-  // measurement nobody took.
-  //
-  test("an absent post-compaction reading is published as an estimate, never as zero", async () => {
+  test("an absent post-compaction reading without an estimate is unknown, never zero", async () => {
     const harness = createHarness({
       model: { contextWindow: 9_000, maxTokens: 2_000 },
       backend: { ...longTaskBackend(), compactionFloorTokens: 0, baseTokens: 0 },
@@ -287,8 +267,10 @@ describe("context pressure checkpoints, compacts and resumes the same task by it
       for (const event of compacted) {
         const detail = event.detail as Record<string, unknown>;
         if (detail.afterMeasured === false) {
-          expect(Number(detail.tokensAfterEstimated)).toBeGreaterThan(0);
-          expect(event.summary).toContain("~");
+          expect(detail.tokensAfterEstimated).toBeNull();
+          expect(detail.tokensAfter).toBeNull();
+          expect(detail.effectiveness).toBeNull();
+          expect(event.summary).toContain("unknown");
         }
       }
     } finally {
@@ -313,12 +295,6 @@ describe("context pressure checkpoints, compacts and resumes the same task by it
 });
 
 describe("a run finishes on evidence, and only on evidence", () => {
-  //
-  // Found by the first real-Qwen run, which reported zero tokens for a run
-  // that had plainly spent them. The adapter fronting a real backend derives a
-  // turn's spend as a delta against what it saw last, so asking the factory
-  // again on every step handed back an object with no memory.
-  //
   test("the session is created once per run, because the adapter carries turn state", async () => {
     let created = 0;
     const harness = createHarness(smallWindow());
@@ -346,7 +322,10 @@ describe("a run finishes on evidence, and only on evidence", () => {
       model: { contextWindow: 40_000, maxTokens: 4_000 },
       backend: {
         contextWindow: 40_000,
-        turns: [{ text: "TASK_COMPLETE", outputTokens: 50 }, { text: "still working", outputTokens: 50 }],
+        turns: [
+          { text: "TASK_COMPLETE", outputTokens: 50 },
+          { text: "still working", outputTokens: 50 },
+        ],
       },
     });
     try {
@@ -391,7 +370,9 @@ describe("a run finishes on evidence, and only on evidence", () => {
       expect(harness.store.listCheckpoints(run.id).length).toBeGreaterThan(0);
       const current = harness.store.requireRun(run.id);
       expect(current.status).toBe("RUNNING");
-      expect(harness.store.listTasks(run.id).some((entry) => entry.status === "CANCELLED")).toBe(false);
+      expect(harness.store.listTasks(run.id).some((entry) => entry.status === "CANCELLED")).toBe(
+        false,
+      );
       expect(harness.store.listAgents(run.id)[0]?.status).toBe("WORKING");
     } finally {
       harness.dispose();

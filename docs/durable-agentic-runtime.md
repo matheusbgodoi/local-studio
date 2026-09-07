@@ -185,12 +185,13 @@ reason, duration, run and task id, and the working set itself. The run's
 compaction count is cumulative, and it counts compactions **performed** — a
 refusal leaves it, and the agent's, where they were.
 
-**MEASURED.** A backend reports no context usage until the next turn produces
-some, so `tokensAfter` is often absent rather than zero immediately after a
-compaction. It is stored as measured-or-zero and the working-set estimate is
-stored beside it as `targetTokens`; the timeline marks an estimate with a
-tilde. Publishing the absent reading as zero would have been a measurement
-nobody took.
+**IMPLEMENTED.** Pi reports unknown usage immediately after compaction. The
+runtime then estimates the complete retained context, including system prompt,
+tool schemas, summary and recent messages. Checkpoints persist whether each
+reading is backend-anchored or estimated; the timeline marks estimates. The
+working-set target is not substituted for actual retained context. Without a
+usable estimate, admission fails with an actionable diagnostic. Estimated
+readings do not prove compaction effective or ineffective.
 
 **POLICY — loop guard.** A compaction that creates no headroom twice fails the
 run with a diagnostic rather than compacting in a circle.
@@ -586,3 +587,20 @@ old checkpoints without the optional field remain readable.
 **EVIDENCE — offline.** `context-session-isolation.test.ts` checks concurrent
 settings writes, independent model budgets, owner preferences, and detailed
 task instructions in both the initial prompt and reconstructed context.
+
+## 18. Compaction accounting qualification (2026-09-07)
+
+**EVIDENCE — offline.** `context-measurement.test.ts` covers full-context
+estimate selection, unknown-context admission failure, nullable effectiveness,
+and additive migration/reopening of checkpoint provenance. Nullable columns
+preserve old records and keep the version-8 store readable by older builds.
+The existing repeated-compaction and crash-recovery checks also pass.
+
+**SOURCE VERIFIED — installed Pi 0.83.0.** Summary input combines the previous
+summary with post-boundary history, rather than re-summarizing the full raw
+conversation. Output is capped at the smaller of 80% of the reserve and the
+model output limit; a split-turn prefix can require a separate summary capped
+at 50% of the reserve. Serialization does not enforce a tokenizer-verified
+input budget. A single oversized message can therefore exceed the summarizer
+window even after ordinary compaction. Chunked/adaptive summarization and
+real near-ceiling quality/cost qualification remain **HYPOTHESIS / TODO**.

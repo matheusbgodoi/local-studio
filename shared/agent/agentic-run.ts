@@ -173,6 +173,8 @@ export const AgenticCheckpointSchema = Schema.Struct({
   reason: Schema.String,
   tokensBefore: Schema.Number,
   tokensAfter: Schema.Number,
+  beforeMeasured: Schema.optional(Schema.Boolean),
+  afterMeasured: Schema.optional(Schema.Boolean),
   targetTokens: Schema.Number,
   usableLimit: Schema.Number,
   durationMs: Schema.Number,

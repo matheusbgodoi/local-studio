@@ -1,17 +1,3 @@
-//
-// Durable schema for the agentic runtime.
-//
-// Task state must not live only in the model's context, so it lives here: a
-// STRICT SQLite file beside the rest of the user data, opened through the same
-// bun:sqlite / node:sqlite shim the Litter ledger uses because this package is
-// typechecked by bun and shipped as `node dist/server.js`.
-//
-// Every table is prefixed `agentic_` on purpose. The controller sweeps a list
-// of legacy table names — `runs`, `sessions`, `messages`, `usage` — on every
-// open (controller/src/stores/sqlite.ts), and a durable store named `runs`
-// would be dropped out from under itself.
-//
-
 import { chmodSync, closeSync, constants, mkdirSync, openSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -195,6 +181,8 @@ CREATE TABLE IF NOT EXISTS agentic_checkpoints (
   reason TEXT NOT NULL,
   tokens_before INTEGER NOT NULL,
   tokens_after INTEGER NOT NULL,
+  before_measured INTEGER CHECK (before_measured IN (0,1)),
+  after_measured INTEGER CHECK (after_measured IN (0,1)),
   target_tokens INTEGER NOT NULL,
   usable_limit INTEGER NOT NULL,
   duration_ms INTEGER NOT NULL,
@@ -235,9 +223,7 @@ CREATE INDEX IF NOT EXISTS agentic_turn_signals_run ON agentic_turn_signals(run_
 const createOwnerOnlyFile = (filepath: string): void => {
   try {
     closeSync(openSync(filepath, constants.O_CREAT | constants.O_EXCL | constants.O_RDWR, 0o600));
-  } catch {
-    // The file already exists; the chmod below still enforces the mode.
-  }
+  } catch {}
 };
 
 export function openAgenticDatabase(dataDir: string): { database: SqlDatabase; filepath: string } {
@@ -256,18 +242,6 @@ export function openAgenticDatabase(dataDir: string): { database: SqlDatabase; f
   database.exec("PRAGMA trusted_schema = OFF");
   database.exec(DDL);
 
-  //
-  // Every table above is CREATE TABLE IF NOT EXISTS, so opening an older store
-  // with newer code adds what is missing and leaves the rows alone. Migrating
-  // forward is the whole job; the only unrecoverable case is a store written
-  // by code newer than this, which must not be guessed at.
-  //
-  // A table that already exists, however, is left exactly as it was — CREATE
-  // TABLE IF NOT EXISTS cannot add a column to one. Every column introduced
-  // after a table shipped therefore needs an explicit additive step, or an
-  // existing store keeps the old shape and the first INSERT fails on a column
-  // that is not there.
-  //
   const addedColumns = addMissingColumns(database);
   database
     .prepare("INSERT OR IGNORE INTO agentic_metadata(key, value) VALUES ('version', ?)")
@@ -300,9 +274,7 @@ export function openAgenticDatabase(dataDir: string): { database: SqlDatabase; f
   if (!memory) {
     try {
       chmodSync(target, 0o600);
-    } catch {
-      // best-effort
-    }
+    } catch {}
   }
   return { database, filepath: target };
 }
@@ -398,13 +370,6 @@ function migrateCurrentConversation(database: SqlDatabase): void {
   });
 }
 
-//
-// Additive only, and idempotent: a column already present is left alone, and
-// nothing here drops, renames or rewrites anything. A NOT NULL column needs a
-// DEFAULT so the rows that predate it get a value — `direct` is the right one,
-// because a Run that was created before this existed was not protected, and
-// backfilling it as protected would claim a guarantee nothing ever provided.
-//
 function addMissingColumns(database: SqlDatabase): Set<string> {
   const added = new Set<string>();
   const additions: ReadonlyArray<{ table: string; column: string; definition: string }> = [
@@ -426,6 +391,16 @@ function addMissingColumns(database: SqlDatabase): Set<string> {
     },
     { table: "agentic_runs", column: "model_display_name", definition: "TEXT" },
     { table: "agentic_agents", column: "model_display_name", definition: "TEXT" },
+    {
+      table: "agentic_checkpoints",
+      column: "before_measured",
+      definition: "INTEGER CHECK (before_measured IN (0,1))",
+    },
+    {
+      table: "agentic_checkpoints",
+      column: "after_measured",
+      definition: "INTEGER CHECK (after_measured IN (0,1))",
+    },
   ];
   for (const addition of additions) {
     const columns = database.prepare(`PRAGMA table_info(${addition.table})`).all() as Array<{
@@ -450,9 +425,7 @@ export function withTransaction<T>(database: SqlDatabase, task: () => T): T {
   } catch (error) {
     try {
       database.exec("ROLLBACK");
-    } catch {
-      // The rollback of a failed transaction is best-effort by design.
-    }
+    } catch {}
     throw error;
   }
 }
