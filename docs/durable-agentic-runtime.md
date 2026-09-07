@@ -632,3 +632,11 @@ staged completion, nonce goal/decision/pending/prior-summary retention, the
 unchanged recent boundary and original preparation, request bounds, aborts,
 truncated-output rejection and failure cancellation. These establish control
 flow, not real-model summary fidelity, tokenization accuracy or latency.
+
+## 20. Behavior profile admission
+
+DECIDED / APPLIED in source: current agent sessions reject the `uncensored` behavior profile before SDK session creation; durable Run start/resume also rejects it during capability admission. This covers foreground chats, subagents and background tasks through their common runtime. Read-only tools still ingest untrusted content, so read-only mode is not an exception. Personal knowledge, project instructions and prior tool history also prevent claiming a trusted conversation merely by disabling writes. The error explains how to select the standard daily profile; no automatic rerouting occurs.
+
+The shared guard uses catalog behavior metadata, including renamed aliases. Only when metadata is absent does the exact known `qwen-uncensored` raw alias provide a compatibility fallback; other profile names are not guessed. Daily remains unchanged. Offline deterministic checks cover renamed profiles, durable admission, metadata precedence and fallback. Installed acceptance remains separate.
+
+TARGET / NOT APPLIED: a dedicated trusted conversation mode without tools or imported untrusted context. Direct gateway requests are outside this client admission guard; the stack ADR-008 operational restrictions still apply there. This change does not claim a gateway-wide policy boundary.

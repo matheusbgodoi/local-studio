@@ -13,6 +13,7 @@ import {
   type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import { Effect } from "effect";
+import { assertAgentBehaviorProfileAllowed } from "../../../shared/agent/behavior-profile";
 import type { AgentImageInput } from "../../../shared/agent/agent-image-input";
 import type { AgentQueueAction } from "../../../shared/agent/agent-turn";
 import {
@@ -451,6 +452,10 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
             new Error(`Model '${modelId}' is not available from /v1/models.`),
           );
         }
+        yield* Effect.try({
+          try: () => assertAgentBehaviorProfileAllowed(selectedModel),
+          catch: (error) => error,
+        });
         const resolvedSelection = resolvePiModelSelection(selectedModel.id);
         const providerId = selectedModel.providerId ?? resolvedSelection.providerId;
         const backendModelId = selectedModel.rawId ?? resolvedSelection.modelId;
