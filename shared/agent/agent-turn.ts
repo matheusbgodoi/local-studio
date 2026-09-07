@@ -5,7 +5,7 @@ import {
 } from "./agent-image-input";
 import { sanitizeComposerPromptTemplates, sanitizeComposerSkills } from "./composer-refs";
 import { Schema } from "effect";
-import { DEFAULT_NETWORK_POLICY, parseNetworkPolicy, type NetworkPolicy } from "./network-policy";
+import { parseNetworkPolicy, type NetworkPolicy } from "./network-policy";
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -64,7 +64,7 @@ export type AgentTurnRequest = {
   cwd?: string;
   piSessionId: string | null;
   toolAccess: AgentToolAccess;
-  networkPolicy: NetworkPolicy;
+  networkPolicy?: NetworkPolicy;
   browserSessionId?: string;
   browserBackend?: AgentBrowserBackend;
   skills: ReturnType<typeof sanitizeComposerSkills>;
@@ -80,6 +80,8 @@ export type AgentTurnRuntimeStatus = {
   running?: boolean;
   piSessionId?: string | null;
   modelId?: string | null;
+  behaviorProfile?: string | null;
+  networkPolicy?: NetworkPolicy;
   eventSeq?: number;
   contextUsage?: import("./context-usage").RuntimeContextUsage | null;
 };
@@ -135,6 +137,10 @@ export function parseAgentTurnRequest(input: unknown): ParseResult<AgentTurnRequ
       : undefined;
   const images = parseImages(body.images);
   if (!images.ok) return images;
+  const networkPolicy = parseNetworkPolicy(body.networkPolicy);
+  if (body.networkPolicy != null && !networkPolicy) {
+    return { ok: false, error: "networkPolicy must be direct or vpn_protected" };
+  }
   return {
     ok: true,
     value: {
@@ -146,7 +152,7 @@ export function parseAgentTurnRequest(input: unknown): ParseResult<AgentTurnRequ
       cwd: cwd.value,
       piSessionId: piSessionId.value ?? null,
       toolAccess: body.toolAccess === "full" ? "full" : "read_only",
-      networkPolicy: parseNetworkPolicy(body.networkPolicy) ?? DEFAULT_NETWORK_POLICY,
+      ...(networkPolicy ? { networkPolicy } : {}),
       browserSessionId: browserSessionId.value,
       browserBackend,
       skills: sanitizeComposerSkills(body.skills),

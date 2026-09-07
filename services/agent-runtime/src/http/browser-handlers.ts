@@ -19,6 +19,8 @@ import {
   type ChallengeDetection,
 } from "../browser-host/challenge";
 import { fetchReadable } from "../browser-host/reader";
+import { networkService } from "../network";
+import { withExecutionNetworkPolicy } from "../network/execution-scope";
 import { clearProviderCooldown, webSearch } from "../browser-host/search";
 
 const ALLOWED_VERBS = new Set([
@@ -69,12 +71,15 @@ export async function handleBrowserVerb(request: Request, verb: string): Promise
   const payload = await readPayload(request);
   try {
     const sessionId = decodeBrowserSessionId(payload) ?? scope.getStore();
-    const result = await scope.run(sessionId ?? "", () =>
-      Effect.runPromise(
-        Effect.tryPromise({
-          try: () => dispatchVerb(verb, payload),
-          catch: (error) => error,
-        }),
+    const key = sessionId ?? "";
+    const result = await scope.run(key, () =>
+      withExecutionNetworkPolicy(networkService().sessionPolicy(key), () =>
+        Effect.runPromise(
+          Effect.tryPromise({
+            try: () => dispatchVerb(verb, payload),
+            catch: (error) => error,
+          }),
+        ),
       ),
     );
     return Response.json(result);

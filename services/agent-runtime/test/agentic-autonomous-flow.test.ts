@@ -5,7 +5,11 @@ import path from "node:path";
 import { resolveAgenticCapability } from "../src/agentic/capability";
 import { setAgenticControlHost, type AgenticControlHost } from "../src/agentic/control-host";
 import { createAgenticControlExtension } from "../src/agentic/control-tools";
-import { createRunFromPlan, reportProgressForTask, revisePlanForRun } from "../src/agentic/control-service";
+import {
+  createRunFromPlan,
+  reportProgressForTask,
+  revisePlanForRun,
+} from "../src/agentic/control-service";
 import { createAgenticRunService } from "../src/agentic/run-service";
 import { createAgenticStore, type AgenticStore } from "../src/agentic/store";
 import { createFakeBackend, fakeAgentModel, type FakeBackend } from "./support/agentic-backend";
@@ -14,7 +18,8 @@ import { createFakeExtensionApi, type FakeExtensionApi } from "./support/fake-ex
 const CHAT_SESSION = "chat-1";
 const GROWTH = { contextGrowth: 1_800, outputTokens: 200 };
 
-const six = (prefix: string) => Array.from({ length: 6 }, (_, index) => `${prefix} check ${index + 1}`);
+const six = (prefix: string) =>
+  Array.from({ length: 6 }, (_, index) => `${prefix} check ${index + 1}`);
 
 const PROPOSAL = {
   goal: "build a statistics module and prove it works",
@@ -46,7 +51,9 @@ type Fixture = {
 function build(): Fixture {
   const dir = mkdtempSync(path.join(tmpdir(), "agentic-flow-"));
   const store = createAgenticStore(dir);
-  const capability = resolveAgenticCapability(fakeAgentModel({ contextWindow: 9_000, maxTokens: 2_000 }));
+  const capability = resolveAgenticCapability(
+    fakeAgentModel({ contextWindow: 9_000, maxTokens: 2_000 }),
+  );
 
   const host: AgenticControlHost = {
     store,
@@ -62,22 +69,39 @@ function build(): Fixture {
         sessionId: input.sessionId,
         piSessionId: input.piSessionId,
         cwd: input.cwd,
+        networkPolicy: input.executionPolicy.networkPolicy,
       });
       store.updateRun(committed.run.id, { status: "RUNNING" });
-      return { run: committed.run, tasks: committed.tasks, agentNames: committed.agents.map((a) => a.name) };
+      return {
+        run: committed.run,
+        tasks: committed.tasks,
+        agentNames: committed.agents.map((a) => a.name),
+      };
     },
     revisePlan: (input) => {
       const committed = revisePlanForRun(store, { ...input, capability });
-      return { run: committed.run, tasks: committed.tasks, agentNames: committed.agents.map((a) => a.name) };
+      return {
+        run: committed.run,
+        tasks: committed.tasks,
+        agentNames: committed.agents.map((a) => a.name),
+      };
     },
     reportProgress: (input) => reportProgressForTask(store, { ...input, turnId: store.now() }),
     readArtifact: (id, offset, length) => store.readArtifactSlice(id, offset, length),
   };
   setAgenticControlHost(host);
   const chat = createFakeExtensionApi();
-  createAgenticControlExtension(() => CHAT_SESSION, () => capability.modelId)(chat.api as never);
+  createAgenticControlExtension(
+    () => CHAT_SESSION,
+    () => capability.modelId,
+    () => ({ behaviorProfile: capability.behaviorProfile, networkPolicy: "direct" }),
+  )(chat.api as never);
   const agentTools = createFakeExtensionApi();
-  createAgenticControlExtension(() => CHAT_SESSION, () => capability.modelId)(agentTools.api as never);
+  createAgenticControlExtension(
+    () => CHAT_SESSION,
+    () => capability.modelId,
+    () => ({ behaviorProfile: capability.behaviorProfile, networkPolicy: "direct" }),
+  )(agentTools.api as never);
   let reported = 0;
   const agent = createFakeBackend({
     contextWindow: 9_000,
@@ -131,9 +155,20 @@ describe("one ordinary prompt becomes a run the model planned and the runtime dr
       expect(run?.id.startsWith("run_")).toBe(true);
 
       const tasks = fixture.store.listTasks(run?.id as string);
-      expect(tasks.map((task) => task.title)).toEqual(["Build stats.py", "Prove stats.py", "Document it"]);
+      expect(tasks.map((task) => task.title)).toEqual([
+        "Build stats.py",
+        "Prove stats.py",
+        "Document it",
+      ]);
       expect(tasks.every((task) => task.id.startsWith("task_"))).toBe(true);
-      expect(tasks[0]?.acceptance.map((c) => c.id)).toEqual(["t1c1", "t1c2", "t1c3", "t1c4", "t1c5", "t1c6"]);
+      expect(tasks[0]?.acceptance.map((c) => c.id)).toEqual([
+        "t1c1",
+        "t1c2",
+        "t1c3",
+        "t1c4",
+        "t1c5",
+        "t1c6",
+      ]);
       expect(tasks[1]?.dependencies).toEqual([tasks[0]?.id as string]);
       expect(fixture.store.listAgents(run?.id as string).length).toBe(1);
     } finally {
@@ -164,7 +199,9 @@ describe("one ordinary prompt becomes a run the model planned and the runtime dr
       expect(fixture.store.listCheckpoints(runId).length).toBeGreaterThanOrEqual(3);
       expect(resumedRunningSameTask).toBeGreaterThanOrEqual(3);
       expect(fixture.store.requireRun(runId).status).toBe("COMPLETED");
-      expect(fixture.store.listTasks(runId).every((task) => task.status === "SUCCEEDED")).toBe(true);
+      expect(fixture.store.listTasks(runId).every((task) => task.status === "SUCCEEDED")).toBe(
+        true,
+      );
       expect(
         fixture.store
           .listTasks(runId)

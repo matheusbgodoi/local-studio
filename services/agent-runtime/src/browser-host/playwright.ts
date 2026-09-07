@@ -133,10 +133,11 @@ export class PlaywrightManager {
     const headless = !this.headful;
 
     const network = networkService();
-    const jailArgs = network.chromiumArguments();
+    const policy = this.sessionId ? network.sessionPolicy(this.sessionId) : undefined;
+    const jailArgs = network.chromiumArguments(policy);
     const launch = (userDataDir: string): Promise<BrowserContext> =>
       chromium.launchPersistentContext(userDataDir, {
-        executablePath: network.chromiumExecutable(executablePath),
+        executablePath: network.chromiumExecutable(executablePath, policy),
         headless,
         viewport: { width: 1280, height: 800 },
         timeout: LAUNCH_TIMEOUT_MS,
@@ -146,9 +147,9 @@ export class PlaywrightManager {
           "--disable-dev-shm-usage",
           ...jailArgs,
         ],
-        env: { ...process.env, ...network.environment() } as Record<string, string>,
-        ...(network.proxyEndpoint()
-          ? { proxy: { server: `socks5://${network.proxyEndpoint()}` } }
+        env: { ...process.env, ...network.environment(policy) } as Record<string, string>,
+        ...(network.proxyEndpoint(policy)
+          ? { proxy: { server: `socks5://${network.proxyEndpoint(policy)}` } }
           : {}),
       });
     const dataDirectory = this.profileDirectory();

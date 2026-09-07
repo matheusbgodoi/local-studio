@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { setAgenticControlHost, type AgenticControlHost } from "../src/agentic/control-host";
-import { AGENTIC_ROUTING_INSTRUCTIONS, createAgenticControlExtension } from "../src/agentic/control-tools";
+import {
+  AGENTIC_ROUTING_INSTRUCTIONS,
+  createAgenticControlExtension,
+} from "../src/agentic/control-tools";
 import { createFakeExtensionApi } from "./support/fake-extension-api";
 import { createHarness, createTestControlHost, type Harness } from "./support/agentic-harness";
 
@@ -9,7 +12,11 @@ const CHAT_SESSION = "chat-session";
 const plan = {
   goal: "build and prove a statistics module",
   tasks: [
-    { title: "Write it", description: "create stats.py", acceptance: ["stats.py defines mean and median"] },
+    {
+      title: "Write it",
+      description: "create stats.py",
+      acceptance: ["stats.py defines mean and median"],
+    },
     {
       title: "Prove it",
       description: "run the selftest",
@@ -21,13 +28,17 @@ const plan = {
 
 let open: Harness | null = null;
 
-const boot = () => {
+const boot = (networkPolicy: "direct" | "vpn_protected" = "direct") => {
   const harness = createHarness();
   open = harness;
   const host = createTestControlHost(harness);
   setAgenticControlHost(host as unknown as AgenticControlHost);
   const fake = createFakeExtensionApi();
-  createAgenticControlExtension(() => CHAT_SESSION, () => harness.capability.modelId)(fake.api as never);
+  createAgenticControlExtension(
+    () => CHAT_SESSION,
+    () => harness.capability.modelId,
+    () => ({ behaviorProfile: harness.capability.behaviorProfile, networkPolicy }),
+  )(fake.api as never);
   return { harness, fake, host };
 };
 
@@ -85,6 +96,12 @@ describe("plan_agentic_run is the only way a run begins", () => {
     expect(reply).toContain("t2c1");
   });
 
+  test("a run captures the parent network policy at creation", async () => {
+    const { harness, fake } = boot("vpn_protected");
+    await fake.callTool("plan_agentic_run", plan);
+    expect(harness.store.listRuns()[0]?.networkPolicy).toBe("vpn_protected");
+  });
+
   test("a rejected plan creates nothing and comes back with something to fix", async () => {
     const { harness, fake } = boot();
     const reply = await fake.callTool("plan_agentic_run", {
@@ -130,7 +147,9 @@ describe("progress is reported through a tool, and checked", () => {
     const { harness, fake } = boot();
     await fake.callTool("plan_agentic_run", plan);
     const runId = harness.store.listRuns()[0]?.id as string;
-    harness.store.updateTask(harness.store.listTasks(runId)[0]?.id as string, { status: "SUCCEEDED" });
+    harness.store.updateTask(harness.store.listTasks(runId)[0]?.id as string, {
+      status: "SUCCEEDED",
+    });
     const prove = harness.store.listTasks(runId)[1];
 
     const reply = await fake.callTool("report_task_progress", {
@@ -145,7 +164,9 @@ describe("progress is reported through a tool, and checked", () => {
     const { harness, fake } = boot();
     await fake.callTool("plan_agentic_run", plan);
     const runId = harness.store.listRuns()[0]?.id as string;
-    harness.store.updateTask(harness.store.listTasks(runId)[0]?.id as string, { status: "SUCCEEDED" });
+    harness.store.updateTask(harness.store.listTasks(runId)[0]?.id as string, {
+      status: "SUCCEEDED",
+    });
     const prove = harness.store.listTasks(runId)[1];
     const reply = await fake.callTool("report_task_progress", {
       taskId: prove?.id,
@@ -162,7 +183,10 @@ describe("progress is reported through a tool, and checked", () => {
   test("a report against an unknown task is refused rather than written somewhere", async () => {
     const { fake } = boot();
     await fake.callTool("plan_agentic_run", plan);
-    const reply = await fake.callTool("report_task_progress", { taskId: "task_nope", complete: true });
+    const reply = await fake.callTool("report_task_progress", {
+      taskId: "task_nope",
+      complete: true,
+    });
     expect(reply).toContain("Rejected");
   });
 
@@ -295,7 +319,10 @@ describe("the review's findings, pinned", () => {
       content: "z".repeat(50_000),
     });
     const before = harness.store.listArtifacts(runId).length;
-    const slice = await fake.callTool("read_agentic_artifact", { artifactId: artifact.id, length: 20_000 });
+    const slice = await fake.callTool("read_agentic_artifact", {
+      artifactId: artifact.id,
+      length: 20_000,
+    });
     expect(slice.length).toBe(20_000);
     expect(harness.store.listArtifacts(runId).length).toBe(before);
   });
@@ -316,9 +343,15 @@ describe("a stored artifact is readable by the model that was given its id", () 
       content: "abcdefghij".repeat(50),
     });
 
-    expect(await fake.callTool("read_agentic_artifact", { artifactId: artifact.id, offset: 0, length: 5 })).toBe(
-      "abcde",
+    expect(
+      await fake.callTool("read_agentic_artifact", {
+        artifactId: artifact.id,
+        offset: 0,
+        length: 5,
+      }),
+    ).toBe("abcde");
+    expect(await fake.callTool("read_agentic_artifact", { artifactId: "artifact_nope" })).toContain(
+      "No artifact",
     );
-    expect(await fake.callTool("read_agentic_artifact", { artifactId: "artifact_nope" })).toContain("No artifact");
   });
 });

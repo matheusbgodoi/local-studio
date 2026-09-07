@@ -19,7 +19,12 @@ import {
   revisePlanForRun,
 } from "../../src/agentic/control-service";
 import { createAgenticStore, type AgenticStore, type TaskSeed } from "../../src/agentic/store";
-import { createFakeBackend, fakeAgentModel, type FakeBackend, type FakeBackendOptions } from "./agentic-backend";
+import {
+  createFakeBackend,
+  fakeAgentModel,
+  type FakeBackend,
+  type FakeBackendOptions,
+} from "./agentic-backend";
 import type { AgentModel } from "../../../../shared/agent/models";
 
 export type Harness = {
@@ -57,6 +62,7 @@ export function createTestControlHost(harness: Harness, startedRuns: string[] = 
       sessionId: string;
       piSessionId: string | null;
       cwd: string;
+      executionPolicy: import("../../../../shared/agent/execution-policy").ExecutionPolicy;
     }) => {
       const committed = createRunFromPlan(harness.store, {
         plan: input.plan,
@@ -64,6 +70,7 @@ export function createTestControlHost(harness: Harness, startedRuns: string[] = 
         sessionId: input.sessionId,
         piSessionId: input.piSessionId,
         cwd: input.cwd,
+        networkPolicy: input.executionPolicy.networkPolicy,
       });
       startedRuns.push(committed.run.id);
       return {
@@ -77,7 +84,10 @@ export function createTestControlHost(harness: Harness, startedRuns: string[] = 
       reason: string;
       plan: import("../../src/agentic/control-plane").ValidatedPlan;
     }) => {
-      const committed = revisePlanForRun(harness.store, { ...input, capability: harness.capability });
+      const committed = revisePlanForRun(harness.store, {
+        ...input,
+        capability: harness.capability,
+      });
       return {
         run: committed.run,
         tasks: committed.tasks,
@@ -98,7 +108,11 @@ export function criterion(id: string, description = `criterion ${id}`) {
   return { id, description, kind: "assertion" as const, satisfied: false, evidence: null };
 }
 
-export function task(title: string, dependencies: string[] = [], criteria = [criterion("c1")]): TaskSeed {
+export function task(
+  title: string,
+  dependencies: string[] = [],
+  criteria = [criterion("c1")],
+): TaskSeed {
   return { title, description: `do ${title}`, dependencies, acceptance: criteria };
 }
 

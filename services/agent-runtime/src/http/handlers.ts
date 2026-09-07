@@ -1,4 +1,3 @@
-import { AgentBehaviorProfileError } from "../../../../shared/agent/behavior-profile";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -36,11 +35,8 @@ import {
 } from "./stream-order";
 import { sitegeistRelayUrl } from "../pi-runtime-helpers";
 import { networkService } from "../network";
-import {
-  DEFAULT_NETWORK_POLICY,
-  parseNetworkPolicy,
-} from "../../../../shared/agent/network-policy";
-
+import { parseNetworkPolicy } from "../../../../shared/agent/network-policy";
+import { readSessionExecutionPolicy } from "../session-metadata-store";
 
 function adoptRuntimePiSessionId(session: unknown, piSessionId: string | null | undefined) {
   const next = piSessionId?.trim();
@@ -101,11 +97,17 @@ function ensurePromptRuntimeEffect(
 ): Effect.Effect<void, unknown> {
   return Effect.tryPromise({
     try: () => {
-      networkService().setSessionPolicy(turn.sessionId, turn.networkPolicy);
+      const networkPolicy =
+        turn.networkPolicy ??
+        (resolved.effectivePiSessionId
+          ? readSessionExecutionPolicy(resolved.effectivePiSessionId)?.networkPolicy
+          : undefined) ??
+        resolved.session.status.networkPolicy;
+      networkService().setSessionPolicy(turn.sessionId, networkPolicy);
       return resolved.session.ensureStarted(turn.modelId, turn.cwd, resolved.effectivePiSessionId, {
         thinkingLevel: turn.thinkingLevel,
         toolAccess: turn.toolAccess,
-        networkPolicy: turn.networkPolicy,
+        networkPolicy,
         browserSessionId: turn.browserSessionId,
         browserBackend: turn.browserBackend,
         skills: turn.skills,
@@ -262,14 +264,13 @@ function turnRouteEffect(request: Request): Effect.Effect<Response, unknown> {
               active: false,
               error: errorMessage(error, "Pi agent turn failed"),
             } satisfies AgentTurnCommandResult,
-            { status: error instanceof AgentBehaviorProfileError ? 400 : 500 },
+            { status: 500 },
           ),
         ),
       ),
     );
   });
 }
-
 
 export async function handleAgentAbort(request: Request): Promise<Response> {
   const body = (await request.json().catch(() => ({}))) as { sessionId?: string };
@@ -280,15 +281,13 @@ export async function handleAgentAbort(request: Request): Promise<Response> {
 }
 
 export async function handleExtensionUiResponse(request: Request): Promise<Response> {
-  const body = (await request.json().catch(() => null)) as
-    | {
-        sessionId?: unknown;
-        requestId?: unknown;
-        value?: unknown;
-        confirmed?: unknown;
-        cancelled?: unknown;
-      }
-    | null;
+  const body = (await request.json().catch(() => null)) as {
+    sessionId?: unknown;
+    requestId?: unknown;
+    value?: unknown;
+    confirmed?: unknown;
+    cancelled?: unknown;
+  } | null;
   const sessionId = typeof body?.sessionId === "string" ? body.sessionId.trim() : "";
   const requestId = typeof body?.requestId === "string" ? body.requestId.trim() : "";
   if (!sessionId || !requestId) return jsonError("sessionId and requestId are required");
@@ -299,9 +298,10 @@ export async function handleExtensionUiResponse(request: Request): Promise<Respo
     ...(typeof body?.confirmed === "boolean" ? { confirmed: body.confirmed } : {}),
     cancelled: body?.cancelled === true,
   });
-  return accepted ? Response.json({ ok: true }) : jsonError("Extension request is no longer active", 409);
+  return accepted
+    ? Response.json({ ok: true })
+    : jsonError("Extension request is no longer active", 409);
 }
-
 
 type CompactRequest = {
   sessionId?: string;
@@ -349,6 +349,10 @@ function compactRouteEffect(request: Request): Effect.Effect<Response, unknown> 
     if (body.thinkingLevel != null && !isAgentThinkingLevel(body.thinkingLevel)) {
       return jsonError("thinkingLevel must be a supported reasoning level");
     }
+    const networkPolicy = parseNetworkPolicy(body.networkPolicy);
+    if (body.networkPolicy != null && !networkPolicy) {
+      return jsonError("networkPolicy must be direct or vpn_protected");
+    }
 
     return yield* Effect.gen(function* () {
       const session = piRuntimeManager.getSession(sessionId);
@@ -359,7 +363,7 @@ function compactRouteEffect(request: Request): Effect.Effect<Response, unknown> 
           session.ensureStarted(modelId, cwd, piSessionId, {
             thinkingLevel: body.thinkingLevel,
             toolAccess: body.toolAccess === "full" ? "full" : "read_only",
-            networkPolicy: parseNetworkPolicy(body.networkPolicy) ?? DEFAULT_NETWORK_POLICY,
+            ...(networkPolicy ? { networkPolicy } : {}),
             browserSessionId:
               typeof body.browserSessionId === "string" ? body.browserSessionId.trim() : undefined,
             browserBackend: body.browserBackend === "sitegeist" ? "sitegeist" : "embedded",
@@ -381,7 +385,6 @@ function compactRouteEffect(request: Request): Effect.Effect<Response, unknown> 
   });
 }
 
-
 export function handleRuntimeSessions(): Response {
   return Response.json({
     sessions: piRuntimeManager
@@ -389,7 +392,6 @@ export function handleRuntimeSessions(): Response {
       .map(({ sessionId, session }) => ({ sessionId, status: session.status })),
   });
 }
-
 
 export function handleRuntimeStatus(request: Request): Response {
   const searchParams = new URL(request.url).searchParams;
@@ -411,7 +413,6 @@ export function handleRuntimeStatus(request: Request): Response {
   });
 }
 
-
 export function handleRuntimeContextBudget(request: Request): Response {
   const searchParams = new URL(request.url).searchParams;
   const sessionId = searchParams.get("sessionId")?.trim() || "default";
@@ -429,7 +430,6 @@ export function handleRuntimeContextBudget(request: Request): Response {
   }
   return Response.json(budget);
 }
-
 
 function parseSeq(value: string | null): number {
   const parsed = Number(value ?? 0);
@@ -479,8 +479,7 @@ export function handleRuntimeEvents(request: Request): Response {
         if (ping) clearInterval(ping);
         try {
           controller.close();
-        } catch {
-        }
+        } catch {}
       };
 
       const sendLogged = (logged: LoggedPiEvent) => {
@@ -556,7 +555,6 @@ export function handleRuntimeEvents(request: Request): Response {
     },
   });
 }
-
 
 export function handleSetupChecks(): Response {
   const codexDir = path.join(homedir(), ".codex");

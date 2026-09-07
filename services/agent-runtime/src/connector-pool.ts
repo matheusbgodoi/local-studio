@@ -1,8 +1,13 @@
 import { connectMcp, type McpConnection, type McpToolInfo } from "./mcp-client";
 import { connectorAuthorizationHeaders } from "./connector-auth";
 import { listConnectors, type ConnectorConfig } from "./connectors-service";
+import { executionNetworkPolicy } from "./network/execution-scope";
 
-const pool = new Map<string, McpConnection>();
+const pool = new Map<string, { connectorId: string; connection: McpConnection }>();
+
+function connectionKey(connectorId: string): string {
+  return `${executionNetworkPolicy() ?? "ambient"}\0${connectorId}`;
+}
 
 export class ConnectorToolDeniedError extends Error {}
 
@@ -47,9 +52,7 @@ export function allowedConnectorTools(
 }
 
 function requiresReadOnlyContract(connector: ConnectorConfig): boolean {
-  return (
-    connector.origin?.kind === "plugin" || connector.origin?.binding === "google-workspace"
-  );
+  return connector.origin?.kind === "plugin" || connector.origin?.binding === "google-workspace";
 }
 
 export function connectorToolContractError(
@@ -76,11 +79,12 @@ function assertToolAllowed(connector: ConnectorConfig, tool: string): void {
 }
 
 export async function getPooledConnection(connectorId: string): Promise<McpConnection> {
-  const existing = pool.get(connectorId);
-  if (existing) return existing;
+  const key = connectionKey(connectorId);
+  const existing = pool.get(key);
+  if (existing) return existing.connection;
   const connector = await enabledConnector(connectorId);
   const connection = connectMcp(toTarget(connector));
-  pool.set(connectorId, connection);
+  pool.set(key, { connectorId, connection });
   return connection;
 }
 
@@ -93,14 +97,16 @@ export async function getPooledConnection(connectorId: string): Promise<McpConne
 // it under the policy in force then.
 //
 export function closeAllPooledConnections(): void {
-  for (const connectorId of [...pool.keys()]) closePooledConnection(connectorId);
+  for (const { connection } of pool.values()) connection.close();
+  pool.clear();
 }
 
 export function closePooledConnection(connectorId: string): void {
-  const connection = pool.get(connectorId);
-  if (!connection) return;
-  pool.delete(connectorId);
-  connection.close();
+  for (const [key, entry] of pool) {
+    if (entry.connectorId !== connectorId) continue;
+    pool.delete(key);
+    entry.connection.close();
+  }
 }
 
 export async function listConnectorTools(connectorId: string): Promise<McpToolInfo[]> {

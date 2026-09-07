@@ -26,6 +26,7 @@ describe("durable admission and shell credential boundaries", () => {
       createAgenticControlExtension(
         () => "qualified-chat",
         () => "local-studio-remote/qwen-daily",
+        () => ({ behaviorProfile: "standard", networkPolicy: "direct" }),
       )(api.api as never);
       await api.callTool(
         "plan_agentic_run",

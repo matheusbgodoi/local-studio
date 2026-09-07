@@ -113,6 +113,7 @@ function patchRuntimeStatus(status: RuntimeStatus): Partial<Session> {
   return {
     ...(status.piSessionId ? { piSessionId: status.piSessionId } : {}),
     ...(status.modelId ? { modelId: status.modelId } : {}),
+    ...(status.networkPolicy ? { networkPolicy: status.networkPolicy } : {}),
     ...(status.contextUsage !== undefined ? { contextUsage: status.contextUsage } : {}),
   };
 }
@@ -122,6 +123,7 @@ function sameRuntimePatch(session: Session, patch: Partial<Session>, status: str
     session.status === status &&
     (patch.piSessionId === undefined || session.piSessionId === patch.piSessionId) &&
     (patch.modelId === undefined || session.modelId === patch.modelId) &&
+    (patch.networkPolicy === undefined || session.networkPolicy === patch.networkPolicy) &&
     (patch.contextUsage === undefined ||
       JSON.stringify(session.contextUsage ?? null) === JSON.stringify(patch.contextUsage ?? null))
   );

@@ -8,9 +8,3 @@ export function isUncensoredBehaviorProfile(model: AgentBehaviorProfileIdentity)
   const rawId = model.rawId?.trim() || model.id.slice(model.id.lastIndexOf("/") + 1);
   return rawId === "qwen-uncensored";
 }
-
-export const requiresTrustedConversation = isUncensoredBehaviorProfile;
-
-export class AgentBehaviorProfileError extends Error {}
-
-export function assertAgentBehaviorProfileAllowed(): void {}

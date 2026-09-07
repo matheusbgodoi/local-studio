@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { NetworkPolicySchema } from "@shared/agent/network-policy";
 
 export const RuntimeContextUsageSchema = Schema.Struct({
   tokens: Schema.Union([Schema.Null, Schema.Number]),
@@ -19,6 +20,8 @@ export const RuntimeStatusSchema = Schema.Struct({
   running: Schema.optional(Schema.Boolean),
   piSessionId: Schema.optional(Schema.Union([Schema.Null, Schema.String])),
   modelId: Schema.optional(Schema.Union([Schema.Null, Schema.String])),
+  behaviorProfile: Schema.optional(Schema.Union([Schema.Null, Schema.String])),
+  networkPolicy: Schema.optional(NetworkPolicySchema),
   eventSeq: Schema.optional(Schema.Number),
   events: Schema.optional(Schema.Array(RuntimeLoggedEventSchema)),
   contextUsage: Schema.optional(Schema.Union([Schema.Null, RuntimeContextUsageSchema])),
