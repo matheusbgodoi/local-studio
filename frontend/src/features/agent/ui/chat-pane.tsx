@@ -53,11 +53,6 @@ function diffDrawerFor(
 function piSessionIdOf(tab: { piSessionId?: string | null } | null | undefined): string | null {
   return tab?.piSessionId ?? null;
 }
-
-// Per-conversation, like the reasoning level and for the same reasons: the owner
-// picks it for THIS chat, two panes may disagree, and it has to survive a reload
-// — so it lives on the session record the pane store already persists, not in
-// workspace-global storage. Absent means "direct".
 function sessionNetworkPolicy(tab: SessionTab | null): NetworkPolicy {
   return tab?.networkPolicy ?? DEFAULT_NETWORK_POLICY;
 }
@@ -81,9 +76,6 @@ function subagentChipsFor(piSessionId: string | null | undefined) {
   if (!piSessionId) return null;
   return <SubagentChips piSessionId={piSessionId} />;
 }
-
-// Renders nothing until this conversation is driving a durable Run, which is
-// the model's decision to make and not the composer's.
 function runPanelFor(
   tab: { id?: string } | null | undefined,
   piSessionId: string | null | undefined,
@@ -468,13 +460,6 @@ export function ChatPane({
   const { selectedSkills, selectedPromptTemplates, removeLoadedContext } = useComposerLoadedContext(
     { activeTab, tools },
   );
-  // Per-session choice wins; a fresh session (no saved level) falls back to the
-  // level THIS MODEL was last used at, which is Off until it has one. Reading the
-  // per-model store rather than one global default is what stops a level picked on
-  // a reasoning model from seeding a fresh session on a model that cannot think
-  // (and keeps the Computer side-chat, whose tabs live outside the workspace
-  // reducer, on the same footing as the main panes). Issue #277 stands: a new
-  // session still does not snap back to a hardcoded level.
   const thinkingLevel = pickThinkingLevel(
     modelThinkingLevels,
     activeTab?.thinkingLevel,
@@ -483,8 +468,6 @@ export function ChatPane({
   const selectThinkingLevel = useCallback(
     (level: AgentThinkingLevel) => {
       if (!activeTab || running) return;
-      // Persist on the session (survives turns + reloads) and file it under the
-      // model it was picked FOR, so the next session on that model opens here.
       updateTab(activeTab.id, (session) => ({ ...session, thinkingLevel: level }));
       if (modelId) writeModelThinkingLevel(browserThinkingStorage(), modelId, level);
     },
@@ -497,9 +480,6 @@ export function ChatPane({
     onSelectReasoning: selectThinkingLevel,
   });
   const networkPolicy = sessionNetworkPolicy(activeTab);
-  // The runtime is told only after IT accepted the change (the control refuses
-  // to flip on a 409), so what is written here is always a policy the boundary
-  // has already agreed to.
   const networkControl = networkControlFor(activeTab, networkPolicy, (policy) => {
     if (!activeTab) return;
     updateTab(activeTab.id, (session) => ({ ...session, networkPolicy: policy }));
@@ -561,11 +541,6 @@ export function ChatPane({
       activeTab ? applyContextRow(activeTab.id, "skill", row, tools) : Promise.resolve(),
     [activeTab, tools],
   );
-  // `/skill:<name>` sends Pi's own invocation as the turn message so
-  // _expandSkillCommand inlines that SKILL.md for THIS task only. It bypasses
-  // buildPromptArgs on purpose: the invocation must be the first token of the
-  // message (Pi reads the skill name up to the first space), and this turn
-  // carries no armed-skill context by design.
   const runSkillInvocation = useCallback(
     (skill: ComposerSkillRef, args: string) => {
       if (!activeTab || !modelId) return Promise.resolve();
@@ -576,9 +551,6 @@ export function ChatPane({
         displayText: text,
         userText: text,
         targetSessionId: activeTab.id,
-        // `skills` is left to the session's current selection on purpose: it
-        // feeds runtimeOptionsFingerprint, and overriding it here would restart
-        // the runtime for this turn and again for the next one.
       });
     },
     [activeTab, engine, modelId],
@@ -587,9 +559,6 @@ export function ChatPane({
     () => tools.selectionFor(activeTab?.id).connectors ?? [],
     [activeTab?.id, tools],
   );
-  // `/mcp` is a status command, and the per-session `error` field has no
-  // renderer in the transcript — so its answer goes in as an assistant event
-  // block, the neutral separator line the timeline already draws.
   const noteInTranscript = useCallback(
     (text: string) => {
       if (!activeTab) return;
@@ -666,9 +635,6 @@ export function ChatPane({
           templates: tools.promptTemplateCatalogue,
           applyTemplate,
         }),
-        // The explicit, zero-injection path leads; the legacy `$skill`
-        // selected-context provider below still resolves `/<skill-name>` for
-        // sessions that already used it.
         skillInvocationCommandProvider({
           skills: tools.skillCatalogue,
           runSkill: runSkillInvocation,
@@ -874,6 +840,14 @@ export function ChatPane({
         })}
         {runPanelFor(activeTab, activePiSessionId)}
         {subagentChipsFor(activePiSessionId)}
+        {activeTab?.error ? (
+          <div
+            role="alert"
+            className="mx-3 mb-2 rounded-lg border border-(--danger)/30 bg-(--danger)/5 px-3 py-2 text-[length:var(--fs-sm)] text-(--danger)"
+          >
+            {activeTab.error}
+          </div>
+        ) : null}
         <AgentComposerFrame
           attachments={attachments}
           banner={composerVisual.banner}
@@ -957,9 +931,6 @@ export function ChatPane({
   );
 }
 
-/** The pane's fixed furniture: a pending extension prompt, the header, and the
- *  terminal surface that swaps places with the transcript. Kept out of ChatPane
- *  so the container reads as state and wiring rather than layout. */
 function ChatPaneChrome({
   extensionUiRequest,
   onExtensionUiRespond,
@@ -995,11 +966,6 @@ function ChatPaneChrome({
     </>
   );
 }
-
-/** Remounts per session so the goal poll and project selection never carry
- *  across tabs, and hides project switching while a turn is in flight. */
-// The drawer's Interrupt button has no form event of its own, and sendMessage
-// only ever uses the event to cancel the browser's native submit.
 
 function SessionProjectDrawer({
   tabId,
