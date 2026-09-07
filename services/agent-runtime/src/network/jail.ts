@@ -383,13 +383,20 @@ export function writeChromiumShim(
 // holds: exec replaces the process, and the jail is inherited by everything the
 // command goes on to run — curl, git, npm, pip, ssh, a python script.
 //
-export function writeShellShim(profileDirectory: string, profilePath: string): string {
+export function writeShellShim(
+  profileDirectory: string,
+  profilePath: string,
+  environment: Record<string, string>,
+): string {
   mkdirSync(profileDirectory, { recursive: true, mode: 0o700 });
   const shell = existsSync("/bin/bash") ? "/bin/bash" : "/bin/sh";
   const shim = path.join(profileDirectory, "shell-jail.sh");
+  const exports = Object.entries(environment)
+    .map(([key, value]) => `export ${key}=${shellQuote(value)}`)
+    .join("\n");
   writeFileSync(
     shim,
-    `#!/bin/sh\nexec ${SANDBOX_EXEC} -f ${shellQuote(profilePath)} ${shell} "$@"\n`,
+    `#!/bin/sh\n${exports}\nexec ${SANDBOX_EXEC} -f ${shellQuote(profilePath)} ${shell} "$@"\n`,
     { mode: 0o700 },
   );
   return shim;

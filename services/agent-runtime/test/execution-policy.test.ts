@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { parseAgentTurnRequest } from "../../../shared/agent/agent-turn";
 import { NetworkService } from "../src/network/service";
 import { executionNetworkPolicy, withExecutionNetworkPolicy } from "../src/network/execution-scope";
+import { jailEnvironment, writeShellShim } from "../src/network/jail";
 import { piStatusFromEvents } from "../src/pi-runtime-state";
 
 function turn(networkPolicy?: unknown) {
@@ -79,6 +80,19 @@ test("explicit direct routing stays direct while another session demands VPN", (
     expect(service.proxyEndpoint("vpn_protected")).toBe("127.0.0.1:47318");
   } finally {
     service.releaseSession("vpn-session");
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the protected agent shell carries its route into every spawned command", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "studio-policy-shell-"));
+  try {
+    const shim = writeShellShim(dir, "/tmp/profile.sb", jailEnvironment(47318));
+    const source = readFileSync(shim, "utf8");
+    expect(source).toContain("export LOCAL_STUDIO_NETWORK_POLICY='vpn_protected'");
+    expect(source).toContain("export HTTPS_PROXY='http://127.0.0.1:47318'");
+    expect(source).toContain("export ALL_PROXY='socks5h://127.0.0.1:47318'");
+  } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });

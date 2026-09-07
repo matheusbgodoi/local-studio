@@ -249,7 +249,11 @@ export class NetworkService {
         `protected network is ${this.state.toLowerCase()}; the agent shell could not be confined`,
       );
     }
-    return writeShellShim(path.join(this.dataDir, "network"), this.profilePath);
+    return writeShellShim(
+      path.join(this.dataDir, "network"),
+      this.profilePath,
+      jailEnvironment(PROXY_PORT),
+    );
   }
 
   //
