@@ -150,10 +150,6 @@ type GatewayMetadata = {
   controllerId: string;
   pid: number;
   issuedAt: string;
-  // The running instance's own Pi data dir and launch command. External
-  // consumers (the KittyLitter daemon) use these to run pi against the same
-  // version and data dir that this instance owns, instead of guessing a
-  // possibly-stale install path. Optional so older readers ignore them.
   piAgentDir?: string;
   piRuntime?: GatewayPiRuntime;
 };
@@ -293,10 +289,6 @@ const writePrivateJson = (filepath: string, value: unknown): void => {
 const controllerIdFile = (dataDir: string): string => path.join(dataDir, "litter-controller-id");
 const metadataFile = (dataDir: string): string => path.join(dataDir, "litter-bridge.json");
 
-/**
- * Resolve the Pi agent directory this instance is actually using, matching the
- * precedence the runtime itself applies.
- */
 const resolvePiAgentDir = (dataDir: string): string => {
   const explicit = process.env.PI_CODING_AGENT_DIR?.trim();
   if (explicit) return path.resolve(explicit);
@@ -328,10 +320,7 @@ export const resolvePackagedPiCli = (
   const cli = path.join(
     resourcesPath,
     "app",
-    "frontend",
-    ".next",
-    "standalone",
-    "frontend",
+    "agent-runtime",
     "node_modules",
     "@earendil-works",
     "pi-coding-agent",
@@ -2911,10 +2900,6 @@ export function createLitterBridgeGateway(options: GatewayOptions = {}) {
     }
   };
 
-  // Build the create ack by reading back the freshly-written session file. The
-  // new session id is server-minted, so the descriptor is authoritative from
-  // disk; if the file isn't yet visible to inventory (project-cwd variant
-  // race) we fall back to a minimal descriptor derived from the dispatch.
   const buildSessionCreateAck = (input: {
     requestId: string;
     request: LitterBridgeSessionCreateRequest;
@@ -2984,8 +2969,6 @@ export function createLitterBridgeGateway(options: GatewayOptions = {}) {
         422,
       );
     }
-    // The target cwd must canonicalize to a currently-trusted live project —
-    // mobile can only create sessions inside projects the host already trusts.
     const requestedCwd = (() => {
       try {
         return realpathSync.native(path.resolve(request.cwd));
@@ -2997,12 +2980,7 @@ export function createLitterBridgeGateway(options: GatewayOptions = {}) {
       ? liveProjects(projects()).find((entry) => entry.cwd === requestedCwd)
       : null;
     if (!project) {
-      return jsonError(
-        "forbidden",
-        "Working directory is not an allowed project",
-        requestId,
-        403,
-      );
+      return jsonError("forbidden", "Working directory is not an allowed project", requestId, 403);
     }
     const modelId = boundedString(request.modelId);
     if (!modelId) {
@@ -3023,10 +3001,9 @@ export function createLitterBridgeGateway(options: GatewayOptions = {}) {
       const ledger = getMutationLedger();
       const reservation = ledger.reserve(identity, request.auth.bodyHash, mutationOwnerId);
       if (reservation.kind === "cached") {
-        return Response.json(
-          materializeSessionCreateResult(reservation.stored.result, requestId),
-          { status: reservation.stored.status },
-        );
+        return Response.json(materializeSessionCreateResult(reservation.stored.result, requestId), {
+          status: reservation.stored.status,
+        });
       }
       if (reservation.kind === "mismatch") {
         return jsonError(
@@ -3044,8 +3021,6 @@ export function createLitterBridgeGateway(options: GatewayOptions = {}) {
         );
       }
       if (reservation.kind === "reconcile") {
-        // A prior attempt marked a dispatch but crashed before settling. Verify
-        // the same request and recover the outcome from the transcript.
         const correlation = reservation.correlation;
         if (
           correlation.messageId !== request.messageId ||
@@ -3151,11 +3126,7 @@ export function createLitterBridgeGateway(options: GatewayOptions = {}) {
         status.cwd !== project.cwd ||
         status.modelId !== modelId
       ) {
-        return rejectRetryable(
-          "integrity_failed",
-          "Runtime session identity is inconsistent",
-          409,
-        );
+        return rejectRetryable("integrity_failed", "Runtime session identity is inconsistent", 409);
       }
       const dispatchId = randomUUID();
       let boundary: PiDurablePromptBoundary;
@@ -3201,10 +3172,6 @@ export function createLitterBridgeGateway(options: GatewayOptions = {}) {
           true,
         );
       }
-      // Record the dispatch correlation (reserved → dispatching) before we
-      // settle: it satisfies the ledger state machine and lets a crashed retry
-      // reconcile from the transcript. The session file now exists (the prompt
-      // wrote it), so the correlation carries its authoritative path.
       const correlation: MutationCorrelation = {
         dispatchId,
         sessionId: newSessionId,
@@ -3282,8 +3249,7 @@ export function createLitterBridgeGateway(options: GatewayOptions = {}) {
     const verified = verifyLitterBridgeRequest(parsed, requestNow);
     if (!verified.ok) return verified.response;
     if (
-      (parsed.type === "controller_snapshot_request" ||
-        parsed.type === "session_create_request") &&
+      (parsed.type === "controller_snapshot_request" || parsed.type === "session_create_request") &&
       parsed.controllerId !== controllerId
     ) {
       return jsonError("not_found", "Controller identity was not found", requestId, 404);
