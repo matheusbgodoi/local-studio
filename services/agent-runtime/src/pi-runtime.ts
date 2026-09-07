@@ -536,7 +536,10 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
                               },
                               {
                                 name: "local-studio-agentic",
-                                factory: createAgenticControlExtension(() => runtimeSessionId),
+                                factory: createAgenticControlExtension(
+                                  () => runtimeSessionId,
+                                  () => selectedModel.id,
+                                ),
                               },
                               {
                                 name: "local-studio-connectors",

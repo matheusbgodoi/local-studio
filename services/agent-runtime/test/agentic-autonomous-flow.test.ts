@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-// Relative on purpose: bun resolves no `@/` alias from this package.
 import { resolveAgenticCapability } from "../src/agentic/capability";
 import { setAgenticControlHost, type AgenticControlHost } from "../src/agentic/control-host";
 import { createAgenticControlExtension } from "../src/agentic/control-tools";
@@ -11,18 +10,6 @@ import { createAgenticRunService } from "../src/agentic/run-service";
 import { createAgenticStore, type AgenticStore } from "../src/agentic/store";
 import { createFakeBackend, fakeAgentModel, type FakeBackend } from "./support/agentic-backend";
 import { createFakeExtensionApi, type FakeExtensionApi } from "./support/fake-extension-api";
-
-//
-// The product flow, end to end, with only the model's judgement scripted.
-//
-// One ordinary chat turn arrives. The "model" decides on its own that this is
-// durable work and calls plan_agentic_run. Nothing here posts to an API, builds
-// a plan by hand or names a task: every id, every status and every transition
-// below came out of the runtime. From then on the scheduler drives, the agent
-// reports through the tool, the context is compacted repeatedly, and the same
-// unfinished task resumes each time — with no magic string anywhere in the
-// protocol and nobody typing "continue".
-//
 
 const CHAT_SESSION = "chat-1";
 const GROWTH = { contextGrowth: 1_800, outputTokens: 200 };
@@ -87,19 +74,10 @@ function build(): Fixture {
     readArtifact: (id, offset, length) => store.readArtifactSlice(id, offset, length),
   };
   setAgenticControlHost(host);
-
-  // The conversation the owner is typing into.
   const chat = createFakeExtensionApi();
-  createAgenticControlExtension(() => CHAT_SESSION)(chat.api as never);
-
-  // The agent's own session, with the same tools on it.
+  createAgenticControlExtension(() => CHAT_SESSION, () => capability.modelId)(chat.api as never);
   const agentTools = createFakeExtensionApi();
-  createAgenticControlExtension(() => CHAT_SESSION)(agentTools.api as never);
-
-  //
-  // The scripted agent: every turn it reports the next criterion through the
-  // tool, and its context grows until the budget forces a compaction.
-  //
+  createAgenticControlExtension(() => CHAT_SESSION, () => capability.modelId)(agentTools.api as never);
   let reported = 0;
   const agent = createFakeBackend({
     contextWindow: 9_000,
@@ -143,8 +121,6 @@ describe("one ordinary prompt becomes a run the model planned and the runtime dr
     const fixture = build();
     try {
       expect(fixture.store.listRuns()).toEqual([]);
-
-      // The turn the owner typed. The model decides this is durable work.
       await fixture.chat.callTool("plan_agentic_run", PROPOSAL);
 
       const runs = fixture.store.listRuns();
@@ -158,7 +134,6 @@ describe("one ordinary prompt becomes a run the model planned and the runtime dr
       expect(tasks.map((task) => task.title)).toEqual(["Build stats.py", "Prove stats.py", "Document it"]);
       expect(tasks.every((task) => task.id.startsWith("task_"))).toBe(true);
       expect(tasks[0]?.acceptance.map((c) => c.id)).toEqual(["t1c1", "t1c2", "t1c3", "t1c4", "t1c5", "t1c6"]);
-      // Dependencies were named by title and resolved to runtime ids.
       expect(tasks[1]?.dependencies).toEqual([tasks[0]?.id as string]);
       expect(fixture.store.listAgents(run?.id as string).length).toBe(1);
     } finally {
@@ -210,9 +185,6 @@ describe("one ordinary prompt becomes a run the model planned and the runtime dr
         if (["COMPLETED", "FAILED", "CANCELLED", "WAITING_USER"].includes(current.status)) break;
         await fixture.service.onTurnSettled(runId);
       }
-
-      // The scripted agent never emitted a marker; every transition came from a
-      // tool call recorded as a signal.
       expect(fixture.store.listSignals(runId).filter((s) => s.kind === "evidence").length).toBe(18);
       expect(fixture.store.listSignals(runId).some((s) => s.kind === "complete")).toBe(true);
       for (const prompt of fixture.agent.promptsSent) {

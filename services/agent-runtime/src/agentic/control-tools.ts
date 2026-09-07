@@ -55,7 +55,10 @@ export const AGENTIC_ROUTING_INSTRUCTIONS = [
   "- If the approach is not working, call `revise_agentic_plan` with what you learned instead of repeating the same attempt.",
 ].join("\n");
 
-export function createAgenticControlExtension(getSessionId: () => string | null) {
+export function createAgenticControlExtension(
+  getSessionId: () => string | null,
+  getModelId: () => string | null,
+) {
   return (pi: ExtensionAPI): void => {
     createToolInterceptor({
       store: () => agenticControlHost()?.store ?? null,
@@ -111,7 +114,7 @@ export function createAgenticControlExtension(getSessionId: () => string | null)
         if (!validated.ok)
           return text(`The plan was rejected: ${validated.reason}. Propose a corrected plan.`);
 
-        const modelId = ctx.model?.id;
+        const modelId = getModelId();
         if (!modelId) return text("No model is selected; continue without a run.");
 
         const started = await host.startRun({

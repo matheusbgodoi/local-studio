@@ -1,3 +1,4 @@
+import { shellExecutionEnvironment } from "../shell-execution-environment";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { open, realpath } from "node:fs/promises";
@@ -134,7 +135,15 @@ export function createOperationalTools(options: {
   shellPath?: string;
   commandPrefix?: string;
 }): ToolDefinition[] {
-  const base = createBashToolDefinition(options.cwd, options);
+  const local = createLocalBashOperations({ shellPath: options.shellPath });
+  const safeOperations: typeof local = {
+    exec: (command, cwd, execOptions) =>
+      local.exec(command, cwd, {
+        ...execOptions,
+        env: shellExecutionEnvironment(execOptions.env ?? process.env),
+      }),
+  };
+  const base = createBashToolDefinition(options.cwd, { ...options, operations: safeOperations });
   const bash: typeof base = {
     ...base,
     execute(id, input, signal, onUpdate, ctx) {
@@ -152,7 +161,6 @@ export function createOperationalTools(options: {
             if (!binding || matches.length === 0)
               return base.execute(id, input, signal, onUpdate, ctx);
             beginObservation(binding, matches);
-            const local = createLocalBashOperations({ shellPath: options.shellPath });
             const tool = createBashToolDefinition(options.cwd, {
               shellPath: options.shellPath,
               commandPrefix: options.commandPrefix,
@@ -162,7 +170,7 @@ export function createOperationalTools(options: {
                   let outputBytes = 0;
                   let exitCode: number | null = null;
                   try {
-                    const result = await local.exec(command, cwd, {
+                    const result = await safeOperations.exec(command, cwd, {
                       ...execOptions,
                       onData(data) {
                         digest.update(data);

@@ -27,7 +27,7 @@ const boot = () => {
   const host = createTestControlHost(harness);
   setAgenticControlHost(host as unknown as AgenticControlHost);
   const fake = createFakeExtensionApi();
-  createAgenticControlExtension(() => CHAT_SESSION)(fake.api as never);
+  createAgenticControlExtension(() => CHAT_SESSION, () => harness.capability.modelId)(fake.api as never);
   return { harness, fake, host };
 };
 
