@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { rm } from "node:fs/promises";
+import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { chromium, type BrowserContext } from "playwright-core";
@@ -89,6 +90,9 @@ export class PlaywrightManager {
   private context: BrowserContext | null = null;
   private launching: Promise<BrowserContext> | null = null;
   private headful = false;
+  private temporaryProfile: string | null = null;
+  private profileClosed = false;
+  private stopping: Promise<void> | null = null;
 
   isAvailable(): boolean {
     return findBrowserBinary() !== null;
@@ -99,6 +103,10 @@ export class PlaywrightManager {
   }
 
   profileDirectory(): string {
+    if (this.sessionId?.startsWith("subagent:")) {
+      this.temporaryProfile ??= mkdtempSync(path.join(os.tmpdir(), "local-studio-child-browser-"));
+      return this.temporaryProfile;
+    }
     return this.sessionId
       ? path.join(
           browserDataDirectory(),
@@ -109,6 +117,7 @@ export class PlaywrightManager {
   }
 
   async ensure(): Promise<BrowserContext> {
+    if (this.stopping) await this.stopping;
     managers.add(this);
     if (this.context) return this.context;
     if (this.launching) return this.launching;
@@ -138,9 +147,10 @@ export class PlaywrightManager {
           : {}),
       });
     const dataDirectory = this.profileDirectory();
+    this.profileClosed = false;
     this.launching = launch(dataDirectory)
       .catch((error: unknown) => {
-        if (!String(error).includes("ProcessSingleton")) throw error;
+        if (this.temporaryProfile || !String(error).includes("ProcessSingleton")) throw error;
         console.warn(
           "[browser] profile already in use; starting an isolated copy — verified sessions will not carry over",
         );
@@ -149,6 +159,7 @@ export class PlaywrightManager {
       .then((context) => {
         this.context = context;
         context.once("close", () => {
+          this.profileClosed = true;
           if (this.context === context) this.context = null;
         });
         return context;
@@ -163,18 +174,47 @@ export class PlaywrightManager {
     if (this.headful === headful && this.context) return this.context;
     if (this.launching) await this.launching.catch(() => undefined);
     const previous = this.context;
+    if (previous) await previous.close();
     this.context = null;
-    if (previous) await previous.close().catch(() => undefined);
     this.headful = headful;
     return this.ensure();
   }
 
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
+    this.stopping ??= this.closeProfile().finally(() => {
+      this.stopping = null;
+    });
+    return this.stopping;
+  }
+
+  private async closeProfile(): Promise<void> {
     const pending = this.launching;
     if (pending) await pending.catch(() => undefined);
     const context = this.context;
-    this.context = null;
-    if (context) await context.close().catch(() => undefined);
+    if (context) {
+      try {
+        await context.close();
+        this.profileClosed = true;
+        this.context = null;
+      } catch {
+        console.warn(
+          "[browser] context close failed; retaining its profile without deleting files",
+        );
+        return;
+      }
+    }
+    if (this.temporaryProfile) {
+      if (!this.profileClosed) {
+        console.warn("[browser] child profile retained because browser closure was not confirmed");
+      } else {
+        try {
+          await rm(this.temporaryProfile, { recursive: true, force: true });
+          this.temporaryProfile = null;
+        } catch {
+          console.warn("[browser] closed child profile cleanup failed; temporary files retained");
+        }
+      }
+    }
     managers.delete(this);
   }
 }
