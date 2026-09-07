@@ -1,15 +1,3 @@
-//
-// Working-set reconstruction.
-//
-// Compaction is not "clear everything" and it is not a three-thousand-token
-// souvenir. It rebuilds, from the durable store rather than from the messages
-// being discarded, the smallest context in which the UNFINISHED task can still
-// be finished: the goal, the plan revision, the task, its acceptance criteria,
-// the dependency outputs it actually needs, the decisions taken, the artifact
-// pointers, any tool call still awaiting its result, the unresolved errors and
-// the next action.
-//
-
 import type {
   AgenticArtifact,
   AgenticEvent,
@@ -77,6 +65,7 @@ export function buildWorkingSet(input: WorkingSetInput): AgenticWorkingSet {
     planRevision: input.run.planRevision,
     taskId: input.activeTask?.id ?? null,
     taskTitle: input.activeTask?.title ?? null,
+    taskDescription: input.activeTask?.description ?? null,
     acceptance: input.activeTask?.acceptance ?? [],
     dependencyOutputs,
     decisions,
@@ -97,17 +86,15 @@ function nextActionFor(task: AgenticTask | null): string {
   return `Continue "${task.title}" until this is satisfied: ${outstanding[0]?.description ?? ""}`;
 }
 
-//
-// The rendered working set is the resume prompt. It states the task, the
-// evidence still owed and the next action, so the model never has to infer
-// from a truncated transcript what it was in the middle of doing.
-//
 export function renderWorkingSet(workingSet: AgenticWorkingSet): string {
   const lines: string[] = [];
   lines.push(`GOAL: ${workingSet.goal}`);
   lines.push(`PLAN REVISION: ${workingSet.planRevision}`);
   if (workingSet.taskTitle) {
     lines.push(`CURRENT TASK: ${workingSet.taskTitle}`);
+  }
+  if (workingSet.taskDescription) {
+    lines.push(`TASK INSTRUCTIONS: ${workingSet.taskDescription}`);
   }
   if (workingSet.acceptance.length > 0) {
     lines.push("ACCEPTANCE CRITERIA:");

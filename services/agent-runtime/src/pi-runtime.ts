@@ -24,7 +24,7 @@ import {
   type RuntimeStartOptions,
 } from "./pi-runtime-helpers";
 import { refreshPiModels, resolvePiModelSelection } from "./pi-runtime-models";
-import { applyContextHeadroomSettings } from "./pi-agent-settings";
+import { applyContextHeadroomSettings, applySessionContextHeadroom } from "./pi-agent-settings";
 import { CONTEXT_RECOVERY_MESSAGE, observePiTurn } from "./pi-turn-lifecycle";
 import { describeContextBudget, type ContextBudgetReport } from "./context-budget";
 import { shouldRecoverByCompaction } from "../../../shared/agent/context-headroom";
@@ -538,6 +538,10 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
                         }),
                       catch: (error) => error,
                     });
+                    applySessionContextHeadroom(
+                      services.settingsManager,
+                      selectedModel.contextWindow,
+                    );
                     const model = services.modelRuntime.getModel(providerId, backendModelId);
                     if (!model) {
                       return yield* Effect.fail(

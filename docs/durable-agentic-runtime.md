@@ -575,3 +575,14 @@ trigger summarization. Unknown usage does not establish context pressure.
 installed Pi agent with a failing stream, a successful continuation, preflight
 rejection, and context/cancellation classification. Real near-ceiling and
 installed-product acceptance remain required before this is a live claim.
+
+**IMPLEMENTED — session isolation.** Each SDK session applies its own model's
+reserve as an in-memory settings override after services are created.
+Concurrent settings updates use unique temporary files. Owner compaction
+enablement and recent-token preferences remain unchanged. Detailed task
+descriptions now appear in the first inference and every rebuilt working set;
+old checkpoints without the optional field remain readable.
+
+**EVIDENCE — offline.** `context-session-isolation.test.ts` checks concurrent
+settings writes, independent model budgets, owner preferences, and detailed
+task instructions in both the initial prompt and reconstructed context.

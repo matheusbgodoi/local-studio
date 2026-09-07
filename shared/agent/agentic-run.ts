@@ -1,12 +1,3 @@
-//
-// The durable agentic runtime's wire contract, defined once.
-//
-// The agent-runtime persists these records and the owner-facing view renders
-// them, so the shapes live here rather than in either. Nothing in this file
-// carries hidden reasoning: decisions, structured summaries, evidence and
-// externally observable state only.
-//
-
 import { Schema } from "effect";
 import { NetworkPolicySchema } from "./network-policy";
 
@@ -155,6 +146,7 @@ export const AgenticWorkingSetSchema = Schema.Struct({
   planRevision: Schema.Number,
   taskId: nullableString,
   taskTitle: nullableString,
+  taskDescription: Schema.optional(nullableString),
   acceptance: Schema.Array(AcceptanceCriterionSchema),
   dependencyOutputs: Schema.Array(Schema.Struct({ taskId: Schema.String, summary: Schema.String })),
   decisions: Schema.Array(Schema.String),

@@ -1,5 +1,7 @@
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
+import type { SettingsManager } from "@earendil-works/pi-coding-agent";
 import {
   COMPACTION_KEEP_RECENT_TOKENS,
   LOCAL_BACKEND_HTTP_IDLE_TIMEOUT_MS,
@@ -70,7 +72,7 @@ export async function applyContextHeadroomSettings(
   };
 
   await mkdir(agentDir, { recursive: true });
-  const staging = `${settingsPath}.crias-${process.pid}`;
+  const staging = `${settingsPath}.crias-${process.pid}-${randomUUID()}`;
   await writeFile(staging, `${JSON.stringify(next, null, 2)}\n`, "utf-8");
   await chmod(staging, 0o600).catch(() => undefined);
   await rename(staging, settingsPath);
@@ -80,4 +82,13 @@ export async function applyContextHeadroomSettings(
     reserveTokens,
     httpIdleTimeoutMs: typeof applied === "number" ? applied : null,
   };
+}
+
+export function applySessionContextHeadroom(
+  settings: Pick<SettingsManager, "applyOverrides">,
+  contextWindow: number | null | undefined,
+): void {
+  settings.applyOverrides({
+    compaction: { reserveTokens: compactionReserveTokens(contextWindow) },
+  });
 }
